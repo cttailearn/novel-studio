@@ -1,57 +1,93 @@
 # Novel Studio
 
-AI 长章小说创作台。当前完成的是第一阶段：基于 [`@earendil-works/pi-ai`](https://www.npmjs.com/package/@earendil-works/pi-ai) 与 [`@earendil-works/pi-agent-core`](https://www.npmjs.com/package/@earendil-works/pi-agent-core) 的模型接入与小说写作智能体。
+AI 长章小说创作台。当前完成两个阶段：基于 [`@earendil-works/pi-ai`](https://www.npmjs.com/package/@earendil-works/pi-ai) 与 [`@earendil-works/pi-agent-core`](https://www.npmjs.com/package/@earendil-works/pi-agent-core) 的模型接入与小说写作智能体，以及可视化的模型与供应商配置界面。
 
 ## 快速开始
 
 ```bash
 pnpm install
-cp .env.example .env      # 填至少一个厂商的 API Key
 pnpm dev                  # 默认 http://127.0.0.1:8787
 ```
 
-没有 API Key 时服务也能启动，前端会提示哪些厂商尚未配置。
+打开页面后点右上角“设置”配置供应商与模型，无需手动编辑 `.env`。
+
+## 模型配置
+
+配置分为两类，均在设置界面完成。
+
+### 默认供应商
+
+内置 14 个，首次启动自动预置。模型目录由 pi-ai 内置维护，不需要拉取：
+
+DeepSeek、Moonshot 国内、Z.ai (GLM)、OpenRouter、Anthropic、OpenAI、Google Gemini、Kimi Coding、OpenCode Zen、Vercel AI Gateway、Groq、Mistral、xAI、Fireworks。
+
+设置页为每个厂商保存 API Key，**保存的 key 优先于环境变量**。若只想用环境变量，不保存即可，界面会标注来源。
+
+### 自定义供应商
+
+需要基础 URL、接口格式与 Key：
+
+| 接口格式 | 适用 |
+| --- | --- |
+| OpenAI Chat Completions | vLLM、Ollama 兼容层、中转服务、大部分国内厂商 |
+| OpenAI Responses | 支持 `/v1/responses` 的服务 |
+| Anthropic Messages | Anthropic 原生 `/v1/messages` |
+| Google Generative AI | Google 原生 `/v1beta/models` |
+
+填好 URL 和 Key 后点「拉取模型」，服务端会按格式自动补全路径并解析上游的模型列表：
+
+- 已存在的模型保留你手填的参数，不会被覆盖
+- 上游已删除的模型**也会保留**，避免意外丢失配置
+- Google 会自动带出 `inputTokenLimit` / `outputTokenLimit` 预填上下文限制
+
+自建或本地服务（oLlama、vLLM 等）可勾选「该服务不需要鉴权」，此时不因缺少 Key 而判定为未配置。
+
+### 模型参数
+
+每个模型可配：
+
+| 参数 | 说明 |
+| --- | --- |
+| 输入上下文 | 模型能处理的最大输入 token，用于上下文窗口判断 |
+| 输出上限 | 单次回复的 token 上限 |
+| 支持思考 | 开启后可以逐档定义思考强度 |
+| 档位 | off / minimal / low / medium / high / xhigh / max，未勾选的档位会被显式屏蔽 |
+
+> 关于 `off`：它不会被写入 pi-ai 的 `thinkingLevelMap`。若把它映射成字符串 `"off"`，适配器会当作 effort 发给上游，而 Anthropic 的 effort 枚举里没有 `off`，会直接报错。缺省时 pi-ai 使用厂商默认值，对 `off` 就是不开启思考。
+
+## 安全
+
+- API Key 存在 `data/credentials.json`，与可共享的 `data/settings.json` 分开。
+- 两者都位于被 git 忽略的 `data/` 下，不会进仓。
+- 界面只显示脱显后的 key，不回传明文。
 
 ## 架构
 
 ```
 src/
-  config/env.ts        .env 加载与应用配置
-  ai/models.ts         厂商注册、可用模型枚举、模型引用解析
-  ai/prompts.ts        系统提示词与工程快照
-  ai/tools.ts          12 个小说写作工具（工程存储绑定）
-  ai/novel-agent.ts    Agent 工厂，注入上下文快照与会话裁剪
-  store/project.ts     工程数据模型与 JSON 持久化
-  server/main.ts       HTTP 服务、会话管理、NDJSON 流式事件
-public/                无框架前端
-scripts/               冒烟测试与智能体循环测试
+  config/env.ts              .env 加载与应用配置
+  config/settings.ts         配置类型与归一化
+  config/settings-store.ts   设置持久化
+  config/credential-store.ts 实现 pi-ai 的 CredentialStore
+  ai/models.ts               注册表构建、模型枚举与解析
+  ai/custom-provider.ts      自定义 provider 与 Model 构造
+  ai/fetch-models.ts         上游模型拉取与合并
+  ai/prompts.ts              系统提示词与工程快照
+  ai/tools.ts                12 个小说写作工具
+  ai/novel-agent.ts          Agent 工厂
+  store/project.ts           工程数据与 JSON 持久化
+  server/main.ts             HTTP、会话管理、NDJSON 流式事件
+public/                      无框架前端（app.js + settings.js）
+scripts/                     测试
 ```
 
-## 模型接入
+### 注册表为何能动态重建
 
-注册了 14 个厂商，均从环境变量读取 API Key。在 `src/ai/models.ts` 的 `PROVIDER_SPECS` 中增删即可。
-
-| 厂商 | 环境变量 |
-| --- | --- |
-| DeepSeek | `DEEPSEEK_API_KEY` |
-| Moonshot 国内 | `MOONSHOT_API_KEY` |
-| Z.ai (GLM) | `ZAI_API_KEY` |
-| OpenRouter | `OPENROUTER_API_KEY` |
-| Anthropic | `ANTHROPIC_API_KEY` |
-| OpenAI | `OPENAI_API_KEY` |
-| Google Gemini | `GEMINI_API_KEY` |
-| Kimi Coding | `KIMI_API_KEY` |
-| OpenCode Zen | `OPENCODE_API_KEY` |
-| Vercel AI Gateway | `AI_GATEWAY_API_KEY` |
-| Groq / Mistral / xAI / Fireworks | `GROQ_API_KEY` `MISTRAL_API_KEY` `XAI_API_KEY` `FIREWORKS_API_KEY` |
-
-模型引用支持三种形式：`provider/modelId` 精确匹配，以及 `modelId` 或 显示名在已配置厂商中搜索。
-
-只有鉴权完整的厂商才会出现在前端模型列表里（调用 `Models.getAvailable()`）。
+任何设置变更都会重新执行 `createModels()` 并重新注册 provider。会话保存的是 `providerId/modelId` 字符串而不是 `Model` 对象，因此换模型时无需重建会话。
 
 ## 智能体
 
-智能体绑定到单个作品工程，具备 12 个工具：
+12 个工具绑定到单个作品工程：
 
 | 分组 | 工具 |
 | --- | --- |
@@ -66,37 +102,44 @@ scripts/               冒烟测试与智能体循环测试
 两个关键的工程决策：
 
 - `toolExecution: "sequential"` —— 工具会写数据，并行执行可能丢失更新。
-- `transformContext` —— 每次请求前注入当前工程快照（进度、人物、世界观、大纲、待办），并丢弃过量的旧工具结果以控制上下文窗口。快照每次重新生成且不进入历史，因此不会慽积。
+- `transformContext` —— 每次请求前注入当前工程快照，并丢弃过量的旧工具结果。快照每次重新生成且不进入历史，因此不会慽积。
 
 ## API
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/api/bootstrap` | 模型列表、厂商状态、工程列表 |
-| GET | `/api/models` | 已配置的可用模型 |
+| GET | `/api/bootstrap` | 模型、厂商、设置、工程汇总 |
+| GET/PUT | `/api/settings` | 读取 / 保存默认模型与思考档位 |
+| GET/POST | `/api/providers` | 供应商列表 / 新增自定义供应商 |
+| PATCH/DELETE | `/api/providers/:id` | 修改 / 删除供应商 |
+| DELETE | `/api/providers/:id/key` | 清除已保存的 Key |
+| POST | `/api/providers/:id/models/fetch` | 从上游拉取模型 |
+| POST | `/api/providers/:id/models` | 新增 / 更新单个模型参数 |
+| DELETE | `/api/providers/:id/models/:modelId` | 删除模型 |
 | GET/POST | `/api/projects` | 工程列表 / 新建 |
 | GET | `/api/projects/:id` | 工程全量 + 统计 |
-| POST | `/api/sessions` | 创建会话，绑定作品与模型 |
+| POST | `/api/sessions` | 创建会话 |
 | POST | `/api/sessions/:id/model` | 切换模型，保留对话历史 |
 | POST | `/api/sessions/:id/messages` | 发送消息，返回 NDJSON 事件流 |
 | POST | `/api/sessions/:id/abort` | 中止当前生成 |
 
-流式事件类型：`run_start` `turn_start` `thinking_start` `thinking` `thinking_end` `text` `tool_call` `tool_start` `tool_end` `message_end` `turn_end` `run_end` `error`。
-
 ## 测试
 
 ```bash
-pnpm test          # tsc --noEmit + 工具链路 + 智能体循环
+pnpm test          # tsc + 配置层 + 工具链路 + 智能体循环
+pnpm test:config   # 配置归一化、凭据存储、provider 构造、拉取合并
 pnpm test:tools    # 存储与 12 个工具的断言
 pnpm test:loop     # 用 pi-ai faux provider 走完真实的智能体循环
 ```
 
-两个测试均不需要 API Key。循环测试用 pi-ai 自带的 `fauxProvider` 脚本化模型响应，真实验证“模型输出 → 工具调用 → 工具执行 → 结果回填 → 下一轮” 的完整链路。
+四个套件均不需要 API Key。循环测试用 pi-ai 自带的 `fauxProvider` 脚本化模型响应，真实验证“模型输出 → 工具调用 → 工具执行 → 结果回填 → 下一轮”。
 
-## 数据
+## 当前限制
 
-工程数据以单个 JSON 文件存放在 `DATA_DIR`（默认 `./data`），写入后异步落盘，同一工程的写入串行化以避免覆盖。目录已在 `.gitignore` 中排除。
+- 会话在内存中，服务重启后会丢失对话历史（工程与供应商配置都会保留）。
+- 自定义 provider 的模型参数需人工确认，上游 `/models` 接口通常不返回 token 限制。
+- 任何模型都没用真实 key 跑通过一次真实 API 往返。
 
 ## 后续计划
 
-会话当前在内存中，服务重启后会丢失对话历史（工程数据不丢失）。后续可以做：会话持久化与分支、章节编辑器、版本历史与回滚、全文检索、导出。
+会话持久化与分支、章节编辑器、版本历史与回滚、全文检索、导出。

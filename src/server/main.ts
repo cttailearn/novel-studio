@@ -6,7 +6,32 @@ import { fileURLToPath } from "node:url";
 import { Agent, type AgentEvent, type ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
 import { createNovelAgent } from "../ai/novel-agent.ts";
-import { getModels, listAvailableModels, listProviderStatus, ModelResolutionError, resolveModel } from "../ai/models.ts";
+import {
+	BUILTIN_PROVIDERS,
+	ensureDefaultSettings,
+	getCredentialStore,
+	getModels,
+	getSettingsStore,
+	initModelRuntime,
+	listAvailableModels,
+	listProviderStatus,
+	ModelResolutionError,
+	rebuildModels,
+	resolveModel,
+} from "../ai/models.ts";
+import { fetchUpstreamModels, mergeFetched } from "../ai/fetch-models.ts";
+import { FileCredentialStore } from "../config/credential-store.ts";
+import { SettingsStore } from "../config/settings-store.ts";
+import {
+	API_FORMATS,
+	emptyModel,
+	normalizeSettings,
+	THINKING_LEVELS,
+	type ApiFormat,
+	type ModelConfig,
+	type ProviderConfig,
+	type Settings,
+} from "../config/settings.ts";
 import { loadEnvFile, readConfig, type AppConfig } from "../config/env.ts";
 import { ProjectStore } from "../store/project.ts";
 
@@ -175,16 +200,47 @@ function previewResult(result: unknown): string {
 	return text.length > 300 ? `${text.slice(0, 300)}…` : text;
 }
 
+/** 供应商 id：拉丁字母与数字，其余折叠为连字符。中文名会退化为时间戳后缀。 */
+function slugify(label: string): string {
+	const slug = label
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-+|-+$/g, "")
+		.slice(0, 48);
+	return slug || `custom-${Date.now().toString(36)}`;
+}
+
+async function statusOf(id: string) {
+	return (await listProviderStatus()).find((provider) => provider.id === id);
+}
+
+/** 设置页需要的完整视图：配置、运行时状态、内置厂商目录。 */
+async function settingsView() {
+	const settings = settingsStore.get();
+	return {
+		defaultModel: settings.defaultModel,
+		defaultThinkingLevel: settings.defaultThinkingLevel,
+		providers: settings.providers,
+		statuses: await listProviderStatus(),
+		builtinCatalog: BUILTIN_PROVIDERS.map((spec) => ({
+			id: spec.id,
+			label: spec.label,
+			envVars: [...spec.envVars],
+		})),
+	};
+}
+
 async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
 	const { pathname } = url;
 
 	if (pathname === "/api/bootstrap" && req.method === "GET") {
-		const [models, providers] = await Promise.all([listAvailableModels(), listProviderStatus()]);
+		const [models, providers, settings] = await Promise.all([listAvailableModels(), listProviderStatus(), settingsView()]);
 		return json(res, 200, {
-			defaultModel: config.defaultModel,
-			defaultThinkingLevel: config.defaultThinkingLevel,
+			defaultModel: settings.defaultModel,
+			defaultThinkingLevel: settings.defaultThinkingLevel,
 			models,
 			providers,
+			settings,
 			projects: store.list().map((project) => ({
 				id: project.id,
 				title: project.title,
@@ -235,7 +291,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 			id: randomUUID(),
 			projectId: body.projectId,
 			modelRef: `${model.provider}/${model.id}`,
-			thinkingLevel: body.thinkingLevel ?? config.defaultThinkingLevel,
+			thinkingLevel: body.thinkingLevel ?? settingsStore.get().defaultThinkingLevel,
 			agent: undefined as unknown as Agent,
 			createdAt: Date.now(),
 		};
@@ -306,6 +362,161 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		return;
 	}
 
+
+	// ---------------------------------------------------------------- 设置
+
+	if (pathname === "/api/settings" && req.method === "GET") {
+		return json(res, 200, await settingsView());
+	}
+
+	if (pathname === "/api/settings" && req.method === "PUT") {
+		const body = await readJsonBody<{ defaultModel?: string; defaultThinkingLevel?: string }>(req);
+		settingsStore.mutate((settings) => {
+			if (typeof body.defaultModel === "string") settings.defaultModel = body.defaultModel.trim();
+			if (typeof body.defaultThinkingLevel === "string") {
+				const level = body.defaultThinkingLevel as Settings["defaultThinkingLevel"];
+				if (THINKING_LEVELS.includes(level)) settings.defaultThinkingLevel = level;
+			}
+		});
+		return json(res, 200, await settingsView());
+	}
+
+	// 新增自定义供应商
+	if (pathname === "/api/providers" && req.method === "POST") {
+		const body = await readJsonBody<{
+			label?: string;
+			baseUrl?: string;
+			api?: ApiFormat;
+			apiKey?: string;
+			noAuthRequired?: boolean;
+		}>(req);
+
+		const label = body.label?.trim();
+		const baseUrl = body.baseUrl?.trim();
+		const api = body.api;
+		if (!label) return json(res, 400, { error: "请填写供应商名称" });
+		if (!baseUrl) return json(res, 400, { error: "请填写 Base URL" });
+		if (!api || !API_FORMATS.includes(api)) return json(res, 400, { error: "请选择接口格式" });
+		try {
+			new URL(baseUrl);
+		} catch {
+			return json(res, 400, { error: "Base URL 不是合法地址" });
+		}
+		if (settingsStore.getProvider(slugify(label))) {
+			return json(res, 409, { error: "同名供应商已存在" });
+		}
+
+		const id = slugify(label);
+		const created = settingsStore.upsertProvider({
+			id,
+			label,
+			kind: "custom",
+			baseUrl,
+			api,
+			...(body.noAuthRequired === true ? { noAuthRequired: true } : {}),
+			models: [],
+			enabled: true,
+			updatedAt: 0,
+		});
+		if (body.apiKey?.trim()) await credentialStore.setKey(id, body.apiKey);
+		rebuildModels();
+		return json(res, 201, { provider: created, status: await statusOf(created.id) });
+	}
+
+	const providerMatch = pathname.match(/^\/api\/providers\/([\w-]+)$/);
+	if (providerMatch && (req.method === "PATCH" || req.method === "DELETE")) {
+		const provider = settingsStore.getProvider(providerMatch[1]!);
+		if (!provider) return json(res, 404, { error: "供应商不存在" });
+		if (req.method === "DELETE") {
+			settingsStore.removeProvider(provider.id);
+			await credentialStore.setKey(provider.id, undefined);
+			rebuildModels();
+			return json(res, 200, await settingsView());
+		}
+		const body = await readJsonBody<Partial<ProviderConfig> & { apiKey?: string }>(req);
+		settingsStore.upsertProvider({
+			...provider,
+			...(typeof body.label === "string" && body.label.trim() ? { label: body.label.trim() } : {}),
+			...(typeof body.baseUrl === "string" ? { baseUrl: body.baseUrl.trim() } : {}),
+			...(body.api && API_FORMATS.includes(body.api) ? { api: body.api } : {}),
+			...(typeof body.enabled === "boolean" ? { enabled: body.enabled } : {}),
+			...(typeof body.noAuthRequired === "boolean" ? { noAuthRequired: body.noAuthRequired } : {}),
+		});
+		if (typeof body.apiKey === "string") await credentialStore.setKey(provider.id, body.apiKey);
+		rebuildModels();
+		return json(res, 200, { provider: settingsStore.getProvider(provider.id), status: await statusOf(provider.id) });
+	}
+
+	// 清除已保存的 key
+	const keyMatch = pathname.match(/^\/api\/providers\/([\w-]+)\/key$/);
+	if (keyMatch && req.method === "DELETE") {
+		const provider = settingsStore.getProvider(keyMatch[1]!);
+		if (!provider) return json(res, 404, { error: "供应商不存在" });
+		await credentialStore.setKey(provider.id, undefined);
+		rebuildModels();
+		return json(res, 200, { status: await statusOf(provider.id) });
+	}
+
+	// 从上游拉取模型列表
+	const fetchMatch = pathname.match(/^\/api\/providers\/([\w-]+)\/models\/fetch$/);
+	if (fetchMatch && req.method === "POST") {
+		const provider = settingsStore.getProvider(fetchMatch[1]!);
+		if (!provider) return json(res, 404, { error: "供应商不存在" });
+		if (provider.kind !== "custom" || !provider.baseUrl || !provider.api) {
+			return json(res, 400, { error: "只有自定义供应商需要拉取模型" });
+		}
+		const credential = await credentialStore.read(provider.id);
+		const apiKey = credential?.type === "api_key" && credential.key ? credential.key : "";
+		try {
+			const fetched = await fetchUpstreamModels({
+			baseUrl: provider.baseUrl,
+			api: provider.api,
+			apiKey,
+			noAuthRequired: provider.noAuthRequired === true,
+		});
+			const { models, added } = mergeFetched(provider.models, fetched);
+			settingsStore.upsertProvider({ ...provider, models });
+			rebuildModels();
+			return json(res, 200, {
+				provider: settingsStore.getProvider(provider.id),
+				fetched: fetched.length,
+				added: added.length,
+				addedIds: added,
+			});
+		} catch (error) {
+			const status = (error as { status?: number }).status;
+			return json(res, status && status < 500 ? 502 : 502, { error: (error as Error).message });
+		}
+	}
+
+	// 新增 / 更新单个模型的参数
+	const upsertModelMatch = pathname.match(/^\/api\/providers\/([\w-]+)\/models$/);
+	if (upsertModelMatch && req.method === "POST") {
+		const provider = settingsStore.getProvider(upsertModelMatch[1]!);
+		if (!provider) return json(res, 404, { error: "供应商不存在" });
+		const body = await readJsonBody<Partial<ModelConfig> & { id?: string }>(req);
+		const id = body.id?.trim();
+		if (!id) return json(res, 400, { error: "缺少模型 id" });
+		const normalized = normalizeSettings({ providers: [{ ...provider, models: [{ ...emptyModel(id), ...body } as ModelConfig] }] })
+			.providers[0]!.models[0]!;
+		const models = provider.models.some((model) => model.id === id)
+			? provider.models.map((model) => (model.id === id ? normalized : model))
+			: [...provider.models, normalized];
+		settingsStore.upsertProvider({ ...provider, models });
+		rebuildModels();
+		return json(res, 200, { provider: settingsStore.getProvider(provider.id) });
+	}
+
+	const modelItemMatch = pathname.match(/^\/api\/providers\/([\w-]+)\/models\/([^/]+)$/);
+	if (modelItemMatch && req.method === "DELETE") {
+		const provider = settingsStore.getProvider(modelItemMatch[1]!);
+		if (!provider) return json(res, 404, { error: "供应商不存在" });
+		const modelId = decodeURIComponent(modelItemMatch[2]!);
+		settingsStore.upsertProvider({ ...provider, models: provider.models.filter((model) => model.id !== modelId) });
+		rebuildModels();
+		return json(res, 200, { provider: settingsStore.getProvider(provider.id) });
+	}
+
 	return json(res, 404, { error: "未知接口" });
 }
 
@@ -323,6 +534,10 @@ async function serveStatic(res: ServerResponse, urlPath: string): Promise<void> 
 }
 
 const store = await ProjectStore.open(config.dataDir);
+const settingsStore = await SettingsStore.open(config.dataDir);
+const credentialStore = await FileCredentialStore.open(config.dataDir);
+settingsStore.replace(ensureDefaultSettings(settingsStore.get(), config.defaultModel));
+initModelRuntime(settingsStore, credentialStore);
 
 const server = createServer((req, res) => {
 	const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
@@ -340,7 +555,7 @@ server.listen(config.port, config.host, () => {
 	console.log(`novel-studio 已启动  http://${config.host}:${config.port}`);
 	console.log(`数据目录  ${config.dataDir}`);
 	void listProviderStatus().then((providers) => {
-		const ready = providers.filter((provider) => provider.configured).map((provider) => provider.label);
+		const ready = providers.filter((provider) => provider.authSource !== "none" && provider.registered).map((provider) => provider.label);
 		console.log(ready.length > 0 ? `已配置厂商  ${ready.join(", ")}` : "未检测到厂商 API Key，请在 .env 中配置");
 	});
 });

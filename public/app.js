@@ -1,5 +1,7 @@
 // Novel Studio 前端。不使用框架，直接消费后端 NDJSON 事件流。
 
+import { bindSettings } from "./settings.js";
+
 const $ = (id) => document.getElementById(id);
 
 const state = { projects: [], projectId: null, sessionId: null, streaming: false };
@@ -320,6 +322,17 @@ $("model-select").addEventListener("change", () => {
 		body: JSON.stringify({ modelRef: $("model-select").value, thinkingLevel: $("thinking-select").value }),
 	}).catch(() => {});
 });
+
+// 设置页改动供应商后，刷新模型列表并重新应用默认模型。
+window.addEventListener("settings-changed", async () => {
+	const data = await api("/api/bootstrap").catch(() => null);
+	if (!data) return;
+	const previous = $("model-select").value;
+	renderModels(data.models, data.defaultModel);
+	if (data.models.some((model) => model.id === previous)) $("model-select").value = previous;
+});
+
+bindSettings();
 
 bootstrap().catch((error) => {
 	$("messages").replaceChildren(el("div", "msg error", "初始化失败：" + error.message));

@@ -37,6 +37,7 @@
 						<span id="project-stats" class="muted"></span>
 					</div>
 					<div class="topbar-right">
+						<button id="open-settings" class="btn btn-ghost btn-icon" title="模型与供应商设置">设置</button>
 						<select id="model-select" title="模型"></select>
 						<select id="thinking-select" title="推理档位">
 							<option value="off">关闭思考</option>
@@ -79,6 +80,24 @@
 					<button value="create" class="btn btn-primary">创建</button>
 				</div>
 			</form>
+		</dialog>
+
+		<dialog id="settings-dialog" class="settings-dialog">
+			<div class="settings-head">
+				<div>
+					<h3>模型与供应商</h3>
+					<p>配置后保存的 API Key 优先于环境变量，仅存放在本机 data/credentials.json</p>
+				</div>
+				<button id="settings-close" class="btn btn-ghost">关闭</button>
+			</div>
+			<div class="settings-defaults">
+				<label>默认模型<select id="settings-default-model"></select></label>
+				<label>默认思考档位<select id="settings-default-thinking"></select></label>
+			</div>
+			<div class="settings-body">
+				<ul id="settings-providers" class="settings-providers"></ul>
+				<div id="settings-detail" class="settings-detail"></div>
+			</div>
 		</dialog>
 
 		<script type="module" src="/app.js"></script>
