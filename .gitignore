@@ -1,0 +1,53 @@
+# ---- 依赖 ----
+node_modules/
+jspm_packages/
+.pnp.*
+
+# ---- 构建产物 ----
+dist/
+build/
+out/
+.next/
+.nuxt/
+.output/
+.vercel/
+.turbo/
+*.tsbuildinfo
+
+# ---- 环境变量 ----
+.env
+.env.*
+!.env.example
+
+# ---- 测试与覆盖率 ----
+coverage/
+.nyc_output/
+playwright-report/
+test-results/
+
+# ---- 缓存 ----
+.cache/
+.eslintcache
+.turbo/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-error.log*
+
+# ---- 本地数据 / 数据库 ----
+*.sqlite
+*.sqlite3
+*.db
+data/*.db
+
+# ---- 用户生成内容与上传资源 ----
+uploads/
+public/uploads/
+storage/
+
+# ---- 编辑器与系统 ----
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+*.swp
