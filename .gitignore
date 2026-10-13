@@ -35,6 +35,8 @@ pnpm-debug.log*
 yarn-error.log*
 
 # ---- 本地数据 / 数据库 ----
+# 小说工程以 JSON 存放，不进版本库
+data/
 *.sqlite
 *.sqlite3
 *.db

@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="zh-CN">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Novel Studio</title>
+		<link rel="stylesheet" href="/style.css" />
+	</head>
+	<body>
+		<div class="app">
+			<aside class="sidebar">
+				<div class="brand">
+					<span class="brand-mark">NS</span>
+					<div>
+						<h1>Novel Studio</h1>
+						<p>AI 长章小说创作台</p>
+					</div>
+				</div>
+
+				<button id="new-project" class="btn btn-primary btn-block">新建作品</button>
+
+				<div class="section">
+					<h2>作品</h2>
+					<ul id="project-list" class="project-list"></ul>
+				</div>
+
+				<div class="section">
+					<h2>厂商</h2>
+					<ul id="provider-list" class="provider-list"></ul>
+				</div>
+			</aside>
+
+			<main class="main">
+				<header class="topbar">
+					<div class="topbar-left">
+						<h2 id="project-title">未选择作品</h2>
+						<span id="project-stats" class="muted"></span>
+					</div>
+					<div class="topbar-right">
+						<select id="model-select" title="模型"></select>
+						<select id="thinking-select" title="推理档位">
+							<option value="off">关闭思考</option>
+							<option value="low">低</option>
+							<option value="medium">中</option>
+							<option value="high">高</option>
+						</select>
+					</div>
+				</header>
+
+				<div id="messages" class="messages">
+					<div class="empty">
+						<h3>选个作品或新建一个</h3>
+						<p>然后告诉智能体你想写什么。例如：“帮我把这个故事的三个主角设定出来”、“写第一章，作为开篇”。</p>
+					</div>
+				</div>
+
+				<form id="composer" class="composer">
+					<textarea
+						id="input"
+						rows="3"
+						placeholder="告诉智能体你想写什么，或让它续写、改稿、检查前后不一致……（Enter 发送，Shift+Enter 换行）"
+					></textarea>
+					<button id="send" type="submit" class="btn btn-primary">发送</button>
+					<button id="abort" type="button" class="btn btn-ghost hidden">中止</button>
+				</form>
+			</main>
+		</div>
+
+		<dialog id="project-dialog">
+			<form id="project-form" method="dialog">
+				<h3>新建作品</h3>
+				<label>标题<input name="title" required placeholder="例如：长夜水辛" /></label>
+				<label>类型<input name="genre" placeholder="例如：现实悬疑 / 古风幻世" /></label>
+				<label>一句话概念<textarea name="logline" rows="2" placeholder="一句话说清核心冲突"></textarea></label>
+				<label>总字数目标<input name="targetWords" type="number" min="0" step="10000" placeholder="200000" /></label>
+				<label>文风指南<textarea name="styleGuide" rows="3" placeholder="口语化、叙事节奏、禁忌项……"></textarea></label>
+				<div class="dialog-actions">
+					<button value="cancel" class="btn btn-ghost">取消</button>
+					<button value="create" class="btn btn-primary">创建</button>
+				</div>
+			</form>
+		</dialog>
+
+		<script type="module" src="/app.js"></script>
+	</body>
+</html>
