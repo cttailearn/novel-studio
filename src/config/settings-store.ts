@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { normalizeSettings, type ProviderConfig, type Settings } from "./settings.ts";
@@ -68,20 +69,34 @@ export class SettingsStore {
 		return removed;
 	}
 
+	/**
+	 * 串行化落盘。
+	 *
+	 * 临时文件名带随机后缀：唯一的写入路径还不够，Windows 上 rename 覆盖
+	 * 已存在文件会偶发 EPERM，因此重试几次。留着的 .tmp 由下次写入覆盖。
+	 */
 	private persist(): Promise<void> {
 		this.writeChain = this.writeChain
 			.catch(() => undefined)
 			.then(async () => {
-				const tmp = `${this.file}.tmp`;
+				const tmp = this.file + "." + randomUUID() + ".tmp";
 				await writeFile(tmp, JSON.stringify(this.settings, null, 2), "utf8");
-				await rename(tmp, this.file);
+				for (let attempt = 0; ; attempt++) {
+					try {
+						await rename(tmp, this.file);
+						return;
+					} catch (error) {
+						if (attempt >= 4) throw error;
+						await new Promise((resolve) => setTimeout(resolve, 20 * (attempt + 1)));
+					}
+				}
 			})
 			.catch((error) => console.error("[settings] 落盘失败:", error))
 			.then(() => undefined);
 		return this.writeChain;
 	}
-}
 
+}
 function safeParse(raw: string): unknown {
 	try {
 		return JSON.parse(raw);

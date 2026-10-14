@@ -1,6 +1,8 @@
 # 墨耕 · Novel Studio
 
-AI 长章小说创作台。基于 [`@earendil-works/pi-ai`](https://www.npmjs.com/package/@earendil-works/pi-ai) 与 [`@earendil-works/pi-agent-core`](https://www.npmjs.com/package/@earendil-works/pi-agent-core) 构建，包含模型接入、小说写作智能体、供应商配置与水墨案头界面。
+AI 长章小说创作台。基于 [`@earendil-works/pi-ai`](https://www.npmjs.com/package/@earendil-works/pi-ai) 与 [`@earendil-works/pi-agent-core`](https://www.npmjs.com/package/@earendil-works/pi-agent-core) 构建。
+
+**一切以素材为主：通过组装素材为上下文生成正文。**
 
 ## 快速开始
 
@@ -11,18 +13,117 @@ pnpm dev                  # 默认 http://127.0.0.1:8787
 
 打开页面后点右上角「设置」配置供应商与模型，无需手动编辑 `.env`。
 
+## 两个智能体
+
+写作被拆成两件事，由两个工具集与两套提示词完全隔离的智能体分别负责：
+
+| 智能体 | 职责 | 产出 | 工具集 |
+| --- | --- | --- | --- |
+| **素材智能体**（设定官） | 把构想拆成可复用的素材条目 | `materials[]` | `createMaterialTools` |
+| **组装智能体**（执笔者） | 读取某章装配的素材 + 上一章结尾，组装成正文 | `drafts[chapterId]` | `createWritingTools` |
+
+关键约束：**素材智能体拿不到 `write_chapter`，组装智能体拿不到 `upsert_material`。**
+工具边界就是职责边界 —— 没有写入正文的工具，模型就无法跳过素材直接交正文。
+`scripts/smoke.ts` 对这个边界有显式断言，防止以后回退。
+
+两个角色的 `transformContext` 都按 `scope` 注入工程快照，但内容刻意不同：
+
+- `material` 给**全库索引**（id / kind / title / usage），不给全文 —— 否则素材一多就占满窗口。
+- `writing` 给**本章素材全文**，不给全库 —— 执笔者只需要本章的料。
+
+## 素材模型
+
+素材是可复用的创作单位：它描述"这个世界是什么样、这场戏要发生什么、这个人说话什么调"，
+正文是拿素材组装出来的产物。所以素材要自包含，脱离任何具体章节也能读懂。
+
+| 字段 | 说明 |
+| --- | --- |
+| `kind` | 13 种：`premise` 核心设定、`character` 人物、`world` 世界观、`location` 场景地点、`plot` 情节线、`beat` 桥段、`scene` 场景卡、`dialogue` 对话、`imagery` 意象、`foreshadow` 伏笔、`style` 文风、`research` 考据、`other` 其他 |
+| `usage` | **必填**。什么情况下该用这条素材。组装智能体靠它判断相关性；写"用于推进剧情"等于没写 |
+| `chapterIds` | 显式装配到哪些章节。与章节的 `materialIds` 双向同步 |
+| `status` | `draft` / `confirmed` |
+| `source` | `human` / `agent` / `library`，用于区分书者所定、墨客所拟与取自素材库 |
+
+章节（`OutlineChapter.materialIds`）与正文（`ChapterDraft.materialIds`）都记录素材 id：
+前者是**计划**用什么料，后者是**实际**用了什么料，用于回溯"这段正文从什么料来"。
+
+旧数据（`characters` / `worldFacts`）在读取时单向迁移成素材，迁移幂等，输出里不再有旧字段。
+
+
+### 通用素材库：复制，不是引用
+
+`Material` 多一个 `originId`：取自素材库时记下来源条目，用于回溯"这条料是从库里哪一条来的"，
+也让作品里的改动可以推回库里那一条。`source` 因此多一个取值 `library`（取自素材库）。
+
+取用刻意做成**复制**而不是引用：
+
+- 作者会为这本书改动副本（人物年龄、地名口径），改动不该反噬别的作品；
+- 删掉库里的条目不该让已有作品缺料；
+- 作品文件因此始终自包含 —— 拷走一个 JSON 就是完整的一本书。
+
+代价是两边不会自动同步。要同步就显式做：「更新素材库」把作品里的改动推回去，
+但已经取用过这条料的别的作品手里仍是它们各自的副本 —— 这一点在确认框里写明了。
+
 ## 界面：水墨案头
 
-界面不是聊天工具的皮相，而是按「写小说」重新组织的案头。
+界面分两级，不是一排并列的页：**案头**（选卷、管素材）与**写作台**（进卷之后才写）。
 
 **为什么是浅色。** 水墨是纸上的媒介，深色底做水墨本质上是伪滤镜。暖白宣纸面对长时间读长文本，也比纯白更省眼。所以配色是宣纸、墨、朱砂三色，其余一律不用。
 
+### 案头
+
+进书之前、出书之后的落脚处。左栏管作品，右栏管**通用素材库**。
+
+| 栏 | 内容 |
+| --- | --- |
+| 左 | **卷宗**：每部作品的题名、门类、骨相与统计；开卷 / 改 / 删（删要点两次） |
+| 右 | **通用素材库**：跨作品的料，按 kind 分组与筛选，标注「已用于哪几部作品」；看全文 / 改 / 删 |
+
+案头是独立的一屏：左卷与右案都收起，顶栏也不出现模型与推理档位 —— 那些是写作时的选择，
+选卷之前没必要摆出来。没有作品时也落在这里，不会落在一个空稿台上。
+
+新建只需填**书名**：门类标了「选填」，骨相、字数、行文规约都收在「更多设置」里，默认不展开。
+它们之后在「案头 → 改」里随时能补 —— 起手时先把卷立起来，别让表单挡住开写。
+
+「另起一卷」时可以直接勾选库里的料打底 —— 取的是**副本**，所以之后为这本书改动它，不会反噬别的作品；
+删掉库里的条目，也不会让已有作品缺料。反过来，在作品里把一条料改好了，卡片上有「存入素材库」：
+没有来源的存成新条目，取自库里的则可以「更新那一条」或「另存为新条目」。
+
+### 写作台
+
+点「开卷」进卷，顶栏出现「← 案头」；左卷只剩章目 —— 选卷这件事已经交给案头了。
+
 | 区域 | 作用 |
 | --- | --- |
-| 顶栏 | 印章、书名、进度、模型与推理档位 |
-| 左卷 | 案上作品 + 章目（带字数，未写的章点朱砂点） |
-| 中稿台 | **稿**（读稿 / 改稿）与 **议**（与智能体对话）两个视图 |
-| 右案 | 人物 / 世观 / 大纲 / 待办，随写随查 |
+| 顶栏 | ← 案头、书名、进度（含装料覆盖率）、模型与推理档位 |
+| 左卷 | 章目（带字数与装料数，未写的章点朱砂点） |
+| 中台 | **稿**（读稿 / 改稿）、**料**（素材工作台）、**文**（生文工作台） |
+| 右案 | 素材 / 大纲 / 待办，随写随查；进工作台时收起，把宽度让给正文 |
+
+停在案头还是写作台、上次在写哪一部，都记在浏览器的 localStorage 里，刷新不丢位置。
+
+### 料 · 素材工作台
+
+| 栏 | 内容 |
+| --- | --- |
+| 左 | **上传原料**（点选或拖放）+ **素材库**（按 kind 分组、筛选 chip、看全文 / 装料 / 改 / 删） |
+| 右 | **设定官**对话：立章目、补人物、查前后矛盾、把资料拆成素材 |
+
+上传的原料有两条去路：
+
+- **存入素材库**：弹出表单，作者选定 kind、标题、`usage`，整篇成为一条素材（`source: human`、`status: confirmed`）。
+- **交墨客提炼**：整篇丢给设定官，让它按人物 / 世界观 / 场景 / 桥段各归其类，逐条 `upsert_material` 落盘。
+
+### 文 · 生文工作台
+
+| 栏 | 内容 |
+| --- | --- |
+| 左 | **装配**（本章已装的料，可摘除）+ 作业性质 + **装料成文** + **库中可装**（可装入） |
+| 右 | **执笔者**对话：写出这一章、把第二段改冷一点、让结尾再狠一些 |
+
+装料是作者可以直接做的事，不必绕道智能体 —— 它和 `attach_materials` 写的是同一份数据。
+点「装料成文」时，下方输入框里的**交代会一并附上**（例如「写得冷一点」），
+所以既能纯装料成文，也能带着要求成文。
 
 关键取舍：
 
@@ -33,6 +134,7 @@ pnpm dev                  # 默认 http://127.0.0.1:8787
 - **改稿用等宽等行距的 textarea。** 阅读态与编辑态切换无跳变。
 - **纸纹是 SVG 噪声，透明度 0.05。** 再高就成电视雪花。
 - **选中态是墨晕不是色块。** `radial-gradient` 从左侧晕开，配朱砂细竖线。
+- **删素材要点两次。** 第二次才真删，且会连带清掉各章装配清单里的引用。
 
 字体：正文与文稿用宋体（Songti SC / SimSun / Noto Serif SC），标题与印章用楷体（Kaiti SC / KaiTi），控件用系统无衬线。全部为系统字体栈，不联网加载 CJK 字体。
 
@@ -82,7 +184,11 @@ pnpm dev                  # 默认 http://127.0.0.1:8787
 - 上游已删除的模型**也会保留**，避免意外丢失配置
 - Google 会自动带出 `inputTokenLimit` / `outputTokenLimit` 预填上下文限制
 
-自建或本地服务（oLlama、vLLM 等）可勾选「该服务不需要鉴权」，此时不因缺少 Key 而判定为未配置。
+旁边还有一个「测试连接」：它打的是同一套上游探测，只验**连通与鉴权**，不产生 token 消耗。
+结果提示条贴在详情栏顶部，点一下可以收起。注意它只探模型列表 —— 列表能拉通不等于能生成，
+额度用尽这类问题要真发一次请求才看得出来。
+
+自建或本地服务（Ollama、vLLM 等）可勾选「该服务不需要鉴权」，此时不因缺少 Key 而判定为未配置。
 
 ### 模型参数
 
@@ -100,6 +206,7 @@ pnpm dev                  # 默认 http://127.0.0.1:8787
 - API Key 存在 `data/credentials.json`，与可共享的 `data/settings.json` 分开。
 - 两者都位于被 git 忽略的 `data/` 下，不会进仓。
 - 界面只显示脱敏后的 key，不回传明文。
+- 落盘用「随机名临时文件 + rename + 重试」：临时名唯一，避免多实例并发写互相覆盖；重试是因为 Windows 上 rename 覆盖已存在文件会偶发 `EPERM`。
 
 ## 架构
 
@@ -112,10 +219,12 @@ src/
   ai/models.ts               注册表构建、模型列举与解析
   ai/custom-provider.ts      自定义 provider 与 Model 构造
   ai/fetch-models.ts         上游模型拉取与合并
-  ai/prompts.ts              系统提示词与工程快照
-  ai/tools.ts                12 个小说写作工具
-  ai/novel-agent.ts          Agent 工厂
-  store/project.ts           工程数据与 JSON 持久化
+  ai/prompts.ts              两套系统提示词 + 按 scope 的工程快照
+  ai/tools.ts                素材工具集与写作工具集
+  ai/novel-agent.ts          Agent 工厂（按 role 分派工具与提示词）
+  store/project.ts           工程数据、素材模型、装配双向同步与 JSON 持久化
+  store/library.ts           通用素材库（跨作品的一层）与取用 / 回推
+  server/upload.ts           上传原料的文本提取（纯文本 + docx 解包）
   server/main.ts             HTTP、会话管理、NDJSON 流式事件
 public/                      index.html / app.js / settings.js / style.css
 scripts/                     测试
@@ -125,24 +234,39 @@ scripts/                     测试
 
 任何设置变更都会重新执行 `createModels()` 并重新注册 provider。会话保存的是 `providerId/modelId` 字符串而不是 `Model` 对象，因此换模型时无需重建会话。
 
-## 智能体
+### 会话与并发
 
-12 个工具绑定到单个作品工程：
+- **素材会话**常驻（`POST /api/sessions`，`role: "material"`），保留多轮对话 —— 备料是一个来回商量的过程。
+- **写作会话**同样常驻（`role: "writing"` + `chapterId`），是生文工作台的问答通道：作者可以追问、局部改稿。
+  前端按 `writing:<chapterId>` 分桶保存会话与对话快照，换章不丢上下文。
+- **一次性成文**（`POST /api/projects/:id/chapters/:chapterId/write`）不建会话、不留历史，用完即弃。
+  两条路都能写正文，区别只在「要不要接着聊」。
+- `toolExecution: "sequential"` —— 工具会写数据，并行执行可能丢失更新。
+- 同一章节的写入共用一把按章的锁（`ProjectStore.withChapterLock`）：智能体的 `write_chapter` 与作者在稿面直接保存（`PATCH /chapters/:id`）都是整段覆盖，不加锁会让先写的内容无声消失。
+
+## 智能体工具
+
+素材工具集（10 个）：
 
 | 分组 | 工具 |
 | --- | --- |
 | 作品 | `get_project_brief` |
-| 章节 | `list_chapters` `read_chapter` `write_chapter` `update_outline` |
-| 人物 | `list_characters` `upsert_character` |
-| 世界观 | `list_world_facts` `set_world_fact` |
+| 章节 | `list_chapters` `read_chapter` `update_outline` |
+| 素材 | `list_materials` `upsert_material` `attach_materials` |
 | 一致性 | `add_note` `list_notes` `resolve_note` |
 
-系统提示词约束了工作流（写前必读、写完必落盘、不擅自修改已有内容）、文风规则和输出规范。
+写作工具集（8 个）：`get_project_brief` `list_chapters` `read_chapter` `list_materials` `write_chapter` `add_note` `list_notes` `resolve_note`。
 
-两个关键的工程决策：
+两套工具共用的只读部分实现于同一处，但**可写工具互不重叠**。系统提示词各自约束工作流、工具纪律与输出规范。
 
-- `toolExecution: "sequential"` —— 工具会写数据，并行执行可能丢失更新。
-- `transformContext` —— 每次请求前注入当前工程快照，并丢弃过量的旧工具结果。快照每次重新生成且不进入历史，因此不会累积。
+执笔者的提示词有两种作业：
+
+- **一次性成文**（`/write`）：作业由调用方指定，`mode` 与提示词严格一致。`write_chapter` 是整段覆盖，
+  若提示词说「继续往后写」而调用方要的是重写，交出来的会是个残篇。
+- **工作台会话**（`role: "writing"`）：不预设作业，作者在对话里逐条交代，模型先判断他要什么再动手。
+  系统提示词里写着本章装了哪些料，而它是建会话时一次性拼好的 —— 所以**每轮消息前重建智能体**，
+  只换开头那条系统消息、保留对话。否则作者中途装料或摘料后，模型看到的依据就是旧的：
+  新装的料这一轮用不上，已摘掉的料还会被当成已经定下的事实。
 
 ## API
 
@@ -156,31 +280,90 @@ scripts/                     测试
 | POST | `/api/providers/:id/models/fetch` | 从上游拉取模型 |
 | POST | `/api/providers/:id/models` | 新增 / 更新单个模型参数 |
 | DELETE | `/api/providers/:id/models/:modelId` | 删除模型 |
-| GET/POST | `/api/projects` | 工程列表 / 新建 |
-| GET | `/api/projects/:id` | 工程全量 + 统计 |
+| GET/POST | `/api/library` | 通用素材库：列表（含取用情况）/ 收录一条 |
+| PATCH/DELETE | `/api/library/:libraryId` | 改 / 删库条目 |
+| GET/POST | `/api/projects` | 作品列表（摘要 + 统计）/ 新建（可带 `libraryIds`） |
+| GET/PATCH/DELETE | `/api/projects/:id` | 作品全量 / 改题名与规约 / 删作品 |
+| POST | `/api/projects/:id/uploads` | **上传原料**：`?filename=` + 原始字节，只提取文本不落盘 |
+| GET/POST | `/api/projects/:id/materials` | 素材列表（`?kind=` 过滤）/ 新建素材 |
+| PATCH/DELETE | `/api/projects/:id/materials/:materialId` | 改 / 删单条素材 |
+| POST | `/api/projects/:id/materials/:materialId/library` | **存回素材库**：`{ mode, title? }` |
+| POST | `/api/projects/:id/chapters/:chapterId/materials` | **装配**：`{ add, remove }`，双向同步 |
 | PATCH | `/api/projects/:id/chapters/:chapterId` | 保存章节正文（稿面直接编辑） |
-| POST | `/api/sessions` | 创建会话 |
+| POST | `/api/projects/:id/chapters/:chapterId/write` | **一次性成文**：组装素材生成正文，返回 NDJSON 事件流 |
+| POST | `/api/sessions` | 创建会话（`role: material` / `writing`） |
 | POST | `/api/sessions/:id/model` | 切换模型，保留对话历史 |
 | POST | `/api/sessions/:id/messages` | 发送消息，返回 NDJSON 事件流 |
 | POST | `/api/sessions/:id/abort` | 中止当前生成 |
 
+`/write` 的 body：`{ modelRef, thinkingLevel, mode: "create" | "rewrite" | "continue", note }`。
+该章没有装配任何素材时返回 **409** 并说明原因 —— 不给执笔者一个空清单去硬编。
+
+`/uploads` 的 body 是原始字节（`application/octet-stream`），文件名走 query。支持 `.txt / .md / .csv /
+.json / .yaml / .html / .xml / .docx`，其中 `.docx` 由服务端自己解 zip 再剥 XML（不引依赖）。
+其余格式返回 **415** 并说明该转成什么。提取结果只回给前端预览，服务端不留档。
+
+`/chapters/:id/materials` 与智能体的 `attach_materials` 共用 `linkMaterials`，
+所以「人装的料」和「墨客装的料」不会把双向索引写歪。未知 id 会跳过，并在 `skipped` 里如实回报。
+
+`/api/library` 是**跨作品**的一层：库里的料不属于任何一部小说。`GET` 返回条目 + 取用情况 + 种类表，
+其中 `usedBy` 由服务端扫描各作品现算，不落盘 —— 所以不会出现"库里说用过、作品里查不到"。
+
+`POST /api/projects` 的 body 可以带 `libraryIds`：新建时从库里取料，取的是**副本** ——
+新 id、`chapterIds` 清空、`source: "library"`，并记下 `originId`。之后的改动不回写库。
+
+`POST /api/projects/:id/materials/:materialId/library` 是反向动作：把作品里改好的料存回库。
+body `{ mode: "create" | "update", title? }`。`update` 覆盖 `originId` 指向的那一条；
+这条料没有来源条目时返回 **409**，改用 `create` 另存为新条目。
+
 ## 测试
 
 ```bash
-pnpm test          # tsc + 配置层 + 工具链路 + 智能体循环
+pnpm test          # tsc + 配置层 + 工具链路 + 接口契约 + 智能体循环
 pnpm test:config   # 归一化、凭据存储、provider 构造、档位屏蔽、拉取合并
-pnpm test:tools    # 存储与 12 个工具的断言
+pnpm test:tools    # 存储、素材模型、两套工具集与提示词、上传解析、通用素材库
+pnpm test:server   # 真起一个服务进程，走真实 HTTP 验接口契约
 pnpm test:loop     # 用 pi-ai faux provider 走真实的智能体循环
 ```
 
-四个套件均不需要 API Key。循环测试用 pi-ai 自带的 `fauxProvider` 脚本化模型响应，真实验证「模型输出 → 工具调用 → 工具执行 → 结果回填 → 下一轮」。
+五个套件均不需要 API Key。`test:loop` 用 pi-ai 自带的 `fauxProvider` 脚本化模型响应，
+分别走完**素材智能体**（立章 → 造料并装料 → 收尾）与**组装智能体**（装料成文）的完整链路。
+
+`test:tools` 断言了几件容易被后续改动破坏的事：
+
+- 素材工具集不含 `write_chapter`，写作工具集不含 `upsert_material` / `attach_materials` / `update_outline`
+- `usage` 落盘、`chapterIds` 与 `materialIds` 双向同步、移除装料时反向关联也清掉
+- 首次写入正文时继承本章的装配清单；只改标题时装配清单保持原样
+- 挂不存在的素材会被忽略；`chapterIds` 传空表等于从所有章节摘除
+- `update_outline` 装料时反向同步素材的 `chapterIds`
+- 素材快照含索引与 `usage` 但不含全文；写作快照含本章全文但不含全库索引
+- 章节写锁下并发写入都生效
+- 工作台会话的提示词不预设「整章重写」，一次性成文仍要求「一次写完」
+- `linkMaterials` / `assembledMaterials` / `removeMaterial` 的边界：幽灵 id、悬空 id、重复装料、删素材后的连带清理
+- 上传解析：BOM、空行折叠、HTML 剥标签、docx 段落与行内换行、未压缩条目、实体解码、坏 zip 报错、超长截断
+- 通用素材库：取用是复制（新 id、清空装配、记 `originId`、来源标为 `library`、不共享标签数组），回推不带 id 与时间戳
+- `library.json` 不被 `ProjectStore` 当成一部作品；库文件损坏时按空库处理
+
+`test:server` 在临时目录里起一个真实服务进程（先探测空闲端口再传 `PORT`），
+断言上传 / 素材增删改 / 章节装料 / 成文前置校验 / 会话校验 / 静态资源与路径遍历这些 HTTP 契约，
+以及通用素材库的收录、取用、回推，和卷宗的改 / 删。
 
 ## 当前限制
 
 - 会话在内存中，服务重启后会丢失对话历史（工程与供应商配置都会保留）。
+- 上传只认 UTF-8 与 `.docx`：`.pdf` / `.epub` / `.doc` 会被明确拒绝，而不是塞乱码给模型。GBK 编码的文本会解成乱码，需先转存为 UTF-8。
+- 上传的原料不落盘：提取结果只在前端内存里，刷新页面就没了（已入库的素材不受影响）。
+- 工作台会话注入的是**本章**素材全文。一章装料过多时，上下文会被素材本身占满；单次上传超过 20 万字会截断，超过 6 万字时界面会提示。
+- 素材质量取决于 `usage` 写得够不够具体。schema 里它是必填，但模型仍可能敷衍。
 - 自定义供应商的模型参数需人工确认，上游 `/models` 接口通常不返回 token 限制。
-- 没有任何模型用真实 key 跑通过一次真实 API 往返。
+- 执笔者偶尔会重复调用 `write_chapter`（同一轮里写两遍）。提示词里的「整章落地」约束力有限，好在第二次通常更好。
+- 上游把错误塞在 HTTP 200 的响应体里时（额度用尽、限流都会这样），本地只看得到「没有 finish_reason」。
+  服务端在「一个字都没收到」的情况下会额外给一句提示，但真因仍需到上游控制台核对 ——
+  这条是在真实环境里踩出来的：中转服务返回 `status_code: 2067`（Token Plan 用量上限），
+  而 HTTP 状态是 200，`choices` 为 `null`。
+- 通用素材库的取用是复制：作品里改了副本，别的作品与库里都不会跟着变，要同步得显式「更新素材库」。
+- 库与作品之间没有引用关系，所以删库条目不影响已有作品，反过来也一样 —— 这是刻意的，不是没做。
 
 ## 后续计划
 
-版本历史与回滚、全文检索、导出、字数统计报表。
+版本历史与回滚、全文检索、导出、字数统计报表、素材卡的拖放装配、把上传的原料留档以便重跑提炼。

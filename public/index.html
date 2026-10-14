@@ -19,6 +19,7 @@
 				</div>
 
 				<div class="beam-mid">
+					<button id="leave-workspace" class="btn btn-quiet btn-sm beam-back hidden">← 案头</button>
 					<span id="project-title" class="beam-title">未选择作品</span>
 					<span id="project-stats" class="beam-stats"></span>
 				</div>
@@ -35,54 +36,153 @@
 				</div>
 			</header>
 
-			<!-- ── 左卷 ───────────────────────────────────────────── -->
+			<!-- ── 左卷：写作台里只剩章目；选卷与素材库都在「案头」── -->
 			<aside class="rail">
-				<section class="rail-block">
-					<h2 class="rail-label"><i class="tick"></i>案上作品</h2>
-					<ul id="project-list" class="project-list"></ul>
-					<button id="new-project" class="ink-btn">＋ 另起一卷</button>
-				</section>
-
 				<section class="rail-block rail-grow">
 					<h2 class="rail-label"><i class="tick"></i>章目</h2>
 					<ol id="chapter-list" class="chapter-list"></ol>
-					<p id="chapter-empty" class="rail-note">尚无章目。切到「议」让墨客拟一份大纲。</p>
+					<p id="chapter-empty" class="rail-note">尚无章目。到「料」让设定官拟一份大纲。</p>
 				</section>
 			</aside>
 
-			<!-- ── 中稿台 ─────────────────────────────────────────── -->
+			<!-- ── 中台 ───────────────────────────────────────────── -->
 			<main class="stage">
 				<nav class="stage-bar">
 					<div class="tabs">
 						<button class="tab is-on" data-view="manuscript"><b>稿</b><span>文稿</span></button>
-						<button class="tab" data-view="chat"><b>议</b><span>对议</span></button>
+						<button class="tab" data-view="materials"><b>料</b><span>素材工作台</span></button>
+						<button class="tab" data-view="writing"><b>文</b><span>生文工作台</span></button>
 					</div>
 					<div class="stage-actions" id="stage-actions"></div>
 				</nav>
 
-				<section id="view-manuscript" class="view is-on" aria-label="文稿"></section>
-
-				<section id="view-chat" class="view view-chat" aria-label="对议">
-					<div id="messages" class="stream"></div>
-					<form id="composer" class="composer">
-						<textarea
-							id="input"
-							rows="3"
-							placeholder="交代接下来的活计：拟大纲、补设定、续写、改稿、查前后……（Enter 发送，Shift+Enter 换行）"
-						></textarea>
-						<div class="composer-side">
-							<button id="send" type="submit" class="btn btn-ink">呈上</button>
-							<button id="abort" type="button" class="btn btn-quiet hidden">止笔</button>
+				<!-- 案头：卷宗与通用素材库。进书之前、出书之后都落在这里 -->
+				<section id="view-home" class="view view-bench is-on" aria-label="案头">
+					<div class="bench">
+						<div class="bench-pane">
+							<header class="pane-head">
+								<h3>卷宗</h3>
+								<span id="project-count" class="pane-count"></span>
+								<div class="pane-tools">
+									<button class="btn btn-quiet btn-sm" data-action="new-project">＋ 另起一卷</button>
+								</div>
+							</header>
+							<div id="project-cards" class="record-list"></div>
 						</div>
-					</form>
+
+						<div class="bench-pane">
+							<header class="pane-head">
+								<h3>通用素材库</h3>
+								<span id="library-count" class="pane-count"></span>
+								<div class="pane-tools">
+									<button class="btn btn-quiet btn-sm" data-action="new-library">＋ 收录一条</button>
+								</div>
+							</header>
+							<p class="pane-lead">这里的料不属于任何一部作品：新建时取用，作品里改好的料也能存回来。</p>
+							<div id="library-filter" class="mat-filter"></div>
+							<div id="library-list" class="material-list"></div>
+						</div>
+					</div>
+				</section>
+
+				<section id="view-manuscript" class="view" aria-label="文稿"></section>
+
+				<!-- 素材工作台：上传原料 + 与设定官对议 + 素材库 -->
+				<section id="view-materials" class="view view-bench" aria-label="素材工作台">
+					<div class="bench">
+						<div class="bench-pane">
+							<header class="pane-head">
+								<h3>原料</h3>
+								<div class="pane-tools">
+									<button id="upload-pick" class="btn btn-quiet btn-sm">选择文件</button>
+									<input
+										id="upload-input"
+										type="file"
+										multiple
+										hidden
+										accept=".txt,.text,.md,.markdown,.log,.csv,.tsv,.json,.yaml,.yml,.html,.htm,.xml,.docx"
+									/>
+								</div>
+							</header>
+							<div id="upload-zone" class="dropzone">
+								<p>把资料拖到这里，或点「选择文件」</p>
+								<p class="dropzone-hint">支持 .txt / .md / .csv / .json / .html / .docx</p>
+							</div>
+							<ul id="upload-list" class="upload-list"></ul>
+
+							<header class="pane-head">
+								<h3>素材库</h3>
+								<span id="material-count" class="pane-count"></span>
+							</header>
+							<div id="material-filter" class="mat-filter"></div>
+							<div id="material-list" class="material-list"></div>
+						</div>
+
+						<div class="bench-pane bench-talk">
+							<header class="pane-head">
+								<h3>设定官</h3>
+								<span class="pane-note">产素材，不写正文</span>
+							</header>
+							<div id="material-stream" class="stream"></div>
+							<form id="material-composer" class="composer">
+								<textarea
+									id="material-input"
+									rows="3"
+									placeholder="交代活计：立章目、补人物、查前后矛盾、把这段资料拆成素材……（Enter 发送，Shift+Enter 换行）"
+								></textarea>
+								<div class="composer-side">
+									<button type="submit" class="btn btn-ink">呈上</button>
+									<button type="button" class="btn btn-quiet hidden" data-abort="material">止笔</button>
+								</div>
+							</form>
+						</div>
+					</div>
+				</section>
+
+				<!-- 生文工作台：装配本章素材 + 与执笔者对议 + 装料成文 -->
+				<section id="view-writing" class="view view-bench" aria-label="生文工作台">
+					<div class="bench">
+						<div class="bench-pane">
+							<header class="pane-head">
+								<h3>装配</h3>
+								<span id="assembly-chapter" class="pane-note"></span>
+							</header>
+							<div id="assembly-list" class="assembly-list"></div>
+							<div id="write-actions" class="write-actions"></div>
+
+							<header class="pane-head">
+								<h3>库中可装</h3>
+								<span id="pool-count" class="pane-count"></span>
+							</header>
+							<div id="pool-list" class="pool-list"></div>
+						</div>
+
+						<div class="bench-pane bench-talk">
+							<header class="pane-head">
+								<h3>执笔者</h3>
+								<span class="pane-note">把素材组装成正文，不改素材</span>
+							</header>
+							<div id="writing-stream" class="stream"></div>
+							<form id="writing-composer" class="composer">
+								<textarea
+									id="writing-input"
+									rows="3"
+									placeholder="交代活计：写出这一章、把第二段改冷一点、让结尾再狠一些……（Enter 发送，Shift+Enter 换行）"
+								></textarea>
+								<div class="composer-side">
+									<button type="submit" class="btn btn-ink">呈上</button>
+									<button type="button" class="btn btn-quiet hidden" data-abort="writing">止笔</button>
+								</div>
+							</form>
+						</div>
+					</div>
 				</section>
 			</main>
 
 			<!-- ── 右案 ───────────────────────────────────────────── -->
 			<aside class="desk-right">
 				<nav class="bible-tabs" id="bible-tabs">
-					<button class="bible-tab is-on" data-tab="characters">人物</button>
-					<button class="bible-tab" data-tab="world">世观</button>
+					<button class="bible-tab is-on" data-tab="materials">素材</button>
 					<button class="bible-tab" data-tab="outline">大纲</button>
 					<button class="bible-tab" data-tab="notes">待办</button>
 				</nav>
@@ -90,18 +190,118 @@
 			</aside>
 		</div>
 
-		<dialog id="project-dialog" class="sheet">
-			<form id="project-form" method="dialog">
-				<h3>另起一卷</h3>
-				<label>书名<input name="title" required placeholder="例如：长夜水声" /></label>
-				<label>门类<input name="genre" placeholder="例如：志怪 / 悬疑 / 世情" /></label>
-				<label>一句话骨相<textarea name="logline" rows="2" placeholder="一句说清核心冲突"></textarea></label>
-				<label>总字数<input name="targetWords" type="number" min="0" step="10000" placeholder="300000" /></label>
-				<label>行文规约<textarea name="styleGuide" rows="3" placeholder="语体、叙述节奏、忌讳……"></textarea></label>
-				<div class="dialog-actions">
-					<button value="cancel" class="btn btn-quiet">作罢</button>
-					<button value="create" class="btn btn-ink">立卷</button>
+		<dialog id="project-dialog" class="sheet sheet-wide sheet-form">
+			<form id="project-form">
+				<header class="form-head">
+					<h3 id="project-form-title">另起一卷</h3>
+					<p id="project-form-hint" class="form-hint">可以从通用素材库里挑几条打底 —— 开卷就有料。</p>
+				</header>
+
+				<div class="form-body">
+					<div class="form-row">
+						<label class="field"><span class="field-label">书名</span><input name="title" required placeholder="例如：长夜水声" /></label>
+						<label class="field"><span class="field-label">门类<em>选填</em></span><input name="genre" placeholder="志怪 / 悬疑 / 世情" /></label>
+					</div>
+
+					<!-- 只有书名是必填。其余收起来，需要时再展开 -->
+					<details class="form-more" id="project-more">
+						<summary>更多设置<em>可留空，之后在「案头 → 改」里补</em></summary>
+						<label class="field">
+							<span class="field-label">一句话骨相</span>
+							<textarea name="logline" rows="2" placeholder="一句说清核心冲突"></textarea>
+						</label>
+						<div class="form-row">
+							<label class="field"><span class="field-label">总字数</span><input name="targetWords" type="number" min="0" step="10000" placeholder="300000" /></label>
+							<label class="field">
+								<span class="field-label">行文规约</span>
+								<textarea name="styleGuide" rows="2" placeholder="语体、叙述节奏、忌讳……"></textarea>
+							</label>
+						</div>
+					</details>
+
+					<div class="field field-grow">
+						<span class="field-label">从通用素材库取用<span id="library-pick-count" class="pick-count"></span></span>
+						<input id="library-pick-search" class="pick-search" placeholder="按标题、用途或标签筛选" />
+						<div id="library-pick" class="library-pick"></div>
+					</div>
 				</div>
+
+				<footer class="form-foot">
+					<p id="project-form-error" class="form-error"></p>
+					<div class="dialog-actions">
+						<button type="button" id="project-form-cancel" class="btn btn-quiet">作罢</button>
+						<button type="submit" class="btn btn-ink">立卷</button>
+					</div>
+				</footer>
+			</form>
+		</dialog>
+
+		<!-- 把作品里的一条素材收进通用素材库。已有来源条目时可选更新还是另存。 -->
+		<dialog id="promote-dialog" class="sheet sheet-form promote">
+			<form id="promote-form">
+				<header class="form-head">
+					<h3>存入素材库</h3>
+					<p id="promote-desc" class="form-hint"></p>
+				</header>
+				<div class="form-body">
+					<label class="field">
+						<span class="field-label">库里的标题</span>
+						<input name="title" required />
+					</label>
+					<div id="promote-modes" class="promote-modes"></div>
+				</div>
+				<footer class="form-foot">
+					<p id="promote-error" class="form-error"></p>
+					<div class="dialog-actions">
+						<button type="button" id="promote-cancel" class="btn btn-quiet">作罢</button>
+						<button type="submit" class="btn btn-ink">存入</button>
+					</div>
+				</footer>
+			</form>
+		</dialog>
+
+		<!-- 素材录入 / 修改。上传的原料与库里已有素材共用这一张表单。 -->
+		<dialog id="material-dialog" class="sheet sheet-wide sheet-form">
+			<form id="material-form">
+				<header class="form-head">
+					<h3 id="material-form-title">存入素材库</h3>
+					<p id="material-form-hint" class="form-hint"></p>
+				</header>
+
+				<div class="form-body">
+					<div class="form-row">
+						<label class="field"><span class="field-label">种类</span><select id="material-form-kind" name="kind"></select></label>
+						<label class="field"><span class="field-label">标题</span><input name="title" required placeholder="这条素材叫什么" /></label>
+					</div>
+
+					<label class="field">
+						<span class="field-label">装配提示<em>usage</em></span>
+						<textarea
+							name="usage"
+							rows="2"
+							placeholder="什么情况下该用这条素材，例如：雨夜追踪戏，交代街区的排水结构"
+						></textarea>
+						<span class="field-note">组装智能体只拿到本章装配的料，它靠这句话判断相关性。写「用于推进剧情」等于没写。</span>
+					</label>
+
+					<label class="field">
+						<span class="field-label">标签</span>
+						<input name="tags" placeholder="逗号分隔，可留空" />
+					</label>
+
+					<label class="field field-grow">
+						<span class="field-label">内容</span>
+						<textarea name="content" rows="16" required placeholder="写清事实、约束与边界。空行分段。"></textarea>
+					</label>
+				</div>
+
+				<footer class="form-foot">
+					<p id="material-form-error" class="form-error"></p>
+					<div class="dialog-actions">
+						<button type="button" id="material-form-cancel" class="btn btn-quiet">作罢</button>
+						<button type="submit" class="btn btn-ink">存入</button>
+					</div>
+				</footer>
 			</form>
 		</dialog>
 

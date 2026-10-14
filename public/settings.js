@@ -577,12 +577,20 @@ async function saveDefaultsFor(modelId) {
 	notifyChanged();
 }
 
+/**
+ * 提示条。
+ *
+ * prepend 而不是 append：详情栏是滚动区，提示追加到最后就滚出视野了。
+ * 点一下可以收起 —— 有些失败信息很长，挡着下面的模型表。
+ */
 function noticeBox(box, message, kind) {
 	const existing = box.querySelector(".notice");
 	if (existing) existing.remove();
 	const node = el("div", "notice" + (kind ? " " + kind : ""), message);
-	box.append(node);
-	setTimeout(() => node.remove(), 6000);
+	node.title = "点一下收起";
+	node.addEventListener("click", () => node.remove());
+	box.prepend(node);
+	setTimeout(() => node.remove(), 12000);
 }
 
 async function pullModels(providerId, box) {
@@ -605,13 +613,18 @@ async function testConnection(providerId, box) {
 		return;
 	}
 	noticeBox(box, "正在测试连接…");
+
+	let result;
 	try {
-		const result = await api(`/api/providers/${providerId}/models/fetch`, { method: "POST" });
-		noticeBox(box, `连接正常，发现 ${result.fetched} 个模型。`, "ok");
-		await refresh();
+		result = await api(`/api/providers/${providerId}/models/fetch`, { method: "POST" });
 	} catch (error) {
-		noticeBox(box, `连接失败：${error.message}`, "err");
+		noticeBox($("settings-detail"), `连接失败：${error.message}`, "err");
+		return;
 	}
+
+	// 先刷新再写提示：refresh 会重建整个详情栏，先写的提示会被冲掉 —— 之前就是这样"什么都不显示"的。
+	await refresh();
+	noticeBox($("settings-detail"), `连接正常，发现 ${result.fetched} 个模型。`, "ok");
 }
 
 /** 新增自定义供应商：正式表单，而不是两次 prompt。 */

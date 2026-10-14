@@ -14,7 +14,8 @@
     "test:tools": "node --experimental-strip-types scripts/smoke.ts",
     "test:loop": "node --experimental-strip-types scripts/agent-loop.ts",
     "test:config": "node --experimental-strip-types scripts/config.ts",
-    "test": "pnpm typecheck && pnpm test:config && pnpm test:tools && pnpm test:loop"
+    "test:server": "node --experimental-strip-types scripts/workbench.ts",
+    "test": "pnpm typecheck && pnpm test:config && pnpm test:tools && pnpm test:server && pnpm test:loop"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "1.2.0",

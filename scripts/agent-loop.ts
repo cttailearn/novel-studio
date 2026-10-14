@@ -1,9 +1,9 @@
 /**
  * 智能体循环的端到端测试。
  * 使用 pi-ai 自带的 faux provider 脚本化模型响应，因此不需要任何 API Key，
- * 却能真实走完 “模型输出 → 工具调用 → 工具执行 → 结果回填 → 下一轮” 的完整链路。
+ * 却能真实走完两个智能体各自的 "模型输出 → 工具调用 → 工具执行 → 结果回填 → 下一轮"。
  *
- * 运行：pnpm test
+ * 运行：pnpm test:loop
  */
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -32,89 +32,169 @@ try {
 	const store = await ProjectStore.open(dir);
 	const project = store.create({ title: "循环测试", genre: "悬疑", targetWords: 100000 });
 
-	// 脚本化三轮模型响应：建大纲 → 写正文 → 收尾
 	const faux = fauxProvider({ tokensPerSecond: 10000 });
 	const models = createModels();
 	models.setProvider(faux.provider);
 	const model = faux.getModel();
 
+	// 捕获真正发给模型的消息：transformContext 的结果不在 state.messages 里，
+	// 它只存在于每次请求的上下文中。断言必须打在这里才准。
+	const sentRequests: string[] = [];
+	const record = (context: { messages: unknown[] }) => {
+		sentRequests.push(JSON.stringify(context.messages));
+	};
+
+	// ───────────────────────────────── 素材智能体
+	console.log("\n素材智能体循环");
+	// 脚本化三轮：立章 → 造料并装料 → 收尾
 	faux.setResponses([
 		fauxAssistantMessage(fauxToolCall("update_outline", {
 			chapters: [
 				{ id: "ch01", title: "第一章", summary: "开场", targetWords: 3000, status: "planned" },
 			],
 		})),
-		fauxAssistantMessage(fauxToolCall("write_chapter", {
-			chapterId: "ch01",
-			title: "第一章",
-			content: "雨停了三天。",
-			mode: "create",
+		fauxAssistantMessage(fauxToolCall("upsert_material", {
+			kind: "character",
+			title: "林晓",
+			content: "痕迹鉴定员，习惯用左手记笔记。",
+			usage: "雨夜追踪戏，交代她的职业与观察习惯",
+			chapterIds: ["ch01"],
 		})),
-		fauxAssistantMessage([fauxText("已完成第一章的大纲与初稿。")], { stopReason: "stop" }),
+		fauxAssistantMessage([fauxText("已备好第一章的料。")], { stopReason: "stop" }),
 	]);
 
-	const agent = createNovelAgent({
+	const materialAgent = createNovelAgent({
 		store,
 		projectId: project.id,
 		model,
 		models,
 		config,
-		sessionId: "loop-test",
+		sessionId: "material-loop",
+		role: "material",
 	});
 
-	// 收集事件序列
-	const events: AgentEvent[] = [];
-	const types: string[] = [];
-	agent.subscribe((event) => {
-		events.push(event);
-		types.push(event.type);
+	const materialEvents: AgentEvent[] = [];
+	const materialTypes: string[] = [];
+	materialAgent.subscribe((event) => {
+		materialEvents.push(event);
+		materialTypes.push(event.type);
 	});
 
-	await agent.prompt("帮我把开篇写出来。");
+	await materialAgent.prompt("给第一章备料。");
 
-	console.log("\n事件流");
-	const seq = [...new Set(types)];
-	console.log("  序列: " + seq.join(" → "));
-	check("以 agent_start 开始", types[0] === "agent_start", types[0]);
-	check("以 agent_end 结束", types[types.length - 1] === "agent_end", types[types.length - 1]);
-	check("三个 turn", types.filter((t) => t === "turn_start").length === 3, String(types.filter((t) => t === "turn_start").length));
-	check("有流式增量事件", types.filter((t) => t === "message_update").length > 0);
-	check("有工具执行事件", types.filter((t) => t === "tool_execution_start").length === 2);
-	check("工具全部成功", events.filter((e) => e.type === "tool_execution_end" && !e.isError).length === 2);
-	check("智能体最终非流", agent.state.isStreaming === false);
-	check("无错误状态", agent.state.errorMessage === undefined, String(agent.state.errorMessage));
+	check("以 agent_start 开始", materialTypes[0] === "agent_start", materialTypes[0]);
+	check("以 agent_end 结束", materialTypes[materialTypes.length - 1] === "agent_end");
+	check("三个 turn", materialTypes.filter((t) => t === "turn_start").length === 3, String(materialTypes.filter((t) => t === "turn_start").length));
+	check("执行了两次工具", materialTypes.filter((t) => t === "tool_execution_start").length === 2);
+	check("工具全部成功", materialEvents.filter((e) => e.type === "tool_execution_end" && !e.isError).length === 2);
+	check("无错误状态", materialAgent.state.errorMessage === undefined, String(materialAgent.state.errorMessage));
 
-	console.log("\n工具执行结果");
-	const final = store.get(project.id)!;
-	check("update_outline 已落盘", final.outline.length === 1 && final.outline[0]?.id === "ch01");
-	check("write_chapter 已落盘", final.drafts.ch01?.content === "雨停了三天。");
-	check("正文版本为 1", final.drafts.ch01?.revision === 1);
-	check("大纲状态自动更新为 drafted", final.outline[0]?.status === "drafted", String(final.outline[0]?.status));
+	const afterMaterial = store.get(project.id)!;
+	check("update_outline 已落盘", afterMaterial.outline.length === 1 && afterMaterial.outline[0]?.id === "ch01");
+	check("素材已落盘", afterMaterial.materials.length === 1 && afterMaterial.materials[0]?.title === "林晓");
+	check("usage 已记录", Boolean(afterMaterial.materials[0]?.usage.includes("雨夜追踪戏")));
+	check("素材自动关联到章节", afterMaterial.outline[0]?.materialIds.length === 1, String(afterMaterial.outline[0]?.materialIds.length));
+	check("未写入任何正文", Object.keys(afterMaterial.drafts).length === 0);
 
-	console.log("\n上下文管理");
-	// agent.state.messages 返回的是内部数组本身，测试里只能取长度快照，不能保留引用。
-	const messages = [...agent.state.messages];
-	check("已积累对话历史", messages.length > 1, String(messages.length));
-	check("首条是系统提示词", messages[0]?.role === "system");
-	check("系统提示词含工具声明", JSON.stringify(messages[0]).includes("write_chapter"));
-	check("工具结果已回填到上下文", messages.some((m) => m.role === "toolResult"));
+	const materialMessages = [...materialAgent.state.messages];
+	check("已积累对话历史", materialMessages.length > 1, String(materialMessages.length));
+	check("首条是系统提示词", materialMessages[0]?.role === "system");
+	check("工具结果已回填到上下文", materialMessages.some((m) => m.role === "toolResult"));
+	check(
+		"系统提示词声明素材智能体不写正文",
+		String(materialMessages[0]?.content).includes("不写正文"),
+	);
 
-	// 第二轮：transformContext 应注入工程快照
-	const store2 = await ProjectStore.open(dir);
-	store2.create({ title: "另一个工程" });
-	faux.setResponses([fauxAssistantMessage([fauxText("第二轮回复")])]);
-	await agent.prompt("再说一句");
-	const afterSecond = [...agent.state.messages];
-	check("第二轮追加了历史", afterSecond.length > messages.length, messages.length + " -> " + afterSecond.length);
-	check("第二轮后系统提示词仍在头部", afterSecond[0]?.role === "system");
-	check("第二轮后无残留错误", agent.state.errorMessage === undefined);
-
-	console.log("\n流式内容");
-	const assistantText = events
+	const materialText = materialEvents
 		.filter((e) => e.type === "message_update" && e.assistantMessageEvent.type === "text_delta")
 		.map((e) => (e as any).assistantMessageEvent.delta as string)
 		.join("");
-	check("收到文本增量", assistantText.includes("已完成第一章"), JSON.stringify(assistantText.slice(0, 40)));
+	check("收到文本增量", materialText.includes("已备好第一章"), JSON.stringify(materialText.slice(0, 40)));
+
+	// ───────────────────────────────── 组装智能体
+	console.log("\n组装智能体循环");
+	const materialId = afterMaterial.materials[0]!.id;
+
+	faux.setResponses([
+		(context) => {
+			record(context as unknown as { messages: unknown[] });
+			return fauxAssistantMessage(fauxToolCall("write_chapter", {
+			chapterId: "ch01",
+			title: "第一章",
+			content: "雨停了三天。",
+			mode: "create",
+			materialIds: [materialId],
+			}));
+		},
+		fauxAssistantMessage([fauxText("本章已成稿。")], { stopReason: "stop" }),
+	]);
+
+	const writingAgent = createNovelAgent({
+		store,
+		projectId: project.id,
+		model,
+		models,
+		config,
+		sessionId: "writing-loop",
+		role: "writing",
+		chapterId: "ch01",
+	});
+
+	const writingEvents: AgentEvent[] = [];
+	const writingTypes: string[] = [];
+	writingAgent.subscribe((event) => {
+		writingEvents.push(event);
+		writingTypes.push(event.type);
+	});
+
+	await writingAgent.prompt("写出本章。");
+
+	check("写作智能体无错误", writingAgent.state.errorMessage === undefined, String(writingAgent.state.errorMessage));
+	check("执行了 write_chapter", writingTypes.filter((t) => t === "tool_execution_start").length === 1);
+	check(
+		"工具全部成功",
+		writingEvents.filter((e) => e.type === "tool_execution_end" && !e.isError).length === 1,
+	);
+
+	const afterWriting = store.get(project.id)!;
+	check("正文已落盘", afterWriting.drafts.ch01?.content === "雨停了三天。");
+	check("版本号为 1", afterWriting.drafts.ch01?.revision === 1);
+	check("记录用到的素材", afterWriting.drafts.ch01?.materialIds[0] === materialId);
+	check("大纲状态自动更新为 drafted", afterWriting.outline[0]?.status === "drafted", String(afterWriting.outline[0]?.status));
+
+	const writingMessages = [...writingAgent.state.messages];
+	const systemPrompt = String(writingMessages[0]?.content);
+	check("写作提示词带出本章素材全文", systemPrompt.includes("痕迹鉴定员"), "");
+	check("写作提示词声明唯一事实来源", systemPrompt.includes("唯一"));
+	check(
+		"写作快照注入了本章素材",
+		sentRequests.some((payload) => payload.includes("本章素材（写作依据）") && payload.includes("痕迹鉴定员")),
+	);
+	check(
+		"写作工具集不含素材写入",
+		!JSON.stringify((writingAgent.state as unknown as { tools?: { name: string }[] }).tools ?? []).includes("upsert_material"),
+	);
+
+	// ───────────────────────────────── 上下文管理
+	console.log("\n上下文管理");
+	// 第二轮：验证多轮对话下素材仍能落盘。
+	// agent-loop 只在"有工具调用待处理"时继续下一轮，纯文本的 stopReason
+	// 不会让它多走一步，所以这一轮直接从工具调用开始。
+	faux.setResponses([
+		fauxAssistantMessage(fauxToolCall("upsert_material", {
+			kind: "plot",
+			title: "排水口",
+			content: "街区的雨水都排向同一个老排水口。",
+			usage: "雨夜追踪戏的收束点",
+		})),
+		fauxAssistantMessage([fauxText("已补。")], { stopReason: "stop" }),
+	]);
+	await materialAgent.prompt("再加一条桥段素材。");
+	const afterSecond = [...materialAgent.state.messages];
+	check("第二轮追加了历史", afterSecond.length > materialMessages.length, materialMessages.length + " -> " + afterSecond.length);
+	check("第二轮后系统提示词仍在头部", afterSecond[0]?.role === "system");
+	check("第二轮后无残留错误", materialAgent.state.errorMessage === undefined);
+	check("第二轮素材也落盘", store.get(project.id)!.materials.length === 2);
 } finally {
 	await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 }

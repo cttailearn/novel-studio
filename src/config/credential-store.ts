@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AuthOperationOptions, Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
@@ -113,8 +114,19 @@ export class FileCredentialStore implements CredentialStore {
 
 	private async flush(): Promise<void> {
 		const payload = JSON.stringify(Object.fromEntries(this.credentials), null, 2);
-		const tmp = `${this.file}.tmp`;
+		// 临时文件名必须唯一：串行化是按 provider 粒度的，不同 provider 的并发写
+		// 会落到同一个固定 tmp 上互相覆盖；多个 store 实例指向同一文件时同理。
+		// rename 在 Windows 上覆盖已存在文件会偶发 EPERM，因此重试几次。
+		const tmp = this.file + "." + randomUUID() + ".tmp";
 		await writeFile(tmp, payload, "utf8");
-		await rename(tmp, this.file);
+		for (let attempt = 0; ; attempt++) {
+			try {
+				await rename(tmp, this.file);
+				return;
+			} catch (error) {
+				if (attempt >= 4) throw error;
+				await new Promise((resolve) => setTimeout(resolve, 20 * (attempt + 1)));
+			}
+		}
 	}
 }

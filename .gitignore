@@ -53,3 +53,7 @@ Thumbs.db
 Desktop.ini
 .idea/
 *.swp
+
+# ---- 工具产物 ----
+# PI-Desktop 的方案快照，不进版本库
+.pi/
