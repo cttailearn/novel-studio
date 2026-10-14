@@ -411,6 +411,18 @@ function renderCustomModels(box, provider) {
 		box.append(el("div", "empty-hint", "还没有模型。填好 Base URL 与 Key 后点「拉取模型」，或直接在下方手动添加。"));
 	}
 
+	const defaults = view.data.defaults ?? { contextWindow: 1_048_576, maxTokens: 131_072 };
+	if (provider.models.some((m) => m.contextWindow === defaults.contextWindow || m.maxTokens === defaults.maxTokens)) {
+		box.append(
+			el(
+				"div",
+				"notice",
+				`带 ${formatTokens(defaults.contextWindow)} / ${formatTokens(defaults.maxTokens)} 的是默认占位值，不是探测结果。` +
+					"上游接口报了限制就用上游的；报不出来（OpenAI 兼容的 /models 只回 id）的模型需要你按实际规格核对，否则超长的输入会被上游直接拒绝。",
+			),
+		);
+	}
+
 	const table = el("table", "model-table");
 	table.append(headerRow(["模型", "输入上下文", "输出上限", "思考", "档位", ""]));
 
@@ -427,11 +439,13 @@ function renderCustomModels(box, provider) {
 
 		const ctxCell = el("td");
 		const ctx = numberInput(model.contextWindow, (value) => void saveModel(provider.id, { ...model, contextWindow: value }));
+		if (model.contextWindow === defaults.contextWindow) ctx.classList.add("is-placeholder");
 		ctxCell.append(ctx);
 		tr.append(ctxCell);
 
 		const maxCell = el("td");
 		const max = numberInput(model.maxTokens, (value) => void saveModel(provider.id, { ...model, maxTokens: value }));
+		if (model.maxTokens === defaults.maxTokens) max.classList.add("is-placeholder");
 		maxCell.append(max);
 		tr.append(maxCell);
 
@@ -489,11 +503,13 @@ function renderCustomModels(box, provider) {
 	add.addEventListener("click", () => {
 		const name = prompt("模型 id（发送给服务端的 model 字段）");
 		if (!name?.trim()) return;
+		// 默认值由服务端下发，不在前端硬编码
+		const defaults = view.data.defaults ?? { contextWindow: 1_048_576, maxTokens: 131_072 };
 		void saveModel(provider.id, {
 			id: name.trim(),
 			name: name.trim(),
-			contextWindow: 128000,
-			maxTokens: 8192,
+			contextWindow: defaults.contextWindow,
+			maxTokens: defaults.maxTokens,
 			reasoning: false,
 			thinkingLevels: ["off"],
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

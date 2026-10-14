@@ -80,12 +80,22 @@ export interface Settings {
 
 export const DEFAULT_COST: CostRates = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
+/**
+ * 新模型的起始值。
+ *
+ * 这只是"还没从上游取到真实限制"时的占位，不是测出来的数字。
+ * 上游报了 inputTokenLimit / outputTokenLimit 就用上游的；
+ * 报不出来的（如 OpenAI 兼容的 /models 只回 id）就落在这里，需要人工核对。
+ */
+export const DEFAULT_CONTEXT_WINDOW = 1_048_576; // 1M
+export const DEFAULT_MAX_TOKENS = 131_072; // 128K
+
 export function emptyModel(id: string, name = id): ModelConfig {
 	return {
 		id,
 		name,
-		contextWindow: 128000,
-		maxTokens: 8192,
+		contextWindow: DEFAULT_CONTEXT_WINDOW,
+		maxTokens: DEFAULT_MAX_TOKENS,
 		reasoning: false,
 		thinkingLevels: ["off"],
 		cost: { ...DEFAULT_COST },
@@ -140,8 +150,8 @@ function normalizeModel(raw: ModelConfig): ModelConfig {
 	return {
 		id,
 		name: String(raw?.name ?? id).trim() || id,
-		contextWindow: positiveInt(raw?.contextWindow, 128000),
-		maxTokens: positiveInt(raw?.maxTokens, 8192),
+		contextWindow: positiveInt(raw?.contextWindow, DEFAULT_CONTEXT_WINDOW),
+		maxTokens: positiveInt(raw?.maxTokens, DEFAULT_MAX_TOKENS),
 		reasoning: raw?.reasoning === true,
 		thinkingLevels: Array.isArray(raw?.thinkingLevels)
 			? THINKING_LEVELS.filter((level) => raw.thinkingLevels.includes(level))

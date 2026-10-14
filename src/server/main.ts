@@ -24,6 +24,8 @@ import { FileCredentialStore } from "../config/credential-store.ts";
 import { SettingsStore } from "../config/settings-store.ts";
 import {
 	API_FORMATS,
+	DEFAULT_CONTEXT_WINDOW,
+	DEFAULT_MAX_TOKENS,
 	emptyModel,
 	normalizeSettings,
 	THINKING_LEVELS,
@@ -222,6 +224,7 @@ async function settingsView() {
 		defaultThinkingLevel: settings.defaultThinkingLevel,
 		providers: settings.providers,
 		statuses: await listProviderStatus(),
+		defaults: { contextWindow: DEFAULT_CONTEXT_WINDOW, maxTokens: DEFAULT_MAX_TOKENS },
 		builtinCatalog: BUILTIN_PROVIDERS.map((spec) => ({
 			id: spec.id,
 			label: spec.label,

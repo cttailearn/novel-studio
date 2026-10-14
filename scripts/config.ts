@@ -12,7 +12,7 @@ import { buildCustomProvider, buildThinkingLevelMap, toModel } from "../src/ai/c
 import { mergeFetched } from "../src/ai/fetch-models.ts";
 import { FileCredentialStore } from "../src/config/credential-store.ts";
 import { SettingsStore } from "../src/config/settings-store.ts";
-import { emptyModel, emptySettings, normalizeSettings, type ModelConfig, type ProviderConfig } from "../src/config/settings.ts";
+import { DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_TOKENS, emptyModel, emptySettings, normalizeSettings, type ModelConfig, type ProviderConfig } from "../src/config/settings.ts";
 import { BUILTIN_PROVIDERS, builtinGroup, syncBuiltinProviders } from "../src/ai/models.ts";
 
 let failures = 0;
@@ -47,13 +47,25 @@ try {
 	check("label 去空格", messy.providers[0]?.label === "A");
 	check("非法思考档位回落 off", messy.defaultThinkingLevel === "off");
 	const b = messy.providers.find((p) => p.id === "b")!;
-	check("非法 contextWindow 回落默认值", b.models[0]?.contextWindow === 128000, String(b.models[0]?.contextWindow));
-	check("非法 maxTokens 回落默认值", b.models[0]?.maxTokens === 8192);
+	check("非法 contextWindow 回落默认值", b.models[0]?.contextWindow === DEFAULT_CONTEXT_WINDOW, String(b.models[0]?.contextWindow));
+	check("非法 maxTokens 回落默认值", b.models[0]?.maxTokens === DEFAULT_MAX_TOKENS, String(b.models[0]?.maxTokens));
 	check("非法接口格式被丢弃", messy.providers[3]?.api === undefined);
 	check("缺省 enabled 为 true", messy.providers.every((p) => p.enabled));
 
 	const bad = normalizeSettings({ providers: "not-an-array", defaultThinkingLevel: 42 });
 	check("垃圾输入不抛异常", Array.isArray(bad.providers) && bad.providers.length === 0);
+
+	// ---------------------------------------------------------------- 默认上下文
+	console.log("\n默认输入输出上限");
+	check("默认输入 1M", DEFAULT_CONTEXT_WINDOW === 1_048_576, String(DEFAULT_CONTEXT_WINDOW));
+	check("默认输出 128K", DEFAULT_MAX_TOKENS === 131_072, String(DEFAULT_MAX_TOKENS));
+	const blank = emptyModel("m");
+	check("emptyModel 用 1M", blank.contextWindow === 1_048_576, String(blank.contextWindow));
+	check("emptyModel 用 128K", blank.maxTokens === 131_072, String(blank.maxTokens));
+	// 上游给了真实限制就必须用上游的，不能被默认值盖掉
+	const withUpstream = normalizeSettings({ providers: [{ id: "p", label: "p", kind: "custom", baseUrl: "https://x.test/v1", api: "openai-completions", models: [{ id: "g", contextWindow: 32768, maxTokens: 4096 }] }] });
+	check("上游报的限制优先于默认值", withUpstream.providers[0]?.models[0]?.contextWindow === 32768);
+	check("上游报的输出上限优先", withUpstream.providers[0]?.models[0]?.maxTokens === 4096);
 
 	// ---------------------------------------------------------------- 凭据存储
 	console.log("\n凭据存储");

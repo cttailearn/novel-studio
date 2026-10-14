@@ -860,3 +860,16 @@ select { max-width: 230px; cursor: pointer; }
 .checkline { display: flex !important; align-items: center; gap: 8px; font-size: 12.5px; color: var(--ink-2); }
 .checkline input { width: auto; margin: 0; accent-color: var(--cinnabar); }
 
+
+/* 仍是默认占位值的输入框：加一道虚线，提示需要人工核对 */
+.model-table input.is-placeholder {
+	border-style: dashed;
+	color: var(--ink-3);
+	background: transparent;
+}
+.model-table input.is-placeholder:focus {
+	border-style: solid;
+	color: var(--ink);
+	background: var(--paper-hi);
+}
+
