@@ -105,6 +105,24 @@
 			</form>
 		</dialog>
 
+		<dialog id="provider-dialog" class="sheet">
+			<form id="provider-form">
+				<h3>添加自定义供应商</h3>
+				<label>名称<input id="provider-form-label" name="label" required placeholder="例如：我的中转服务" /></label>
+				<label>Base URL<input name="baseUrl" required placeholder="https://api.example.com/v1" /></label>
+				<label>接口格式<select id="provider-form-api" name="api"></select></label>
+				<p id="provider-form-hint" class="form-hint"></p>
+				<label>API Key<input name="apiKey" type="password" placeholder="留空则稍后在详情里补" /></label>
+				<label class="checkline"><input name="noAuth" type="checkbox" />该服务不需要鉴权（本地 / 自建）</label>
+				<p class="form-hint">Key 只存本机 data/credentials.json，优先于环境变量。</p>
+				<p id="provider-form-error" class="form-error"></p>
+				<div class="dialog-actions">
+					<button type="button" id="provider-form-cancel" class="btn btn-quiet">作罢</button>
+					<button type="submit" class="btn btn-ink">录入</button>
+				</div>
+			</form>
+		</dialog>
+
 		<dialog id="settings-dialog" class="sheet sheet-wide settings-dialog">
 			<div class="settings-head">
 				<div>

@@ -42,11 +42,28 @@ pnpm dev                  # 默认 http://127.0.0.1:8787
 
 ### 默认供应商
 
-内置 14 个，首次启动自动预置。模型目录由 pi-ai 内置维护，不需要拉取：
+内置 **41 个**，首次启动自动预置，按用途分三组显示。模型目录由 pi-ai 内置维护（共约 1500 个模型条目），不需要拉取。
 
-DeepSeek、Moonshot 国内、Z.ai (GLM)、OpenRouter、Anthropic、OpenAI、Google Gemini、Kimi Coding、OpenCode Zen、Vercel AI Gateway、Groq、Mistral、xAI、Fireworks。
+| 分组 | 厂商 |
+| --- | --- |
+| 国内厂商（16） | DeepSeek、Moonshot 国内 / 国际、Kimi Coding、Z.ai / Z.ai Coding 国内、MiniMax 国内 / 国际、Qwen Token Plan 及其国内与个人版、小米 MiMo 及三档 Token Plan、蚂蚁灵光、Meta |
+| 国际通用（18） | Anthropic、OpenAI、Google Gemini、Mistral、xAI、Groq、Cerebras、Together AI、Fireworks、NVIDIA NIM、Baseten、Hugging Face、OpenRouter、Vercel AI Gateway、TypeSafe、Radius、GitHub Copilot |
+| 云平台与推理（7） | Azure OpenAI、Amazon Bedrock、Google Vertex AI、Cloudflare AI Gateway、Cloudflare Workers AI、OpenCode Zen、OpenCode Go |
 
-设置页为每个厂商保存 API Key，**保存的 key 优先于环境变量**。若只想用环境变量，不保存即可，界面会标注来源。
+`openai-codex` 只有 OAuth 流程（无 API Key 模式），因此未纳入 —— 它需要 `Models.login()` 走设备码授权，不是填 key 能配的。`faux` 是 pi-ai 的测试用 provider，同样排除。
+
+设置页为每个厂商保存 API Key，**保存的 key 优先于环境变量**。若只想用环境变量，不保存即可，界面会标注来源。厂商较多，左列带搜索框，按名称、id 或环境变量名过滤。
+
+部分厂商除 Key 外还需要别的凭据，界面会一并提示：
+
+| 厂商 | 需要的凭据 |
+| --- | --- |
+| Azure OpenAI | `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_ENDPOINT` |
+| Amazon Bedrock | `AWS_BEARER_TOKEN_BEDROCK` / `AWS_ACCESS_KEY_ID` / `AWS_PROFILE` |
+| Google Vertex AI | `GOOGLE_CLOUD_API_KEY` 或 `GOOGLE_APPLICATION_CREDENTIALS` |
+| Cloudflare | `CLOUDFLARE_API_KEY` + 账户 id |
+| GitHub Copilot | `COPILOT_GITHUB_TOKEN` |
+| Hugging Face | `HF_TOKEN`（注意不是 `HUGGINGFACE_API_KEY`） |
 
 ### 自定义供应商
 

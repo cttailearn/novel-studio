@@ -12,6 +12,13 @@ const API_FORMATS = [
 	{ value: "google-generative-ai", label: "Google Generative AI", hint: "Google 原生 /v1beta/models，模型名会自动去掉 models/ 前缀" },
 ];
 
+const API_FORMAT_HINTS = {
+	"openai-completions": "支持 /v1/chat/completions 的服务，如 vLLM、Ollama 兼容层、大部分中国厂商",
+	"openai-responses": "支持 /v1/responses 的服务",
+	"anthropic-messages": "Anthropic 原生 /v1/messages 协议",
+	"google-generative-ai": "Google 原生 /v1beta/models，模型名会自动去掉 models/ 前缀",
+};
+
 const THINKING_LEVELS = [
 	["off", "关"],
 	["minimal", "最低"],
@@ -26,6 +33,7 @@ const view = {
 	data: null,
 	models: [],
 	selected: null,
+	query: "",
 };
 
 function el(tag, className, text) {
@@ -117,32 +125,62 @@ async function saveDefaults() {
 	notifyChanged();
 }
 
+/** 搜索命中：名称、id、环境变量名任一包含即可。 */
+function matches(provider, query) {
+	if (!query) return true;
+	const status = statusOf(provider.id);
+	const haystack = [provider.label, provider.id, ...(status?.envVars ?? [])].join(" ").toLowerCase();
+	return haystack.includes(query);
+}
+
 function renderProviderList() {
 	const list = $("settings-providers");
 	list.replaceChildren();
 
+	// 搜索框：内置供应商有 40 个，没有它没法找
+	const searchWrap = el("li", "search-wrap");
+	const search = document.createElement("input");
+	search.type = "search";
+	search.className = "provider-search";
+	search.placeholder = "搜索供应商…";
+	search.value = view.query;
+	search.addEventListener("input", () => {
+		view.query = search.value.trim().toLowerCase();
+		renderProviderList();
+	});
+	searchWrap.append(search);
+	list.append(searchWrap);
+
 	const builtin = view.data.providers.filter((p) => p.kind === "builtin");
 	const custom = view.data.providers.filter((p) => p.kind === "custom");
 
-	const addRow = () => {
-		const row = el("li", "provider-row");
-		row.append(el("span", "dot on"));
-		const name = el("span", "name", "+ 添加自定义供应商");
-		row.append(name);
-		row.addEventListener("click", () => openAddProvider());
-		list.append(row);
-	};
-
-	if (builtin.length > 0) {
-		list.append(el("li", "group-label", "默认供应商"));
-		for (const provider of builtin) list.append(providerRow(provider));
-	}
 	if (custom.length > 0) {
 		list.append(el("li", "group-label", "自定义供应商"));
 		for (const provider of custom) list.append(providerRow(provider));
 	}
-	list.append(el("li", "group-label", ""));
-	addRow();
+
+	// 内置供应商按分组展开，命中搜索时只显示命中的
+	const order = ["国际通用", "国内厂商", "云平台与推理"];
+	for (const group of order) {
+		const items = builtin.filter((p) => statusOf(p.id)?.group === group && matches(p, view.query));
+		if (items.length === 0) continue;
+		list.append(el("li", "group-label", group + "（" + items.length + "）"));
+		for (const provider of items) list.append(providerRow(provider));
+	}
+
+	const hidden = builtin.length - builtin.filter((p) => matches(p, view.query)).length;
+	if (builtin.length === 0) {
+		list.append(el("li", "group-label", "默认供应商"));
+	}
+	if (hidden > 0) {
+		list.append(el("li", "group-label", view.query ? "无更多匹配项" : ""));
+	}
+
+	const addRow = el("li", "provider-row add-row");
+	addRow.append(el("span", "dot on"));
+	addRow.append(el("span", "name", "＋ 添加自定义供应商"));
+	addRow.addEventListener("click", () => openAddProvider());
+	list.append(addRow);
 }
 
 function providerRow(provider) {
@@ -552,24 +590,78 @@ async function testConnection(providerId, box) {
 	}
 }
 
+/** 新增自定义供应商：正式表单，而不是两次 prompt。 */
 function openAddProvider() {
-	const label = prompt("供应商名称，例如：我的中转服务");
-	if (!label?.trim()) return;
-	const baseUrl = prompt("Base URL，例如 https://api.example.com/v1");
-	if (!baseUrl?.trim()) return;
-	api("/api/providers", { method: "POST", body: { label: label.trim(), baseUrl: baseUrl.trim(), api: "openai-completions" } })
-		.then(async (result) => {
+	const dialog = $("provider-dialog");
+	$("provider-form").reset();
+	$("provider-form-error").textContent = "";
+	const apiSelect = $("provider-form-api");
+	apiSelect.value = "openai-completions";
+	$("provider-form-hint").textContent = API_FORMAT_HINTS[apiSelect.value] ?? "";
+	dialog.showModal();
+	$("provider-form-label").focus();
+}
+
+export function bindProviderForm() {
+	const dialog = $("provider-dialog");
+	const form = $("provider-form");
+	const error = $("provider-form-error");
+	const apiSelect = $("provider-form-api");
+
+	apiSelect.addEventListener("change", () => {
+		$("provider-form-hint").textContent = API_FORMAT_HINTS[apiSelect.value] ?? "";
+	});
+
+	form.addEventListener("submit", async (event) => {
+		event.preventDefault();
+		error.textContent = "";
+		const data = new FormData(form);
+		const label = String(data.get("label") ?? "").trim();
+		const baseUrl = String(data.get("baseUrl") ?? "").trim();
+		const apiKey = String(data.get("apiKey") ?? "").trim();
+		const noAuth = data.get("noAuth") === "on";
+
+		if (!label) return void (error.textContent = "请填写供应商名称");
+		if (!baseUrl) return void (error.textContent = "请填写 Base URL");
+		try {
+			new URL(baseUrl);
+		} catch {
+			return void (error.textContent = "Base URL 不是合法地址");
+		}
+		if (!apiKey && !noAuth) return void (error.textContent = "请填写 API Key，或勾选「不需要鉴权」");
+
+		const submit = form.querySelector("button[type=submit]");
+		submit.disabled = true;
+		try {
+			const result = await api("/api/providers", {
+				method: "POST",
+				body: { label, baseUrl, api: apiSelect.value, apiKey: apiKey || undefined, noAuthRequired: noAuth },
+			});
 			view.selected = result.provider.id;
+			view.query = "";
+			dialog.close();
 			await refresh();
 			notifyChanged();
-		})
-		.catch((error) => alert(`创建失败：${error.message}`));
+		} catch (err) {
+			error.textContent = err.message;
+		} finally {
+			submit.disabled = false;
+		}
+	});
 }
 
 // ---------------------------------------------------------------- 绑定
 
 export function bindSettings() {
 	$("open-settings").addEventListener("click", () => void openSettings());
+	$("provider-form-cancel").addEventListener("click", () => $("provider-dialog").close());
+	bindProviderForm();
+	// 接口格式下拉在模块加载时填充一次
+	for (const format of API_FORMATS) {
+		const option = el("option", "", format.label);
+		option.value = format.value;
+		$("provider-form-api").append(option);
+	}
 	$("settings-close").addEventListener("click", () => $("settings-dialog").close());
 	$("settings-default-model").addEventListener("change", () => void saveDefaults());
 	$("settings-default-thinking").addEventListener("change", () => void saveDefaults());

@@ -8,7 +8,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import { createNovelAgent } from "../ai/novel-agent.ts";
 import {
 	BUILTIN_PROVIDERS,
-	ensureDefaultSettings,
+	syncBuiltinProviders,
 	getCredentialStore,
 	getModels,
 	getSettingsStore,
@@ -559,7 +559,7 @@ async function serveStatic(res: ServerResponse, urlPath: string): Promise<void> 
 const store = await ProjectStore.open(config.dataDir);
 const settingsStore = await SettingsStore.open(config.dataDir);
 const credentialStore = await FileCredentialStore.open(config.dataDir);
-settingsStore.replace(ensureDefaultSettings(settingsStore.get(), config.defaultModel));
+settingsStore.replace(syncBuiltinProviders(settingsStore.get(), config.defaultModel));
 initModelRuntime(settingsStore, credentialStore);
 
 const server = createServer((req, res) => {

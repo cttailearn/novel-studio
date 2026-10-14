@@ -133,8 +133,8 @@ try {
 	initModelRuntime(settingsStore, credentialStore);
 	const models = getModels();
 	check("注册 provider 数量 > 0", models.getProviders().length > 0, String(models.getProviders().length));
-	check("BUILTIN_PROVIDERS 已声明", BUILTIN_PROVIDERS.length === 14, String(BUILTIN_PROVIDERS.length));
-	check("首次启动预置了内置供应商", settingsStore.get().providers.length === 14, String(settingsStore.get().providers.length));
+	check("BUILTIN_PROVIDERS 已声明", BUILTIN_PROVIDERS.length === 41, String(BUILTIN_PROVIDERS.length));
+	check("首次启动预置了内置供应商", settingsStore.get().providers.length === 41, String(settingsStore.get().providers.length));
 	check("全部预置为 builtin", settingsStore.get().providers.every((p) => p.kind === "builtin"));
 	const totalModels = models.getModels();
 	check("能列出模型目录", totalModels.length > 0, String(totalModels.length));

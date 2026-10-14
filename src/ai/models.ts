@@ -1,18 +1,45 @@
 import { createModels, type Api, type Model, type MutableModels, type Provider } from "@earendil-works/pi-ai";
+import { amazonBedrockProvider } from "@earendil-works/pi-ai/providers/amazon-bedrock";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
+import { antLingProvider } from "@earendil-works/pi-ai/providers/ant-ling";
+import { azureProvider } from "@earendil-works/pi-ai/providers/azure";
+import { basetenProvider } from "@earendil-works/pi-ai/providers/baseten";
+import { cerebrasProvider } from "@earendil-works/pi-ai/providers/cerebras";
+import { cloudflareAIGatewayProvider } from "@earendil-works/pi-ai/providers/cloudflare-ai-gateway";
+import { cloudflareWorkersAIProvider } from "@earendil-works/pi-ai/providers/cloudflare-workers-ai";
 import { deepseekProvider } from "@earendil-works/pi-ai/providers/deepseek";
 import { fireworksProvider } from "@earendil-works/pi-ai/providers/fireworks";
+import { githubCopilotProvider } from "@earendil-works/pi-ai/providers/github-copilot";
 import { googleProvider } from "@earendil-works/pi-ai/providers/google";
+import { googleVertexProvider } from "@earendil-works/pi-ai/providers/google-vertex";
 import { groqProvider } from "@earendil-works/pi-ai/providers/groq";
+import { huggingfaceProvider } from "@earendil-works/pi-ai/providers/huggingface";
 import { kimiCodingProvider } from "@earendil-works/pi-ai/providers/kimi-coding";
+import { metaProvider } from "@earendil-works/pi-ai/providers/meta";
+import { minimaxProvider } from "@earendil-works/pi-ai/providers/minimax";
+import { minimaxCnProvider } from "@earendil-works/pi-ai/providers/minimax-cn";
 import { mistralProvider } from "@earendil-works/pi-ai/providers/mistral";
+import { moonshotaiProvider } from "@earendil-works/pi-ai/providers/moonshotai";
 import { moonshotaiCnProvider } from "@earendil-works/pi-ai/providers/moonshotai-cn";
+import { nvidiaProvider } from "@earendil-works/pi-ai/providers/nvidia";
 import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
 import { opencodeProvider } from "@earendil-works/pi-ai/providers/opencode";
+import { opencodeGoProvider } from "@earendil-works/pi-ai/providers/opencode-go";
 import { openrouterProvider } from "@earendil-works/pi-ai/providers/openrouter";
+import { qwenTokenPlanProvider } from "@earendil-works/pi-ai/providers/qwen-token-plan";
+import { qwenTokenPlanCnProvider } from "@earendil-works/pi-ai/providers/qwen-token-plan-cn";
+import { qwenTokenPlanIndividualProvider } from "@earendil-works/pi-ai/providers/qwen-token-plan-individual";
+import { radiusProvider } from "@earendil-works/pi-ai/providers/radius";
+import { togetherProvider } from "@earendil-works/pi-ai/providers/together";
+import { typesafeProvider } from "@earendil-works/pi-ai/providers/typesafe";
 import { vercelAIGatewayProvider } from "@earendil-works/pi-ai/providers/vercel-ai-gateway";
 import { xaiProvider } from "@earendil-works/pi-ai/providers/xai";
+import { xiaomiProvider } from "@earendil-works/pi-ai/providers/xiaomi";
+import { xiaomiTokenPlanAmsProvider } from "@earendil-works/pi-ai/providers/xiaomi-token-plan-ams";
+import { xiaomiTokenPlanCnProvider } from "@earendil-works/pi-ai/providers/xiaomi-token-plan-cn";
+import { xiaomiTokenPlanSgpProvider } from "@earendil-works/pi-ai/providers/xiaomi-token-plan-sgp";
 import { zaiProvider } from "@earendil-works/pi-ai/providers/zai";
+import { zaiCodingCnProvider } from "@earendil-works/pi-ai/providers/zai-coding-cn";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
 import type { FileCredentialStore } from "../config/credential-store.ts";
 import type { SettingsStore } from "../config/settings-store.ts";
@@ -25,25 +52,93 @@ export interface BuiltinProviderSpec {
 	/** pi-ai 内置 provider id，也是我们的 provider id。 */
 	builtinId: string;
 	envVars: readonly string[];
+	/** 设置页展示分组。 */
+	group: BuiltinGroup;
 	create: () => Provider;
 }
 
-/** 可作为“默认供应商”的内置 provider。在设置页中可动态启停。 */
+/**
+ * 设置页的展示分组。
+ *
+ * 单独定义而非内联在数组里，是为了让新增 provider 时"忘记归类"变成一个会被
+ * 测试抓到的问题（见 scripts/config.ts 的分组完整性断言）。
+ */
+const GROUP_DOMESTIC = new Set([
+	"deepseek", "moonshotai-cn", "moonshotai", "kimi-coding", "zai", "zai-coding-cn",
+	"minimax-cn", "minimax", "qwen-token-plan-cn", "qwen-token-plan", "qwen-token-plan-individual",
+	"xiaomi-token-plan-cn", "xiaomi", "xiaomi-token-plan-sgp", "xiaomi-token-plan-ams", "ant-ling",
+]);
+
+const GROUP_CLOUD = new Set([
+	"azure", "amazon-bedrock", "google-vertex", "cloudflare-ai-gateway", "cloudflare-workers-ai",
+	"opencode", "opencode-go",
+]);
+
+export type BuiltinGroup = "国际通用" | "国内厂商" | "云平台与推理";
+
+/** 未落入上面两组的归为国际通用。 */
+export function builtinGroup(id: string): BuiltinGroup {
+	if (GROUP_DOMESTIC.has(id)) return "国内厂商";
+	if (GROUP_CLOUD.has(id)) return "云平台与推理";
+	return "国际通用";
+}
+
+/**
+ * 可作为"默认供应商"的全部内置 provider。
+ *
+ * 覆盖 pi-ai 除 faux（测试用）与 openai-codex（仅 OAuth）之外的所有厂商，
+ * 共 41 个。新增 pi-ai 版本带来的厂商时，在这里补一行即可。
+ *
+ * envVars 只用于界面提示与"是否已配置"判定，实际鉴权仍由 pi-ai 的
+ * CredentialStore + 环境变量回落机制完成。
+ */
 export const BUILTIN_PROVIDERS: readonly BuiltinProviderSpec[] = [
-	{ id: "deepseek", label: "DeepSeek", builtinId: "deepseek", envVars: ["DEEPSEEK_API_KEY"], create: deepseekProvider },
-	{ id: "moonshotai-cn", label: "Moonshot 国内", builtinId: "moonshotai-cn", envVars: ["MOONSHOT_API_KEY"], create: moonshotaiCnProvider },
-	{ id: "zai", label: "Z.ai (GLM)", builtinId: "zai", envVars: ["ZAI_API_KEY"], create: zaiProvider },
-	{ id: "openrouter", label: "OpenRouter", builtinId: "openrouter", envVars: ["OPENROUTER_API_KEY"], create: openrouterProvider },
-	{ id: "anthropic", label: "Anthropic", builtinId: "anthropic", envVars: ["ANTHROPIC_API_KEY"], create: anthropicProvider },
-	{ id: "openai", label: "OpenAI", builtinId: "openai", envVars: ["OPENAI_API_KEY"], create: openaiProvider },
-	{ id: "google", label: "Google Gemini", builtinId: "google", envVars: ["GEMINI_API_KEY"], create: googleProvider },
-	{ id: "kimi-coding", label: "Kimi Coding", builtinId: "kimi-coding", envVars: ["KIMI_API_KEY"], create: kimiCodingProvider },
-	{ id: "opencode", label: "OpenCode Zen", builtinId: "opencode", envVars: ["OPENCODE_API_KEY"], create: opencodeProvider },
-	{ id: "vercel-ai-gateway", label: "Vercel AI Gateway", builtinId: "vercel-ai-gateway", envVars: ["AI_GATEWAY_API_KEY"], create: vercelAIGatewayProvider },
-	{ id: "groq", label: "Groq", builtinId: "groq", envVars: ["GROQ_API_KEY"], create: groqProvider },
-	{ id: "mistral", label: "Mistral", builtinId: "mistral", envVars: ["MISTRAL_API_KEY"], create: mistralProvider },
-	{ id: "xai", label: "xAI", builtinId: "xai", envVars: ["XAI_API_KEY"], create: xaiProvider },
-	{ id: "fireworks", label: "Fireworks", builtinId: "fireworks", envVars: ["FIREWORKS_API_KEY"], create: fireworksProvider },
+	// ---- 国际通用 ----
+	{ id: "anthropic", label: "Anthropic", builtinId: "anthropic", envVars: ["ANTHROPIC_API_KEY"], group: builtinGroup("anthropic"), create: anthropicProvider },
+	{ id: "openai", label: "OpenAI", builtinId: "openai", envVars: ["OPENAI_API_KEY"], group: builtinGroup("openai"), create: openaiProvider },
+	{ id: "google", label: "Google Gemini", builtinId: "google", envVars: ["GEMINI_API_KEY"], group: builtinGroup("google"), create: googleProvider },
+	{ id: "mistral", label: "Mistral", builtinId: "mistral", envVars: ["MISTRAL_API_KEY"], group: builtinGroup("mistral"), create: mistralProvider },
+	{ id: "xai", label: "xAI", builtinId: "xai", envVars: ["XAI_API_KEY"], group: builtinGroup("xai"), create: xaiProvider },
+	{ id: "groq", label: "Groq", builtinId: "groq", envVars: ["GROQ_API_KEY"], group: builtinGroup("groq"), create: groqProvider },
+	{ id: "cerebras", label: "Cerebras", builtinId: "cerebras", envVars: ["CEREBRAS_API_KEY"], group: builtinGroup("cerebras"), create: cerebrasProvider },
+	{ id: "together", label: "Together AI", builtinId: "together", envVars: ["TOGETHER_API_KEY"], group: builtinGroup("together"), create: togetherProvider },
+	{ id: "fireworks", label: "Fireworks", builtinId: "fireworks", envVars: ["FIREWORKS_API_KEY"], group: builtinGroup("fireworks"), create: fireworksProvider },
+	{ id: "nvidia", label: "NVIDIA NIM", builtinId: "nvidia", envVars: ["NVIDIA_API_KEY"], group: builtinGroup("nvidia"), create: nvidiaProvider },
+	{ id: "baseten", label: "Baseten", builtinId: "baseten", envVars: ["BASETEN_API_KEY"], group: builtinGroup("baseten"), create: basetenProvider },
+	{ id: "huggingface", label: "Hugging Face", builtinId: "huggingface", envVars: ["HF_TOKEN"], group: builtinGroup("huggingface"), create: huggingfaceProvider },
+	{ id: "openrouter", label: "OpenRouter", builtinId: "openrouter", envVars: ["OPENROUTER_API_KEY"], group: builtinGroup("openrouter"), create: openrouterProvider },
+	{ id: "vercel-ai-gateway", label: "Vercel AI Gateway", builtinId: "vercel-ai-gateway", envVars: ["AI_GATEWAY_API_KEY"], group: builtinGroup("vercel-ai-gateway"), create: vercelAIGatewayProvider },
+	{ id: "typesafe", label: "TypeSafe", builtinId: "typesafe", envVars: ["TYPESAFE_API_KEY"], group: builtinGroup("typesafe"), create: typesafeProvider },
+	{ id: "radius", label: "Radius", builtinId: "radius", envVars: ["RADIUS_API_KEY"], group: builtinGroup("radius"), create: radiusProvider },
+	{ id: "github-copilot", label: "GitHub Copilot", builtinId: "github-copilot", envVars: ["COPILOT_GITHUB_TOKEN"], group: builtinGroup("github-copilot"), create: githubCopilotProvider },
+
+	// ---- 国内厂商 ----
+	{ id: "deepseek", label: "DeepSeek", builtinId: "deepseek", envVars: ["DEEPSEEK_API_KEY"], group: builtinGroup("deepseek"), create: deepseekProvider },
+	{ id: "moonshotai-cn", label: "Moonshot 国内（Kimi）", builtinId: "moonshotai-cn", envVars: ["MOONSHOT_API_KEY"], group: builtinGroup("moonshotai-cn"), create: moonshotaiCnProvider },
+	{ id: "moonshotai", label: "Moonshot 国际", builtinId: "moonshotai", envVars: ["MOONSHOT_API_KEY"], group: builtinGroup("moonshotai"), create: moonshotaiProvider },
+	{ id: "kimi-coding", label: "Kimi Coding", builtinId: "kimi-coding", envVars: ["KIMI_API_KEY"], group: builtinGroup("kimi-coding"), create: kimiCodingProvider },
+	{ id: "zai", label: "Z.ai（GLM）", builtinId: "zai", envVars: ["ZAI_API_KEY"], group: builtinGroup("zai"), create: zaiProvider },
+	{ id: "zai-coding-cn", label: "Z.ai Coding 国内", builtinId: "zai-coding-cn", envVars: ["ZAI_CODING_CN_API_KEY"], group: builtinGroup("zai-coding-cn"), create: zaiCodingCnProvider },
+	{ id: "minimax-cn", label: "MiniMax 国内", builtinId: "minimax-cn", envVars: ["MINIMAX_CN_API_KEY"], group: builtinGroup("minimax-cn"), create: minimaxCnProvider },
+	{ id: "minimax", label: "MiniMax 国际", builtinId: "minimax", envVars: ["MINIMAX_API_KEY"], group: builtinGroup("minimax"), create: minimaxProvider },
+	{ id: "qwen-token-plan-cn", label: "Qwen Token Plan 国内", builtinId: "qwen-token-plan-cn", envVars: ["QWEN_TOKEN_PLAN_CN_API_KEY"], group: builtinGroup("qwen-token-plan-cn"), create: qwenTokenPlanCnProvider },
+	{ id: "qwen-token-plan", label: "Qwen Token Plan", builtinId: "qwen-token-plan", envVars: ["QWEN_TOKEN_PLAN_API_KEY"], group: builtinGroup("qwen-token-plan"), create: qwenTokenPlanProvider },
+	{ id: "qwen-token-plan-individual", label: "Qwen Token Plan 个人版", builtinId: "qwen-token-plan-individual", envVars: ["QWEN_TOKEN_PLAN_API_KEY"], group: builtinGroup("qwen-token-plan-individual"), create: qwenTokenPlanIndividualProvider },
+	{ id: "xiaomi-token-plan-cn", label: "小米 Token Plan 国内", builtinId: "xiaomi-token-plan-cn", envVars: ["XIAOMI_TOKEN_PLAN_CN_API_KEY"], group: builtinGroup("xiaomi-token-plan-cn"), create: xiaomiTokenPlanCnProvider },
+	{ id: "xiaomi", label: "小米 MiMo", builtinId: "xiaomi", envVars: ["XIAOMI_API_KEY"], group: builtinGroup("xiaomi"), create: xiaomiProvider },
+	{ id: "xiaomi-token-plan-sgp", label: "小米 Token Plan 新加坡", builtinId: "xiaomi-token-plan-sgp", envVars: ["XIAOMI_TOKEN_PLAN_SGP_API_KEY"], group: builtinGroup("xiaomi-token-plan-sgp"), create: xiaomiTokenPlanSgpProvider },
+	{ id: "xiaomi-token-plan-ams", label: "小米 Token Plan 国际", builtinId: "xiaomi-token-plan-ams", envVars: ["XIAOMI_TOKEN_PLAN_AMS_API_KEY"], group: builtinGroup("xiaomi-token-plan-ams"), create: xiaomiTokenPlanAmsProvider },
+	{ id: "ant-ling", label: "蚂蚁灵光", builtinId: "ant-ling", envVars: ["ANT_LING_API_KEY"], group: builtinGroup("ant-ling"), create: antLingProvider },
+	{ id: "meta", label: "Meta", builtinId: "meta", envVars: ["META_API_KEY"], group: builtinGroup("meta"), create: metaProvider },
+
+	// ---- 云平台与推理服务 ----
+	{ id: "azure", label: "Azure OpenAI", builtinId: "azure", envVars: ["AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT"], group: builtinGroup("azure"), create: azureProvider },
+	{ id: "amazon-bedrock", label: "Amazon Bedrock", builtinId: "amazon-bedrock", envVars: ["AWS_BEARER_TOKEN_BEDROCK", "AWS_ACCESS_KEY_ID", "AWS_PROFILE"], group: builtinGroup("amazon-bedrock"), create: amazonBedrockProvider },
+	{ id: "google-vertex", label: "Google Vertex AI", builtinId: "google-vertex", envVars: ["GOOGLE_CLOUD_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS"], group: builtinGroup("google-vertex"), create: googleVertexProvider },
+	{ id: "cloudflare-ai-gateway", label: "Cloudflare AI Gateway", builtinId: "cloudflare-ai-gateway", envVars: ["CLOUDFLARE_API_KEY"], group: builtinGroup("cloudflare-ai-gateway"), create: cloudflareAIGatewayProvider },
+	{ id: "cloudflare-workers-ai", label: "Cloudflare Workers AI", builtinId: "cloudflare-workers-ai", envVars: ["CLOUDFLARE_API_KEY"], group: builtinGroup("cloudflare-workers-ai"), create: cloudflareWorkersAIProvider },
+	{ id: "opencode", label: "OpenCode Zen", builtinId: "opencode", envVars: ["OPENCODE_API_KEY"], group: builtinGroup("opencode"), create: opencodeProvider },
+	{ id: "opencode-go", label: "OpenCode Go", builtinId: "opencode-go", envVars: ["OPENCODE_API_KEY"], group: builtinGroup("opencode-go"), create: opencodeGoProvider },
 ];
 
 interface ModelRuntime {
@@ -165,6 +260,8 @@ export interface ProviderStatus {
 	id: string;
 	label: string;
 	kind: "builtin" | "custom";
+	/** 内置供应商的展示分组。 */
+	group?: BuiltinGroup;
 	enabled: boolean;
 	baseUrl?: string;
 	api?: string;
@@ -194,6 +291,7 @@ export async function listProviderStatus(): Promise<ProviderStatus[]> {
 			id: config.id,
 			label: config.label,
 			kind: config.kind,
+			...(config.kind === "builtin" ? { group: builtinGroup(config.id) } : {}),
 			enabled: config.enabled,
 			...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
 			...(config.api ? { api: config.api, apiFormatKnown: true } : { apiFormatKnown: false }),
@@ -260,10 +358,14 @@ export async function resolveModel(reference: string): Promise<Model<Api>> {
 	);
 }
 
-/** 设置存储已就绪但尚未初始化运行时的首次配置。 */
+/** 首次启动：把所有内置供应商预置进设置。 */
 export function ensureDefaultSettings(settings: Settings, envDefaultModel: string): Settings {
 	if (settings.providers.length > 0) return settings;
-	const providers: ProviderConfig[] = BUILTIN_PROVIDERS.map((spec) => ({
+	return { ...settings, providers: defaultProviderConfigs(), defaultModel: settings.defaultModel || envDefaultModel };
+}
+
+function defaultProviderConfigs(): ProviderConfig[] {
+	return BUILTIN_PROVIDERS.map((spec) => ({
 		id: spec.id,
 		label: spec.label,
 		kind: "builtin" as const,
@@ -272,5 +374,26 @@ export function ensureDefaultSettings(settings: Settings, envDefaultModel: strin
 		enabled: true,
 		updatedAt: 0,
 	}));
-	return { ...settings, providers, defaultModel: settings.defaultModel || envDefaultModel };
+}
+
+/**
+ * 把新增的内置供应商补进已有配置。
+ *
+ * 升级 pi-ai 或扩充 BUILTIN_PROVIDERS 后，老的 settings.json 里只存了旧的那批，
+ * 这里做增量补齐：只追加缺失的，绝不覆盖用户已有的 label、key、模型参数与启停状态。
+ */
+export function syncBuiltinProviders(settings: Settings, envDefaultModel: string): Settings {
+	const base = ensureDefaultSettings(settings, envDefaultModel);
+	const known = new Set(base.providers.map((provider) => provider.id));
+	const missing = BUILTIN_PROVIDERS.filter((spec) => !known.has(spec.id)).map((spec) => ({
+		id: spec.id,
+		label: spec.label,
+		kind: "builtin" as const,
+		builtinId: spec.builtinId,
+		models: [],
+		enabled: true,
+		updatedAt: 0,
+	}));
+	if (missing.length === 0) return base;
+	return { ...base, providers: [...base.providers, ...missing] };
 }
