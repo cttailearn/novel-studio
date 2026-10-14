@@ -154,6 +154,13 @@ function renderProviderList() {
 	const builtin = view.data.providers.filter((p) => p.kind === "builtin");
 	const custom = view.data.providers.filter((p) => p.kind === "custom");
 
+	// 新增入口固定在最上。内置 41 个之后它会被挤到列表底部，等于没有。
+	const addRow = el("li", "provider-row add-row");
+	addRow.append(el("span", "dot on"));
+	addRow.append(el("span", "name", "＋ 添加自定义供应商"));
+	addRow.addEventListener("click", () => openAddProvider());
+	list.append(addRow);
+
 	if (custom.length > 0) {
 		list.append(el("li", "group-label", "自定义供应商"));
 		for (const provider of custom) list.append(providerRow(provider));
@@ -176,11 +183,12 @@ function renderProviderList() {
 		list.append(el("li", "group-label", view.query ? "无更多匹配项" : ""));
 	}
 
-	const addRow = el("li", "provider-row add-row");
-	addRow.append(el("span", "dot on"));
-	addRow.append(el("span", "name", "＋ 添加自定义供应商"));
-	addRow.addEventListener("click", () => openAddProvider());
-	list.append(addRow);
+	// 列表末尾再给一个入口，滚到底时仍可点
+	const addRowEnd = el("li", "provider-row add-row");
+	addRowEnd.append(el("span", "dot on"));
+	addRowEnd.append(el("span", "name", "＋ 添加自定义供应商"));
+	addRowEnd.addEventListener("click", () => openAddProvider());
+	list.append(addRowEnd);
 }
 
 function providerRow(provider) {
@@ -642,6 +650,20 @@ export function bindProviderForm() {
 			dialog.close();
 			await refresh();
 			notifyChanged();
+
+			// 建完就顺手探一次，省得再点一次「拉取模型」
+			const detail = $("settings-detail");
+			if (apiKey || noAuth) {
+				try {
+					const pulled = await api("/api/providers/" + result.provider.id + "/models/fetch", { method: "POST" });
+					await refresh();
+					noticeBox(detail, "已连通，拉到 " + pulled.fetched + " 个模型，新增 " + pulled.added + " 个。请在下方确认输入上下文与输出上限。", "ok");
+				} catch (err) {
+					noticeBox(detail, "供应商已录入，但拉取模型失败：" + err.message, "err");
+				}
+			} else {
+				noticeBox(detail, "供应商已录入。填上 API Key 后点「拉取模型」即可取回模型列表。");
+			}
 		} catch (err) {
 			error.textContent = err.message;
 		} finally {

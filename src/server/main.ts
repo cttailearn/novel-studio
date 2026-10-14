@@ -552,7 +552,11 @@ async function serveStatic(res: ServerResponse, urlPath: string): Promise<void> 
 	}
 	const body = await readFile(target).catch(() => undefined);
 	if (!body) return json(res, 404, { error: "未找到" });
-	res.writeHead(200, { "content-type": MIME[path.extname(target)] ?? "application/octet-stream" });
+	// 本地开发工具，静态资源不缓存，避免改完看到旧版
+	res.writeHead(200, {
+		"content-type": MIME[path.extname(target)] ?? "application/octet-stream",
+		"cache-control": "no-store",
+	});
 	res.end(body);
 }
 
