@@ -264,6 +264,29 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		return json(res, 201, { project: store.create(body) });
 	}
 
+	// 保存章节正文（稿件视图的直接编辑）
+	const chapterMatch = pathname.match(/^\/api\/projects\/([\w-]+)\/chapters\/([^/]+)$/);
+	if (chapterMatch && req.method === "PATCH") {
+		const project = store.get(chapterMatch[1]!);
+		if (!project) return json(res, 404, { error: "工程不存在" });
+		const chapterId = decodeURIComponent(chapterMatch[2]!);
+		const body = await readJsonBody<{ content?: string; title?: string }>(req);
+		if (typeof body.content !== "string") return json(res, 400, { error: "缺少 content" });
+		// 取成常量：属性访问的类型收窄无法穿透闭包。
+		const content = body.content;
+		const saved = store.mutate(project.id, (draft) => {
+			const existing = draft.drafts[chapterId];
+			draft.drafts[chapterId] = {
+				id: chapterId,
+				title: body.title?.trim() || existing?.title || chapterId,
+				content,
+				revision: (existing?.revision ?? 0) + 1,
+				updatedAt: Date.now(),
+			};
+		});
+		return json(res, 200, { chapter: saved.drafts[chapterId], stats: store.stats(saved) });
+	}
+
 	const projectMatch = pathname.match(/^\/api\/projects\/([\w-]+)$/);
 	if (projectMatch && req.method === "GET") {
 		const project = store.get(projectMatch[1]!);

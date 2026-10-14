@@ -3,96 +3,119 @@
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
-		<title>Novel Studio</title>
+		<title>墨耕 · AI 长章小说创作台</title>
 		<link rel="stylesheet" href="/style.css" />
 	</head>
 	<body>
-		<div class="app">
-			<aside class="sidebar">
+		<div class="desk">
+			<!-- ── 顶栏 ───────────────────────────────────────────── -->
+			<header class="beam">
 				<div class="brand">
-					<span class="brand-mark">NS</span>
-					<div>
-						<h1>Novel Studio</h1>
+					<span class="seal" aria-hidden="true">墨</span>
+					<div class="brand-text">
+						<h1>墨耕</h1>
 						<p>AI 长章小说创作台</p>
 					</div>
 				</div>
 
-				<button id="new-project" class="btn btn-primary btn-block">新建作品</button>
+				<div class="beam-mid">
+					<span id="project-title" class="beam-title">未选择作品</span>
+					<span id="project-stats" class="beam-stats"></span>
+				</div>
 
-				<div class="section">
-					<h2>作品</h2>
+				<div class="beam-controls">
+					<select id="model-select" title="模型"></select>
+					<select id="thinking-select" title="推理档位">
+						<option value="off">不思</option>
+						<option value="low">略思</option>
+						<option value="medium">细思</option>
+						<option value="high">深思</option>
+					</select>
+					<button id="open-settings" class="btn btn-quiet" title="模型与供应商">设置</button>
+				</div>
+			</header>
+
+			<!-- ── 左卷 ───────────────────────────────────────────── -->
+			<aside class="rail">
+				<section class="rail-block">
+					<h2 class="rail-label"><i class="tick"></i>案上作品</h2>
 					<ul id="project-list" class="project-list"></ul>
-				</div>
+					<button id="new-project" class="ink-btn">＋ 另起一卷</button>
+				</section>
 
-				<div class="section">
-					<h2>厂商</h2>
-					<ul id="provider-list" class="provider-list"></ul>
-				</div>
+				<section class="rail-block rail-grow">
+					<h2 class="rail-label"><i class="tick"></i>章目</h2>
+					<ol id="chapter-list" class="chapter-list"></ol>
+					<p id="chapter-empty" class="rail-note">尚无章目。切到「议」让墨客拟一份大纲。</p>
+				</section>
 			</aside>
 
-			<main class="main">
-				<header class="topbar">
-					<div class="topbar-left">
-						<h2 id="project-title">未选择作品</h2>
-						<span id="project-stats" class="muted"></span>
+			<!-- ── 中稿台 ─────────────────────────────────────────── -->
+			<main class="stage">
+				<nav class="stage-bar">
+					<div class="tabs">
+						<button class="tab is-on" data-view="manuscript"><b>稿</b><span>文稿</span></button>
+						<button class="tab" data-view="chat"><b>议</b><span>对议</span></button>
 					</div>
-					<div class="topbar-right">
-						<button id="open-settings" class="btn btn-ghost btn-icon" title="模型与供应商设置">设置</button>
-						<select id="model-select" title="模型"></select>
-						<select id="thinking-select" title="推理档位">
-							<option value="off">关闭思考</option>
-							<option value="low">低</option>
-							<option value="medium">中</option>
-							<option value="high">高</option>
-						</select>
-					</div>
-				</header>
+					<div class="stage-actions" id="stage-actions"></div>
+				</nav>
 
-				<div id="messages" class="messages">
-					<div class="empty">
-						<h3>选个作品或新建一个</h3>
-						<p>然后告诉智能体你想写什么。例如：“帮我把这个故事的三个主角设定出来”、“写第一章，作为开篇”。</p>
-					</div>
-				</div>
+				<section id="view-manuscript" class="view is-on" aria-label="文稿"></section>
 
-				<form id="composer" class="composer">
-					<textarea
-						id="input"
-						rows="3"
-						placeholder="告诉智能体你想写什么，或让它续写、改稿、检查前后不一致……（Enter 发送，Shift+Enter 换行）"
-					></textarea>
-					<button id="send" type="submit" class="btn btn-primary">发送</button>
-					<button id="abort" type="button" class="btn btn-ghost hidden">中止</button>
-				</form>
+				<section id="view-chat" class="view view-chat" aria-label="对议">
+					<div id="messages" class="stream"></div>
+					<form id="composer" class="composer">
+						<textarea
+							id="input"
+							rows="3"
+							placeholder="交代接下来的活计：拟大纲、补设定、续写、改稿、查前后……（Enter 发送，Shift+Enter 换行）"
+						></textarea>
+						<div class="composer-side">
+							<button id="send" type="submit" class="btn btn-ink">呈上</button>
+							<button id="abort" type="button" class="btn btn-quiet hidden">止笔</button>
+						</div>
+					</form>
+				</section>
 			</main>
+
+			<!-- ── 右案 ───────────────────────────────────────────── -->
+			<aside class="desk-right">
+				<nav class="bible-tabs" id="bible-tabs">
+					<button class="bible-tab is-on" data-tab="characters">人物</button>
+					<button class="bible-tab" data-tab="world">世观</button>
+					<button class="bible-tab" data-tab="outline">大纲</button>
+					<button class="bible-tab" data-tab="notes">待办</button>
+				</nav>
+				<div id="bible" class="bible"></div>
+			</aside>
 		</div>
 
-		<dialog id="project-dialog">
+		<dialog id="project-dialog" class="sheet">
 			<form id="project-form" method="dialog">
-				<h3>新建作品</h3>
-				<label>标题<input name="title" required placeholder="例如：长夜水辛" /></label>
-				<label>类型<input name="genre" placeholder="例如：现实悬疑 / 古风幻世" /></label>
-				<label>一句话概念<textarea name="logline" rows="2" placeholder="一句话说清核心冲突"></textarea></label>
-				<label>总字数目标<input name="targetWords" type="number" min="0" step="10000" placeholder="200000" /></label>
-				<label>文风指南<textarea name="styleGuide" rows="3" placeholder="口语化、叙事节奏、禁忌项……"></textarea></label>
+				<h3>另起一卷</h3>
+				<label>书名<input name="title" required placeholder="例如：长夜水声" /></label>
+				<label>门类<input name="genre" placeholder="例如：志怪 / 悬疑 / 世情" /></label>
+				<label>一句话骨相<textarea name="logline" rows="2" placeholder="一句说清核心冲突"></textarea></label>
+				<label>总字数<input name="targetWords" type="number" min="0" step="10000" placeholder="300000" /></label>
+				<label>行文规约<textarea name="styleGuide" rows="3" placeholder="语体、叙述节奏、忌讳……"></textarea></label>
 				<div class="dialog-actions">
-					<button value="cancel" class="btn btn-ghost">取消</button>
-					<button value="create" class="btn btn-primary">创建</button>
+					<button value="cancel" class="btn btn-quiet">作罢</button>
+					<button value="create" class="btn btn-ink">立卷</button>
 				</div>
 			</form>
 		</dialog>
 
-		<dialog id="settings-dialog" class="settings-dialog">
+		<dialog id="settings-dialog" class="sheet sheet-wide settings-dialog">
 			<div class="settings-head">
 				<div>
-					<h3>模型与供应商</h3>
-					<p>配置后保存的 API Key 优先于环境变量，仅存放在本机 data/credentials.json</p>
+					<h3>笔墨纸砚</h3>
+					<p>此处所录密钥只存本机 data/credentials.json，优先于环境变量</p>
 				</div>
-				<button id="settings-close" class="btn btn-ghost">关闭</button>
+				<button id="settings-close" class="btn btn-quiet">掩上</button>
 			</div>
 			<div class="settings-defaults">
-				<label>默认模型<select id="settings-default-model"></select></label>
-				<label>默认思考档位<select id="settings-default-thinking"></select></label>
+				<label>常用之笔<select id="settings-default-model"></select></label>
+				<label>惯用思深<select id="settings-default-thinking"></select></label>
 			</div>
 			<div class="settings-body">
 				<ul id="settings-providers" class="settings-providers"></ul>

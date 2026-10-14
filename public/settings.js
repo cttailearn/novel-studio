@@ -147,7 +147,7 @@ function renderProviderList() {
 
 function providerRow(provider) {
 	const status = statusOf(provider.id);
-	const row = el("li", `provider-row${provider.id === view.selected ? " active" : ""}${provider.enabled ? "" : " disabled"}`);
+	const row = el("li", `provider-row${provider.id === view.selected ? " is-on" : ""}${provider.enabled ? "" : " is-off"}`);
 	row.append(el("span", "dot" + (status?.authSource !== "none" ? " on" : "")));
 
 	const name = el("span", "name", provider.label);
@@ -155,7 +155,7 @@ function providerRow(provider) {
 
 	if (provider.kind === "custom") row.append(el("span", "badge custom", "自定义"));
 
-	if (!provider.enabled) row.append(el("span", "badge", "已停用"));
+	if (!provider.enabled) row.append(el("span", "badge", "停用"));
 	else if (status?.error) row.append(el("span", "badge err-badge", "注册失败"));
 	else if (status?.authSource === "app") row.append(el("span", "badge ok", "已配置"));
 	else if (status?.authSource === "env") row.append(el("span", "badge ok", "环境变量"));

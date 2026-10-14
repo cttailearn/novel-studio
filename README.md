@@ -1,6 +1,6 @@
-# Novel Studio
+# 墨耕 · Novel Studio
 
-AI 长章小说创作台。当前完成两个阶段：基于 [`@earendil-works/pi-ai`](https://www.npmjs.com/package/@earendil-works/pi-ai) 与 [`@earendil-works/pi-agent-core`](https://www.npmjs.com/package/@earendil-works/pi-agent-core) 的模型接入与小说写作智能体，以及可视化的模型与供应商配置界面。
+AI 长章小说创作台。基于 [`@earendil-works/pi-ai`](https://www.npmjs.com/package/@earendil-works/pi-ai) 与 [`@earendil-works/pi-agent-core`](https://www.npmjs.com/package/@earendil-works/pi-agent-core) 构建，包含模型接入、小说写作智能体、供应商配置与水墨案头界面。
 
 ## 快速开始
 
@@ -9,7 +9,32 @@ pnpm install
 pnpm dev                  # 默认 http://127.0.0.1:8787
 ```
 
-打开页面后点右上角“设置”配置供应商与模型，无需手动编辑 `.env`。
+打开页面后点右上角「设置」配置供应商与模型，无需手动编辑 `.env`。
+
+## 界面：水墨案头
+
+界面不是聊天工具的皮相，而是按「写小说」重新组织的案头。
+
+**为什么是浅色。** 水墨是纸上的媒介，深色底做水墨本质上是伪滤镜。暖白宣纸面对长时间读长文本，也比纯白更省眼。所以配色是宣纸、墨、朱砂三色，其余一律不用。
+
+| 区域 | 作用 |
+| --- | --- |
+| 顶栏 | 印章、书名、进度、模型与推理档位 |
+| 左卷 | 案上作品 + 章目（带字数，未写的章点朱砂点） |
+| 中稿台 | **稿**（读稿 / 改稿）与 **议**（与智能体对话）两个视图 |
+| 右案 | 人物 / 世观 / 大纲 / 待办，随写随查 |
+
+关键取舍：
+
+- **智能体的话直接排成正文，不装进气泡。** 墨客的产出是稿子，不是消息。
+- **工具调用收成「旁批」。** 一根细墨线加小字，不打断阅读。
+- **文稿区有朱丝栏。** 稿纸的竖向界线，透明度压到 0.055，只作肌理不干扰阅读。
+- **首行缩进两格、行高 2.05。** 中文小说的排版规矩。
+- **改稿用等宽等行距的 textarea。** 阅读态与编辑态切换无跳变。
+- **纸纹是 SVG 噪声，透明度 0.05。** 再高就成电视雪花。
+- **选中态是墨晕不是色块。** `radial-gradient` 从左侧晕开，配朱砂细竖线。
+
+字体：正文与文稿用宋体（Songti SC / SimSun / Noto Serif SC），标题与印章用楷体（Kaiti SC / KaiTi），控件用系统无衬线。全部为系统字体栈，不联网加载 CJK 字体。
 
 ## 模型配置
 
@@ -34,7 +59,7 @@ DeepSeek、Moonshot 国内、Z.ai (GLM)、OpenRouter、Anthropic、OpenAI、Goog
 | Anthropic Messages | Anthropic 原生 `/v1/messages` |
 | Google Generative AI | Google 原生 `/v1beta/models` |
 
-填好 URL 和 Key 后点「拉取模型」，服务端会按格式自动补全路径并解析上游的模型列表：
+填好 URL 和 Key 后点「拉取模型」，服务端会按格式自动补全路径并解析上游列表：
 
 - 已存在的模型保留你手填的参数，不会被覆盖
 - 上游已删除的模型**也会保留**，避免意外丢失配置
@@ -44,8 +69,6 @@ DeepSeek、Moonshot 国内、Z.ai (GLM)、OpenRouter、Anthropic、OpenAI、Goog
 
 ### 模型参数
 
-每个模型可配：
-
 | 参数 | 说明 |
 | --- | --- |
 | 输入上下文 | 模型能处理的最大输入 token，用于上下文窗口判断 |
@@ -53,13 +76,13 @@ DeepSeek、Moonshot 国内、Z.ai (GLM)、OpenRouter、Anthropic、OpenAI、Goog
 | 支持思考 | 开启后可以逐档定义思考强度 |
 | 档位 | off / minimal / low / medium / high / xhigh / max，未勾选的档位会被显式屏蔽 |
 
-> 关于 `off`：它不会被写入 pi-ai 的 `thinkingLevelMap`。若把它映射成字符串 `"off"`，适配器会当作 effort 发给上游，而 Anthropic 的 effort 枚举里没有 `off`，会直接报错。缺省时 pi-ai 使用厂商默认值，对 `off` 就是不开启思考。
+> 关于 `off`：它不会被写入 pi-ai 的 `thinkingLevelMap`。若映射成字符串 `"off"`，适配器会当作 effort 参数发给上游，而 Anthropic 的 effort 枚举里没有 `off`，会直接报错。留空让 pi-ai 使用厂商默认值，对 `off` 而言就是「不开启思考」。
 
 ## 安全
 
 - API Key 存在 `data/credentials.json`，与可共享的 `data/settings.json` 分开。
 - 两者都位于被 git 忽略的 `data/` 下，不会进仓。
-- 界面只显示脱显后的 key，不回传明文。
+- 界面只显示脱敏后的 key，不回传明文。
 
 ## 架构
 
@@ -69,7 +92,7 @@ src/
   config/settings.ts         配置类型与归一化
   config/settings-store.ts   设置持久化
   config/credential-store.ts 实现 pi-ai 的 CredentialStore
-  ai/models.ts               注册表构建、模型枚举与解析
+  ai/models.ts               注册表构建、模型列举与解析
   ai/custom-provider.ts      自定义 provider 与 Model 构造
   ai/fetch-models.ts         上游模型拉取与合并
   ai/prompts.ts              系统提示词与工程快照
@@ -77,7 +100,7 @@ src/
   ai/novel-agent.ts          Agent 工厂
   store/project.ts           工程数据与 JSON 持久化
   server/main.ts             HTTP、会话管理、NDJSON 流式事件
-public/                      无框架前端（app.js + settings.js）
+public/                      index.html / app.js / settings.js / style.css
 scripts/                     测试
 ```
 
@@ -102,7 +125,7 @@ scripts/                     测试
 两个关键的工程决策：
 
 - `toolExecution: "sequential"` —— 工具会写数据，并行执行可能丢失更新。
-- `transformContext` —— 每次请求前注入当前工程快照，并丢弃过量的旧工具结果。快照每次重新生成且不进入历史，因此不会慽积。
+- `transformContext` —— 每次请求前注入当前工程快照，并丢弃过量的旧工具结果。快照每次重新生成且不进入历史，因此不会累积。
 
 ## API
 
@@ -118,6 +141,7 @@ scripts/                     测试
 | DELETE | `/api/providers/:id/models/:modelId` | 删除模型 |
 | GET/POST | `/api/projects` | 工程列表 / 新建 |
 | GET | `/api/projects/:id` | 工程全量 + 统计 |
+| PATCH | `/api/projects/:id/chapters/:chapterId` | 保存章节正文（稿面直接编辑） |
 | POST | `/api/sessions` | 创建会话 |
 | POST | `/api/sessions/:id/model` | 切换模型，保留对话历史 |
 | POST | `/api/sessions/:id/messages` | 发送消息，返回 NDJSON 事件流 |
@@ -127,19 +151,19 @@ scripts/                     测试
 
 ```bash
 pnpm test          # tsc + 配置层 + 工具链路 + 智能体循环
-pnpm test:config   # 配置归一化、凭据存储、provider 构造、拉取合并
+pnpm test:config   # 归一化、凭据存储、provider 构造、档位屏蔽、拉取合并
 pnpm test:tools    # 存储与 12 个工具的断言
-pnpm test:loop     # 用 pi-ai faux provider 走完真实的智能体循环
+pnpm test:loop     # 用 pi-ai faux provider 走真实的智能体循环
 ```
 
-四个套件均不需要 API Key。循环测试用 pi-ai 自带的 `fauxProvider` 脚本化模型响应，真实验证“模型输出 → 工具调用 → 工具执行 → 结果回填 → 下一轮”。
+四个套件均不需要 API Key。循环测试用 pi-ai 自带的 `fauxProvider` 脚本化模型响应，真实验证「模型输出 → 工具调用 → 工具执行 → 结果回填 → 下一轮」。
 
 ## 当前限制
 
 - 会话在内存中，服务重启后会丢失对话历史（工程与供应商配置都会保留）。
-- 自定义 provider 的模型参数需人工确认，上游 `/models` 接口通常不返回 token 限制。
-- 任何模型都没用真实 key 跑通过一次真实 API 往返。
+- 自定义供应商的模型参数需人工确认，上游 `/models` 接口通常不返回 token 限制。
+- 没有任何模型用真实 key 跑通过一次真实 API 往返。
 
 ## 后续计划
 
-会话持久化与分支、章节编辑器、版本历史与回滚、全文检索、导出。
+版本历史与回滚、全文检索、导出、字数统计报表。
