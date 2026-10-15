@@ -464,6 +464,44 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		return json(res, 201, { project, stats: store.stats(project) });
 	}
 
+	// 新建章节：作者自己立一章的入口。
+	// 章节此前只能由设定官的 update_outline 产出 —— 而没有章节，生文工作台就没有装配落点，
+	// 素材也就无处可装，界面上只能看到一片空。
+	const chaptersMatch = pathname.match(/^\/api\/projects\/([\w-]+)\/chapters$/);
+	if (chaptersMatch && req.method === "POST") {
+		const projectId = chaptersMatch[1]!;
+		if (!store.get(projectId)) return json(res, 404, { error: "工程不存在" });
+		const body = await readJsonBody<{
+			title?: string;
+			summary?: string;
+			pov?: string;
+			targetWords?: number;
+		}>(req);
+		const title = body.title?.trim();
+		if (!title) return json(res, 400, { error: "请填写章节标题" });
+		// id 在 mutate 内部现算：并发立章也不会撞号。
+		let createdId = "";
+		const saved = store.mutate(projectId, (draft) => {
+			const taken = new Set(draft.outline.map((chapter) => chapter.id));
+			let n = draft.outline.length + 1;
+			createdId = "ch" + String(n).padStart(2, "0");
+			while (taken.has(createdId)) createdId = "ch" + String(++n).padStart(2, "0");
+			draft.outline.push({
+				id: createdId,
+				title,
+				summary: body.summary?.trim() ?? "",
+				pov: body.pov?.trim() ?? "",
+				status: "planned",
+				targetWords:
+					typeof body.targetWords === "number" && body.targetWords > 0 ? Math.floor(body.targetWords) : 0,
+				notes: "",
+				materialIds: [],
+			});
+		});
+		const chapter = saved.outline.find((item) => item.id === createdId);
+		return json(res, 201, { chapter, stats: store.stats(saved) });
+	}
+
 	// 保存章节正文（稿件视图的直接编辑）
 	const chapterMatch = pathname.match(/^\/api\/projects\/([\w-]+)\/chapters\/([^/]+)$/);
 	if (chapterMatch && req.method === "PATCH") {

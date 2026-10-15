@@ -155,6 +155,44 @@ try {
 	const updated = store.get(project.id)!.materials.find((m) => m.id === materialId)!;
 	check("更新素材保留标签", updated.tags.includes("主角"), updated.tags.join(","));
 
+	// schema 层：这四项不能进 required。
+	// 一旦进去，「只传 content」会被 pi-ai 的参数校验拦下，报出来的还是
+	// 看不懂的 required 异常（- kind: must have required properties ...），模型只能干瞪眼。
+	const upsertSchema = byName.get("upsert_material")!.parameters as {
+		required?: string[];
+		properties?: Record<string, unknown>;
+	};
+	const requiredFields = upsertSchema.required ?? [];
+	const four = ["kind", "title", "content", "usage"];
+	check(
+		"upsert_material 四项都不在 required",
+		!four.some((key) => requiredFields.includes(key)),
+		"required=" + JSON.stringify(requiredFields),
+	);
+	check(
+		"upsert_material 仍声明四项属性",
+		four.every((key) => key in (upsertSchema.properties ?? {})),
+		Object.keys(upsertSchema.properties ?? {}).join(","),
+	);
+
+	// 行为层：部分更新。设定官照「选中修改」的指令就是这么调的 —— 只给要改的字段。
+	const partial = await call("upsert_material", { id: materialId, content: "痕迹鉴定员，惯用左手记笔记；左耳有旧伤。" });
+	check("只传 content 也能更新", textOf(partial).includes("已更新素材"), textOf(partial));
+	const partialSaved = store.get(project.id)!.materials.find((m) => m.id === materialId)!;
+	check("部分更新写入新内容", partialSaved.content.includes("左耳有旧伤"), partialSaved.content);
+	check("部分更新保留 kind", partialSaved.kind === "character", partialSaved.kind);
+	check("部分更新保留标题", partialSaved.title === "林晓", partialSaved.title);
+	check("部分更新保留 usage", partialSaved.usage.includes("雨夜追踪戏"), partialSaved.usage);
+
+	// 新建时缺字段不抛异常，而是回一句能照做的提示，让模型当轮自己改对。
+	const incomplete = await call("upsert_material", { content: "只有内容，没有种类标题用途。" });
+	check("新建缺字段给出可读提示", textOf(incomplete).includes("新建素材还缺"), textOf(incomplete));
+	check(
+		"缺字段时不落盘",
+		store.get(project.id)!.materials.length === 2,
+		String(store.get(project.id)!.materials.length),
+	);
+
 	// attach_materials
 	await call("attach_materials", { chapterId: "ch01", materialIds: [materialId, worldId], mode: "add" });
 	const ch01 = store.get(project.id)!.outline.find((c) => c.id === "ch01")!;

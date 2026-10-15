@@ -76,6 +76,8 @@ const state = {
 	/** 等第二次点击确认删除的 id。作品与库各留一份，别和作品内素材的 pendingDelete 混用。 */
 	pendingProjectDelete: null,
 	pendingLibraryDelete: null,
+	/** 素材工作台里点选、准备让设定官按需求修改的素材 id。 */
+	pickedMaterials: new Set(),
 	/** 顶层模式：home 是案头（管理），workspace 是写作台（创作）。 */
 	mode: "home",
 };
@@ -158,6 +160,42 @@ function writeStored(key, value) {
 		// 存不下就算了，只是下次刷新回到案头。
 	}
 }
+
+// ═══════════════════════════════════════════════════ 昼夜
+
+const THEME_KEY = "novel-studio-theme";
+
+/**
+ * 切主题。暗色不是把亮色反相，而是把纸压成暖黑、把墨提成月白 ——
+ * 浓淡关系照旧，所以正文在夜里读反而比白天更松。
+ *
+ * 首帧的主题由 index.html 里的内联脚本定（那里要在样式生效前跑完），
+ * 这里只管切换与落盘。
+ */
+function currentTheme() {
+	return document.documentElement.dataset.theme === "dark" ? "dark" : "light";
+}
+
+function applyTheme(theme) {
+	document.documentElement.dataset.theme = theme;
+	// 换主题时整块重绘：渐变、混入模式与合成层都要按新底色重来。
+	document.body.style.transition = "none";
+	void document.body.offsetHeight; // 强制回流，丢掉过渡的起点状态
+	document.body.style.transition = "";
+}
+
+function toggleTheme() {
+	const next = currentTheme() === "dark" ? "light" : "dark";
+	applyTheme(next);
+	writeStored(THEME_KEY, next);
+}
+
+// 存过主题的用户不听系统的；没存过的（含新访客）跟随系统实时变化。
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (event) => {
+	if (readStored(THEME_KEY, null) === null) applyTheme(event.matches ? "dark" : "light");
+});
+
+$("theme-toggle").addEventListener("click", () => toggleTheme());
 
 // ═══════════════════════════════════════════════════ 启动
 
@@ -884,6 +922,8 @@ function renderMaterialsBench() {
 	}
 	$("material-count").textContent = project.materials.length ? project.materials.length + " 条" : "";
 
+	renderPickedMaterials();
+
 	const list = $("material-list");
 	list.replaceChildren();
 	const filtered = state.materialFilter
@@ -918,6 +958,7 @@ function renderMaterialsBench() {
 /** 素材卡。紧凑模式下收起动作，点一下即可修改。 */
 function materialCard(material, options = {}) {
 	const card = el("div", "card mat");
+	if (state.pickedMaterials.has(material.id)) card.classList.add("is-picked");
 	const head = el("div", "mat-head");
 	head.append(el("h4", "", material.title));
 	head.append(el("span", "kind", kindLabel(material.kind)));
@@ -958,6 +999,12 @@ function materialCard(material, options = {}) {
 		);
 	}
 
+	const picked = state.pickedMaterials.has(material.id);
+	actions.append(
+		button(picked ? "已选中" : "选中修改", "btn btn-quiet btn-xs" + (picked ? " is-on" : ""), () =>
+			toggleMaterialPick(material.id),
+		),
+	);
 	actions.append(button("改", "btn btn-quiet btn-xs", () => openMaterialDialog({ mode: "edit", material })));
 	actions.append(
 		button(material.originId ? "更新素材库" : "存入素材库", "btn btn-quiet btn-xs", () =>
@@ -979,6 +1026,52 @@ function toggleMaterial(id) {
 	else state.openMaterials.add(id);
 	renderView();
 	renderBible();
+}
+
+/** 点选素材：选中若干条再交代怎么改，设定官就照着改这几条。 */
+function toggleMaterialPick(id) {
+	if (state.pickedMaterials.has(id)) state.pickedMaterials.delete(id);
+	else state.pickedMaterials.add(id);
+	renderView();
+}
+
+/** 素材工作台输入框上方的「已选中」条。 */
+function renderPickedMaterials() {
+	const bar = $("material-picked");
+	if (!bar) return;
+	const picked = [...state.pickedMaterials].map(materialById).filter(Boolean);
+	if (picked.length === 0) {
+		bar.replaceChildren();
+		bar.classList.add("hidden");
+		return;
+	}
+	bar.classList.remove("hidden");
+	bar.replaceChildren(el("span", "picked-label", "已选 " + picked.length + " 条，交代怎么改："));
+	for (const material of picked) bar.append(el("span", "picked-chip", "《" + material.title + "》"));
+	bar.append(
+		button("清空", "btn btn-quiet btn-xs", () => {
+			state.pickedMaterials = new Set();
+			renderView();
+		}),
+	);
+}
+
+/**
+ * 把选中的素材拼成指令前缀。
+ *
+ * 只把需求发过去，设定官不知道要改哪一条，很可能又新建一条。这里把 id 明确写进指令，
+ * 并要求只改点名的字段。发完即清空选择：同一批料不该被反复改。
+ */
+function withPickedMaterials(text) {
+	const picked = [...state.pickedMaterials].map(materialById).filter(Boolean);
+	state.pickedMaterials = new Set();
+	if (picked.length === 0) return text;
+	const list = picked.map((material) => "- 《" + material.title + "》（id: " + material.id + "）").join("\n");
+	return (
+		"【本次只改这几条已有素材】\n" + list + "\n" +
+		"请用 upsert_material 带上对应 id，只传要改的字段，其余字段保持原样；不要新建素材。\n\n" +
+		"要求：" + text
+	);
 }
 
 function chapterTitleOf(id) {
@@ -1238,10 +1331,26 @@ function renderWritingBench() {
 
 	const chapter = project.outline.find((item) => item.id === state.chapterId);
 	if (!chapter) {
-		$("assembly-chapter").textContent = "";
-		$("pool-count").textContent = "";
-		assemblyBox.append(el("div", "bench-empty", "先在左栏点开一章。"));
-		poolBox.append(el("div", "bench-empty", "未选章节。"));
+		const hasChapters = project.outline.length > 0;
+		$("assembly-chapter").textContent = hasChapters ? "未选章节" : "尚无章目";
+		// 没有章节就没有装配落点，但库里的料仍然要看得见 ——
+		// 否则「刚生成完素材，到生文工作台却什么都没有」。
+		assemblyBox.append(
+			el(
+				"div",
+				"bench-empty",
+				hasChapters ? "先在左栏点开一章，再装料。" : "这部作品还没有章节。先立一章，再把料装进去。",
+			),
+		);
+		assemblyBox.append(button("＋ 立一章", "btn btn-ink btn-sm", () => openChapterDialog()));
+		const allMaterials = project.materials;
+		$("pool-count").textContent = allMaterials.length ? allMaterials.length + " 条" : "";
+		if (allMaterials.length === 0) {
+			poolBox.append(el("div", "bench-empty", "素材库是空的。到「料」上传资料或让设定官备料。"));
+		} else {
+			poolBox.append(el("div", "bench-hint", "先立一章，才能把料装进去。"));
+			for (const material of allMaterials) poolBox.append(assemblyRow(material, "pool", true));
+		}
 		return;
 	}
 
@@ -1302,7 +1411,7 @@ function renderWritingBench() {
 	}
 }
 
-function assemblyRow(material, variant) {
+function assemblyRow(material, variant, locked = false) {
 	const row = el("div", "as-row" + (variant === "pool" ? " is-pool" : ""));
 	const head = el("div", "as-head");
 	head.append(el("span", "kind", kindLabel(material.kind)));
@@ -1315,6 +1424,12 @@ function assemblyRow(material, variant) {
 	actions.append(button(open ? "收起" : "看全文", "btn btn-quiet btn-xs", () => toggleMaterial(material.id)));
 	if (variant === "assembled") {
 		actions.append(button("摘除", "btn btn-quiet btn-xs", () => void assemble([], [material.id])));
+	} else if (locked) {
+		// 还没有章节：料看得见，但没地方装。按钮停用，指向「立一章」。
+		const btn = button("装入本章", "btn btn-quiet btn-xs", () => {});
+		btn.disabled = true;
+		btn.title = "先立一章，才有落点";
+		actions.append(btn);
 	} else {
 		actions.append(button("装入本章", "btn btn-quiet btn-xs", () => void assemble([material.id], [])));
 	}
@@ -1322,6 +1437,53 @@ function assemblyRow(material, variant) {
 	if (open) row.append(el("div", "as-body", material.content));
 	return row;
 }
+
+/** 立一章的对话框。 */
+function openChapterDialog() {
+	const form = $("chapter-form");
+	form.reset();
+	$("chapter-error").textContent = "";
+	form.elements.title.value = "第" + toCn((state.project?.outline.length ?? 0) + 1) + "章";
+	$("chapter-dialog").showModal();
+	form.elements.title.select();
+}
+
+$("add-chapter").addEventListener("click", () => openChapterDialog());
+$("chapter-cancel").addEventListener("click", () => $("chapter-dialog").close());
+$("chapter-form").addEventListener("submit", async (event) => {
+	event.preventDefault();
+	const form = event.currentTarget;
+	const error = $("chapter-error");
+	const values = Object.fromEntries(new FormData(form).entries());
+	const title = String(values.title ?? "").trim();
+	if (!title) {
+		error.textContent = "请填写标题";
+		return;
+	}
+	error.textContent = "";
+	const submit = form.querySelector("button[type=submit]");
+	submit.disabled = true;
+	try {
+		const data = await api("/api/projects/" + state.projectId + "/chapters", {
+			method: "POST",
+			body: {
+				title,
+				summary: String(values.summary ?? "").trim(),
+				targetWords: values.targetWords ? Number(values.targetWords) : 0,
+			},
+		});
+		$("chapter-dialog").close();
+		// 立完就选中它并切到生文工作台：立章的目的就是接着装料。
+		state.chapterId = data.chapter?.id ?? null;
+		state.writeMode = "create";
+		await reloadProject();
+		switchView("writing");
+	} catch (err) {
+		error.textContent = err.message;
+	} finally {
+		submit.disabled = false;
+	}
+});
 
 /** 一次性成文：服务端算好组装上下文，交给写作智能体流式落盘。 */
 async function runWrite(mode, note) {
@@ -1638,6 +1800,8 @@ async function sendMessage(pane, text) {
 		appendMessage("writing", "error", "先在左栏点开一章。");
 		return;
 	}
+	// 素材工作台：选中了素材就把「改哪几条」拼进指令；作者看到的仍是他自己的原话。
+	const outgoing = pane === "material" ? withPickedMaterials(text) : text;
 	appendMessage(pane, "user", text);
 	setStreaming(pane);
 	try {
@@ -1645,7 +1809,7 @@ async function sendMessage(pane, text) {
 		const res = await fetch("/api/sessions/" + sessionId + "/messages", {
 			method: "POST",
 			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ input: text }),
+			body: JSON.stringify({ input: outgoing }),
 		});
 		if (!res.ok || !res.body) {
 			const data = await res.json().catch(() => ({}));
@@ -1656,6 +1820,7 @@ async function sendMessage(pane, text) {
 		appendMessage(pane, "error", error.message);
 	} finally {
 		setStreaming(null);
+		// 设定官这一轮可能新建或改了素材：重载让素材库与生文工作台同步跟上。
 		await reloadProject();
 	}
 }
@@ -1696,12 +1861,23 @@ async function pumpStream(res, pane) {
 					break;
 				case "thinking_start":
 					if (!message) message = appendMessage(pane, "assistant", "");
-					thinkingBox = el("div", "thinking");
+					// 思考默认收起：想看再点开，免得把正文挤下去。
+					thinkingBox = el("details", "thinking");
+					thinkingBox.append(el("summary", "thinking-head", "思考过程"));
+					thinkingBox.append(el("div", "thinking-body"));
+					thinkingBox.dataset.chars = "0";
 					message.wrap.insertBefore(thinkingBox, message.body);
 					break;
-				case "thinking":
-					if (thinkingBox) thinkingBox.textContent += event.delta;
+				case "thinking": {
+					if (!thinkingBox) break;
+					const body = thinkingBox.querySelector(".thinking-body");
+					if (body) body.textContent += event.delta;
+					const chars = Number(thinkingBox.dataset.chars || "0") + event.delta.length;
+					thinkingBox.dataset.chars = String(chars);
+					const head = thinkingBox.querySelector(".thinking-head");
+					if (head) head.textContent = "思考过程（" + chars + " 字）";
 					break;
+				}
 				case "tool_start": {
 					const wrap = appendTool(pane, event.name, "行笔中…", false);
 					wrap.dataset.pending = "1";

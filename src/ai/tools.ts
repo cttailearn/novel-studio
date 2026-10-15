@@ -366,16 +366,17 @@ function upsertMaterialTool(deps: NovelToolDeps): AgentTool<any> {
 		label: "新建 / 更新素材",
 		description:
 			"新建或更新一条素材。素材是可复用的创作单位，不是正文。" +
-			"usage 必填：写清什么情况下该用这条素材，装配智能体靠它判断相关性。" +
-			"chapterIds 传了就整体替换关联（传空表等于从所有章节摘除），不传则保持原样。" +
-			"已存在时只覆盖传入的字段。",
+			"新建时必须给齐 kind / title / content / usage 四项；" +
+			"更新已有素材（带 id）时只给要改的字段，其余保持原样 —— 只想改内容就只传 content。" +
+			"usage 必填且要写清什么情况下该用这条素材，装配智能体靠它判断相关性。" +
+			"chapterIds 传了就整体替换关联（传空表等于从所有章节摘除），不传则保持原样。",
 		parameters: Type.Object(
 			{
-				id: optionalText("已存在素材的 id，新建时留空"),
-				kind: materialKindSchema,
-				title: nonEmpty("标题"),
-				content: nonEmpty("素材内容，写清约束与边界"),
-				usage: nonEmpty("装配提示：什么情况下该用这条素材"),
+				id: optionalText("已存在素材的 id；新建时留空"),
+				kind: Type.Optional(materialKindSchema),
+				title: optionalText("标题。新建必填，更新时可省"),
+				content: optionalText("素材内容，写清约束与边界。新建必填，更新时可省"),
+				usage: optionalText("装配提示：什么情况下该用这条素材。新建必填，更新时可省"),
 				tags: Type.Optional(stringArray("标签、别名")),
 				chapterIds: Type.Optional(stringArray("关联到的章节 id")),
 			},
@@ -385,6 +386,22 @@ function upsertMaterialTool(deps: NovelToolDeps): AgentTool<any> {
 			const p = getProject(deps);
 			const id = params.id?.trim() || randomUUID();
 			const existing = p.materials.find((m) => m.id === id);
+			// 四个字段在 schema 里都是可选的，因为更新时只需给要改的那几项。
+			// 新建的完整性在这里补校验：缺什么就说清什么，让模型当轮自己改对，
+			// 而不是抛一个只显示 required 的校验异常（那种报错模型看不懂）。
+			if (!existing) {
+				const missing: string[] = [];
+				if (!params.kind) missing.push("kind（素材种类）");
+				if (!params.title?.trim()) missing.push("title（标题）");
+				if (!params.content?.trim()) missing.push("content（素材内容）");
+				if (!params.usage?.trim()) missing.push("usage（装配提示）");
+				if (missing.length > 0) {
+					return result(
+						"新建素材还缺：" + missing.join("、") + "。请重新调用 upsert_material 补全后再试。" +
+							"（若本意是修改已有素材，请带上它的 id；带 id 时只需给要改的字段。）",
+					);
+				}
+			}
 			const validChapters = new Set(p.outline.map((c) => c.id));
 			// 关联到章节是双向的：素材记下用在哪，同时把 id 挂进章节的装配清单。
 			// 区分"没传"与"传了空表"：没传保持原样，传空表等于从所有章节摘除。
@@ -392,13 +409,14 @@ function upsertMaterialTool(deps: NovelToolDeps): AgentTool<any> {
 			const requested = provided ? params.chapterIds!.filter((cid) => validChapters.has(cid)) : [];
 			const saved = deps.store.mutate(deps.projectId, (draft) => {
 				const index = draft.materials.findIndex((m) => m.id === id);
-				const base = index >= 0 ? draft.materials[index]! : emptyMaterial(id, params.kind);
+				const base = index >= 0 ? draft.materials[index]! : emptyMaterial(id, params.kind ?? "other");
+				// 只覆盖真正传了的字段：更新时不传的字段保持原样。
 				const next: Material = {
 					...base,
-					kind: params.kind,
-					title: params.title,
-					content: params.content,
-					usage: params.usage,
+					kind: params.kind ?? base.kind,
+					title: params.title?.trim() || base.title,
+					content: params.content?.trim() ? params.content : base.content,
+					usage: params.usage?.trim() || base.usage,
 					tags: params.tags ?? base.tags,
 					chapterIds: provided ? requested : base.chapterIds,
 					updatedAt: Date.now(),

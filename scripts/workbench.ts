@@ -322,6 +322,39 @@ try {
 	const seedStillThere = await req("GET", `/api/projects/${seedId}`);
 	check("删库条目不影响已有作品", seedStillThere.data.project.materials.length === 2, String(seedStillThere.data.project.materials.length));
 
+	// ---- 立章：作者自己加一章（此前章节只能由设定官产出）----
+	console.log("\n立章");
+	check("立章缺标题返回 400", (await req("POST", `/api/projects/${seedId}/chapters`, { summary: "只有要点" })).status === 400);
+	check("往不存在的作品立章返回 404", (await req("POST", "/api/projects/nope/chapters", { title: "第一章" })).status === 404);
+
+	const beforeOutline = (await req("GET", `/api/projects/${seedId}`)).data.project.outline.length;
+	const made = await req("POST", `/api/projects/${seedId}/chapters`, {
+		title: "第三章 空渡",
+		summary: "老周在渡口等一个不来的客人。",
+		targetWords: 3000,
+	});
+	check("立章返回 201", made.status === 201, String(made.status));
+	const afterOutline = (await req("GET", `/api/projects/${seedId}`)).data.project.outline;
+	check("立章后章数 +1", afterOutline.length === beforeOutline + 1, String(afterOutline.length));
+	check("新章已落盘", afterOutline.some((c: any) => c.id === made.data.chapter.id));
+	check("新章标题正确", made.data.chapter.title === "第三章 空渡", made.data.chapter.title);
+	check("新章要点已存", made.data.chapter.summary.includes("不来的客人"), made.data.chapter.summary);
+	check("新章字数目标已存", made.data.chapter.targetWords === 3000, String(made.data.chapter.targetWords));
+	check("新章状态是 planned", made.data.chapter.status === "planned", made.data.chapter.status);
+	check("新章装配清单为空", made.data.chapter.materialIds.length === 0);
+	check("新章 id 不撞已有章节", !["ch01", "ch02"].includes(made.data.chapter.id), made.data.chapter.id);
+
+	const second = await req("POST", `/api/projects/${seedId}/chapters`, { title: "第四章" });
+	check("连立两章不撞号", second.data.chapter.id !== made.data.chapter.id, `${made.data.chapter.id} / ${second.data.chapter.id}`);
+	check("只要标题也能立章", second.data.chapter.summary === "" && second.data.chapter.targetWords === 0);
+
+	// 新章要被成文链路认作合法章节：没装料时是 409（缺料），不是 404（章节不存在）。
+	// 这条正是「立完章就能装料成文」的最小证据。
+	const preflightNew = await req("POST", `/api/projects/${seedId}/chapters/${made.data.chapter.id}/write`, { mode: "create" });
+	check("新章被成文链路认作合法章节", preflightNew.status === 409, `${preflightNew.status} ${preflightNew.data?.error ?? ""}`);
+	const preflightGhost = await req("POST", `/api/projects/${seedId}/chapters/ghost/write`, { mode: "create" });
+	check("成文链路对幽灵章节返回 404", preflightGhost.status === 404, String(preflightGhost.status));
+
 	// ---- 章节装料（作者在工作台里的直接操作）----
 	console.log("\n章节装料");
 	const chapterMissing = await req("POST", `/api/projects/${seedId}/chapters/nope/materials`, { add: ["seed-mat-1"] });
@@ -440,6 +473,67 @@ try {
 	const styleSource = await style.text();
 	check("样式可访问", style.status === 200 && styleSource.includes(".bench-pane"));
 	check("样式里有案头布局", styleSource.includes(".desk.is-home"));
+	// 思考过程要能收起：是 <details>，不是一块常驻的文本。
+	check(
+		"思考块是可收起的 details",
+		appSource.includes('el("details", "thinking")') && appSource.includes("thinking-head"),
+	);
+	check("思考块有折叠样式", styleSource.includes(".thinking[open]"));
+	// 素材工作台：点选已有素材，让设定官照着改那几条。
+	check("素材工作台有已选中栏", indexHtml.includes('id="material-picked"'));
+	check(
+		"选中素材会写进指令",
+		appSource.includes("withPickedMaterials") && appSource.includes("本次只改这几条已有素材"),
+	);
+	check("选中条与选中卡有样式", styleSource.includes(".picked-bar") && styleSource.includes(".card.mat.is-picked"));
+	// 一轮跑完要重载工程：新素材才会同步进素材库与生文工作台，然后才能装配。
+	const sendBody = appSource.slice(appSource.indexOf("async function sendMessage"), appSource.indexOf("async function sendMessage") + 1600);
+	check("对议跑完会重载工程以同步素材", sendBody.includes("reloadProject"));
+	// 立一章：章节是装料的落点，没有章就看不了也装不了料。
+	check("左卷有立章入口", indexHtml.includes('id="add-chapter"'));
+	check("有立章对话框", indexHtml.includes('id="chapter-dialog"') && indexHtml.includes('id="chapter-form"'));
+	check("脚本里有立章逻辑", appSource.includes("openChapterDialog") && appSource.includes('"/chapters"'));
+	check("立章入口有样式", styleSource.includes(".rail-add"));
+	// 没有章节时也要看得见料：装配区给立章按钮，库里列出全部素材、装配按钮停用。
+	check(
+		"无章节时仍列出素材",
+		appSource.includes("allMaterials") && appSource.includes('assemblyRow(material, "pool", true)'),
+	);
+	check("无章节时的提示与停用按钮有样式", styleSource.includes(".bench-hint") && styleSource.includes(".btn:disabled"));
+
+	// ---- 昼夜 ----
+	// 暗色不是反相，而是把纸压成暖黑、把墨提成月白：两套令牌都要在，
+	// 且各自独立定义纸与墨，浓淡关系才不塌。
+	check("有主题开关", indexHtml.includes('id="theme-toggle"'));
+	check("首帧前定主题（防白闪）", indexHtml.includes("novel-studio-theme") && indexHtml.indexOf("novel-studio-theme") < indexHtml.indexOf("/style.css"));
+	check("样式里有暗色主题块", styleSource.includes(':root[data-theme="dark"]'));
+	check("暗色声明了 color-scheme", styleSource.includes("color-scheme: dark"));
+	check("开关图元有样式", styleSource.includes(".theme-glyph"));
+	check("脚本里有主题切换", appSource.includes("THEME_KEY") && appSource.includes("toggleTheme"));
+	check("跟随系统偏好", appSource.includes("prefers-color-scheme: dark"));
+	// 尊重系统的「减少动态效果」
+	check("尊重减少动态效果", styleSource.includes("prefers-reduced-motion"));
+
+	// 令牌块之外不能再有硬编码颜色：漏一处，暗色下那一处就还是亮色的。
+	const lightTokens = styleSource.match(/^:root \{([\s\S]*?)^\}/m)?.[1] ?? "";
+	const darkTokens = styleSource.match(/^:root\[data-theme="dark"\] \{([\s\S]*?)^\}/m)?.[1] ?? "";
+	const outside = styleSource.split(lightTokens).join("").split(darkTokens).join("");
+	const hardcoded = outside.match(/#[0-9a-fA-F]{3,8}\b|rgba?\(/g) ?? [];
+	check("令牌块之外没有硬编码颜色", hardcoded.length === 0, hardcoded.slice(0, 4).join(" "));
+	// 引用的令牌都要有定义，否则会解析失败
+	const declared = new Set<string>([
+		...lightTokens.matchAll(/(--[a-z0-9-]+)\s*:/g),
+		...darkTokens.matchAll(/(--[a-z0-9-]+)\s*:/g),
+	].map((m) => m[1]!));
+	const undefinedTokens = [...new Set([...styleSource.matchAll(/var\(\s*(--[a-z0-9-]+)/g)].map((m) => m[1]!))]
+		.filter((name) => !declared.has(name));
+	check("引用的令牌都有定义", undefinedTokens.length === 0, undefinedTokens.join(" "));
+	// 两套主题要覆盖同一组「会变色的」令牌
+	const lightNames = new Set([...lightTokens.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1]!));
+	const darkNames = new Set([...darkTokens.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1]!));
+	const themeInvariant = new Set(["--serif", "--kai", "--sans", "--mono", "--song", "--noise", "--wash"]);
+	const uncovered = [...lightNames].filter((n) => !darkNames.has(n) && !themeInvariant.has(n));
+	check("会变色的令牌暗色都有覆盖", uncovered.length === 0, uncovered.join(" "));
 	const traversal = await fetch(base + "/../package.json");
 	check("路径遍历被挡住", traversal.status === 403 || traversal.status === 404, String(traversal.status));
 	const unknown = await req("GET", "/api/nope");
