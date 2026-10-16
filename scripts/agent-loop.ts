@@ -104,6 +104,14 @@ try {
 		"系统提示词声明素材智能体不写正文",
 		String(materialMessages[0]?.content).includes("不写正文"),
 	);
+	check(
+		"素材提示词要求 content 精减",
+		String(materialMessages[0]?.content).includes("精减是硬要求"),
+	);
+	check(
+		"素材提示词声明题材不设边界",
+		String(materialMessages[0]?.content).includes("题材不设边界"),
+	);
 
 	const materialText = materialEvents
 		.filter((e) => e.type === "message_update" && e.assistantMessageEvent.type === "text_delta")
@@ -166,6 +174,7 @@ try {
 	const systemPrompt = String(writingMessages[0]?.content);
 	check("写作提示词带出本章素材全文", systemPrompt.includes("痕迹鉴定员"), "");
 	check("写作提示词声明唯一事实来源", systemPrompt.includes("唯一"));
+	check("写作提示词声明题材不设边界", systemPrompt.includes("题材不设边界"));
 	check(
 		"写作快照注入了本章素材",
 		sentRequests.some((payload) => payload.includes("本章素材（写作依据）") && payload.includes("痕迹鉴定员")),

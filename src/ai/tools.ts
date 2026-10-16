@@ -368,14 +368,15 @@ function upsertMaterialTool(deps: NovelToolDeps): AgentTool<any> {
 			"新建或更新一条素材。素材是可复用的创作单位，不是正文。" +
 			"新建时必须给齐 kind / title / content / usage 四项；" +
 			"更新已有素材（带 id）时只给要改的字段，其余保持原样 —— 只想改内容就只传 content。" +
-			"usage 必填且要写清什么情况下该用这条素材，装配智能体靠它判断相关性。" +
+			"usage 必填且要写清什么情况下该用这条素材，装配智能体靠它判断相关性；一句说完，别解释。" +
+			"content 必须精减：只留事实、约束、边界，一行一个事实，不写散文与铺垫。" +
 			"chapterIds 传了就整体替换关联（传空表等于从所有章节摘除），不传则保持原样。",
 		parameters: Type.Object(
 			{
 				id: optionalText("已存在素材的 id；新建时留空"),
 				kind: Type.Optional(materialKindSchema),
 				title: optionalText("标题。新建必填，更新时可省"),
-				content: optionalText("素材内容，写清约束与边界。新建必填，更新时可省"),
+				content: optionalText("素材内容：只写事实、约束与边界，一行一个事实，务必精减。新建必填，更新时可省"),
 				usage: optionalText("装配提示：什么情况下该用这条素材。新建必填，更新时可省"),
 				tags: Type.Optional(stringArray("标签、别名")),
 				chapterIds: Type.Optional(stringArray("关联到的章节 id")),
