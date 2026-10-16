@@ -19,15 +19,27 @@ const API_FORMAT_HINTS = {
 	"google-generative-ai": "Google 原生 /v1beta/models，模型名会自动去掉 models/ 前缀",
 };
 
-const THINKING_LEVELS = [
-	["off", "关"],
-	["minimal", "最低"],
-	["low", "低"],
-	["medium", "中"],
-	["high", "高"],
-	["xhigh", "极高"],
-	["max", "最高"],
+/**
+ * 思考档位表 —— 设置页与工作台顶栏共用这一份。
+ *
+ * 顶栏按所选模型过滤后重建下拉，设置页则全量列出：
+ * 那里配的是「这个模型理论上支持什么」，与此刻手上这支笔无关。
+ * 文案统一用水墨一套，值与 pi-ai 的 ThinkingLevel 一一对应。
+ */
+export const THINKING_LEVELS = [
+	["off", "不思"],
+	["minimal", "微思"],
+	["low", "略思"],
+	["medium", "细思"],
+	["high", "深思"],
+	["xhigh", "极思"],
+	["max", "尽思"],
 ];
+
+/** 档位值取水墨文案；认不出的原样透出，免得静默吞掉。 */
+function levelLabel(value) {
+	return THINKING_LEVELS.find((level) => level[0] === value)?.[1] ?? value;
+}
 
 const view = {
 	data: null,
@@ -303,7 +315,7 @@ function renderBuiltinDetail(box, provider, status) {
 		tr.append(cell(model.modelId, "model-id"));
 		tr.append(cell(formatTokens(model.contextWindow)));
 		tr.append(cell(formatTokens(model.maxTokens)));
-		tr.append(cell(model.reasoning ? model.thinkingLevels.join("/") : "不支持"));
+		tr.append(cell(model.reasoning ? model.thinkingLevels.map(levelLabel).join("/") : "不支持"));
 		const actions2 = el("td");
 		const pick = el("button", "btn btn-sm", model.id === view.data.defaultModel ? "当前默认" : "设为默认");
 		pick.disabled = model.id === view.data.defaultModel;

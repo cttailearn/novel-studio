@@ -732,16 +732,25 @@ body::before {
 .chip:hover { border-color: var(--ink-4); color: var(--ink); }
 .chip.is-on { background: var(--ink-wash); border-color: var(--ink-4); color: var(--ink); }
 
-.mat-group {
+.mat-group { margin: 20px 0 0; }
+.mat-group-head {
 	display: flex;
 	align-items: baseline;
 	gap: 8px;
-	margin: 18px 0 2px;
+	margin: 0 0 9px;
 	padding-bottom: 5px;
 	border-bottom: 1px solid var(--rule-soft);
 }
-.mat-group h3 { margin: 0; font-family: var(--kai); font-size: 14px; font-weight: 600; letter-spacing: 0.1em; color: var(--ink); }
-.mat-group .count { font-size: 11px; color: var(--ink-4); }
+.mat-group-head h3 { margin: 0; font-family: var(--kai); font-size: 14px; font-weight: 600; letter-spacing: 0.1em; color: var(--ink); }
+.mat-group-head .count { font-size: 11px; color: var(--ink-4); }
+
+/* 素材库两列并排。列宽用 minmax(0,1fr)：不加 0 下限，长标题会把格子撑破。 */
+.mat-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 10px 12px;
+	align-items: start;
+}
 
 .card.mat h4 { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .card.mat h4 .kind, .mat-head .kind {
@@ -1029,6 +1038,8 @@ select { max-width: 230px; cursor: pointer; }
 	.ms { padding: 30px 20px 70px; }
 	.settings-body { grid-template-columns: minmax(0, 1fr); }
 	.settings-providers { display: none; }
+	/* 屏幕窄下来后一栏只剩两百来像素，两列并排已读不下标题与用法，退回单列。 */
+	.mat-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1179,7 +1190,7 @@ select { max-width: 230px; cursor: pointer; }
 .material-list, .assembly-list, .pool-list { display: flex; flex-direction: column; }
 .mat-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .mat-head h4 { flex: 1; min-width: 0; }
-.mat-actions, .as-actions { display: flex; gap: 4px; margin-top: 9px; flex-wrap: wrap; }
+.mat-actions { display: flex; gap: 4px; margin-top: 9px; flex-wrap: wrap; }
 
 .btn-xs { padding: 2px 9px; font-size: 11.5px; border-radius: 3px; }
 .btn-quiet.is-danger { color: var(--cinnabar); border-color: var(--cinnabar-edge); }
@@ -1187,23 +1198,6 @@ select { max-width: 230px; cursor: pointer; }
 
 .card.mat.is-compact { cursor: pointer; transition: color var(--wash); }
 .card.mat.is-compact:hover h4 { color: var(--cinnabar); }
-
-.as-row { padding: 10px 0; border-bottom: 1px solid var(--rule-soft); }
-.as-row:last-child { border-bottom: 0; }
-.as-row.is-pool .as-title { color: var(--ink-3); }
-.as-head { display: flex; align-items: baseline; gap: 8px; }
-.as-title { flex: 1; min-width: 0; font-family: var(--serif); font-size: 13.5px; color: var(--ink); }
-.as-usage { margin-top: 3px; font-size: 11.5px; line-height: 1.7; color: var(--ink-3); }
-.as-body {
-	margin-top: 7px;
-	padding-left: 10px;
-	border-left: 1px solid var(--rule);
-	font-family: var(--song);
-	font-size: 12.5px;
-	line-height: 1.85;
-	color: var(--ink-2);
-	white-space: pre-wrap;
-}
 
 .write-actions {
 	display: flex;
@@ -1409,6 +1403,36 @@ select { max-width: 230px; cursor: pointer; }
 /* 这张表单短，不用撑满，但仍沿用三段式骨架 */
 .sheet-form.promote { width: min(520px, 92vw); height: auto; max-height: min(660px, 88vh); }
 
+/*
+ * 只读弹层：读素材全文用。
+ * 高度自适应而不是撑满，短素材不必开一张空荡荡的大纸。
+ */
+.sheet-read {
+	width: min(720px, 92vw);
+	height: auto;
+	max-height: min(760px, 86vh);
+}
+.sheet-read .form-body { padding: 0 30px 26px; overflow: auto; }
+.sheet-read .form-head { padding: 26px 30px 14px; }
+.sheet-read .view-usage {
+	margin: 0 0 16px;
+	padding: 10px 12px;
+	font-size: 12.5px;
+	line-height: 1.8;
+	color: var(--ink-3);
+	background: var(--ink-wash);
+	border-left: 2px solid var(--cinnabar-edge);
+	border-radius: 2px;
+}
+.sheet-read .view-body {
+	font-family: var(--song);
+	font-size: 14.5px;
+	line-height: 2.05;
+	color: var(--ink-2);
+	white-space: pre-wrap;
+}
+.sheet-read .form-foot { padding: 0 30px 22px; justify-content: flex-end; }
+
 .promote-modes { margin-top: 4px; }
 .promote-group { display: flex; flex-direction: column; gap: 2px; }
 .promote-option {
@@ -1571,7 +1595,6 @@ select { max-width: 230px; cursor: pointer; }
 .btn,
 .chip,
 .card.mat,
-.as-row {
 	transition: background var(--wash), border-color var(--wash), color var(--wash), box-shadow var(--wash), transform var(--wash);
 }
 
@@ -1580,6 +1603,72 @@ select { max-width: 230px; cursor: pointer; }
 .card.mat:hover {
 	box-shadow: 0 2px 10px var(--shadow);
 }
+
+/* 工作台里的素材卡整张可点可拖，悬停时再明确一点：抬起、描朱砂边、显动作条 */
+.card.mat.is-peek {
+	cursor: pointer;
+	position: relative;
+}
+.card.mat.is-peek:hover {
+	transform: translateY(-2px);
+	box-shadow: 0 4px 16px var(--shadow);
+	border-color: var(--cinnabar-edge);
+}
+.card.mat.is-peek:hover h4 { color: var(--cinnabar); }
+
+/*
+ * 动作条平时不占位，悬停或键盘焦点落在卡内时才显出来。
+ * 两列并排时半宽卡片塞六个按钮会撑成三行，把网格拉得参差；
+ * 收起来后卡片只剩标题、用法与元信息，行高才齐。
+ */
+.card.mat.is-peek .mat-actions {
+	max-height: 0;
+	margin-top: 0;
+	overflow: hidden;
+	opacity: 0;
+	transition: max-height var(--wash), margin-top var(--wash), opacity var(--wash);
+}
+.card.mat.is-peek:hover .mat-actions,
+.card.mat.is-peek:focus-within .mat-actions {
+	max-height: 80px;
+	margin-top: 9px;
+	opacity: 1;
+}
+
+/* 拖起来的那张淡下去，让落点更清楚 */
+.card.mat.is-dragging {
+	opacity: 0.45;
+	transform: none;
+}
+
+/* 落区：拖到设定官那一栏时整栏描边，并压一句提示 */
+/* 拖放落区：设定官整栏、执笔者的输入框，两处同一套观感 */
+#material-drop,
+#writing-composer { position: relative; }
+
+#material-drop.is-over,
+#writing-composer.is-over {
+	outline: 2px dashed var(--cinnabar-edge);
+	outline-offset: -6px;
+	background: var(--cinnabar-wash);
+}
+
+.drop-hint {
+	position: absolute;
+	top: 8px;
+	left: 0;
+	right: 0;
+	margin: 0;
+	text-align: center;
+	font-family: var(--kai);
+	font-size: 13px;
+	letter-spacing: 0.12em;
+	color: var(--cinnabar);
+	pointer-events: none;
+	z-index: 3;
+}
+/* 设定官那栏的提示压在栏头下方，别和标题挤在一起 */
+#material-drop > .drop-hint { top: 46px; }
 
 /* 键盘走到哪，得看得见 */
 .theme-toggle:focus-visible,

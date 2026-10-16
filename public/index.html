@@ -42,12 +42,7 @@
 
 				<div class="beam-controls">
 					<select id="model-select" title="模型"></select>
-					<select id="thinking-select" title="推理档位">
-						<option value="off">不思</option>
-						<option value="low">略思</option>
-						<option value="medium">细思</option>
-						<option value="high">深思</option>
-					</select>
+					<select id="thinking-select" title="推理档位"></select>
 					<button id="theme-toggle" class="btn btn-quiet theme-toggle" title="切换昼夜" aria-label="切换昼夜">
 						<span class="theme-glyph" aria-hidden="true"></span>
 					</button>
@@ -140,7 +135,8 @@
 							<div id="material-list" class="material-list"></div>
 						</div>
 
-						<div class="bench-pane bench-talk">
+					<div class="bench-pane bench-talk" id="material-drop">
+						<p class="drop-hint hidden">松手即呈给设定官</p>
 							<header class="pane-head">
 								<h3>设定官</h3>
 								<span class="pane-note">产素材，不写正文</span>
@@ -187,6 +183,7 @@
 							</header>
 							<div id="writing-stream" class="stream"></div>
 							<form id="writing-composer" class="composer">
+							<p class="drop-hint hidden"></p>
 								<textarea
 									id="writing-input"
 									rows="3"
@@ -315,6 +312,21 @@
 					</div>
 				</footer>
 			</form>
+		</dialog>
+
+		<!-- 只读看全文：与上面的编辑表单分开，点开一条时不必面对一堆空字段。 -->
+		<dialog id="material-view" class="sheet sheet-wide sheet-read">
+			<header class="form-head">
+				<h3 id="material-view-title"></h3>
+				<p id="material-view-meta" class="form-hint"></p>
+			</header>
+			<div class="form-body">
+				<p id="material-view-usage" class="view-usage hidden"></p>
+				<div id="material-view-body" class="view-body"></div>
+			</div>
+			<footer class="form-foot">
+				<button type="button" class="btn btn-quiet" id="material-view-close">合上</button>
+			</footer>
 		</dialog>
 
 		<!-- 素材录入 / 修改。上传的原料与库里已有素材共用这一张表单。 -->

@@ -11,7 +11,7 @@
 // 界面上的分工就是后端工具边界的投影 —— 设定官没有写正文的工具，
 // 执笔者也没有改素材的工具，所以这里不需要靠提示词去防串岗。
 
-import { bindSettings } from "./settings.js";
+import { bindSettings, THINKING_LEVELS } from "./settings.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -39,6 +39,8 @@ const PANES = {
 
 const state = {
 	projects: [],
+	/** 可用模型目录，档位过滤靠它判断当前这支笔支持什么。 */
+	models: [],
 	projectId: null,
 	project: null,
 	stats: null,
@@ -84,6 +86,9 @@ const state = {
 
 /** 素材表单的落点：新建（可能来自某条上传）还是改已有的。 */
 let materialForm = { scope: "project", mode: "create", uploadId: null, materialId: null, libraryId: null };
+
+/** 正在被拖的素材 id。dragover 时读不到 dataTransfer，落区提示只能靠它。 */
+let draggingMaterialId = null;
 
 const kindLabel = (kind) => MATERIAL_KIND_LABELS[kind] || kind;
 const fmtNum = (n) => n.toLocaleString("zh-CN");
@@ -203,8 +208,9 @@ async function bootstrap() {
 	const [data, library] = await Promise.all([api("/api/bootstrap"), api("/api/library")]);
 	state.projects = data.projects;
 	state.library = library.materials ?? [];
+	state.models = data.models;
 	renderModels(data.models, data.defaultModel);
-	$("thinking-select").value = data.defaultThinkingLevel || "off";
+	renderThinkingLevels(data.defaultThinkingLevel);
 
 	// 没有作品就没有写作台可言，直接落在案头。
 	if (state.projects.length === 0) {
@@ -238,6 +244,32 @@ function renderEmptyStage() {
 	wrap.append(el("p", "", "回「案头」立一部新书，或先到设置里备好笔墨。"));
 	box.append(wrap);
 	$("stage-actions").replaceChildren();
+}
+
+/**
+ * 按当前所选模型重建推理档位下拉。
+ *
+ * 只列这支笔真支持的档位：模型不思考时只有「不思」，
+ * 选一个上游不认的档位，请求会带着它白发出去。
+ * 原来的选择若仍被支持就留着，否则退回第一个（必然是「不思」）。
+ */
+function renderThinkingLevels(preferred) {
+	const select = $("thinking-select");
+	const model = state.models.find((item) => item.id === $("model-select").value);
+	const supported = new Set(model?.thinkingLevels ?? ["off"]);
+	let next = preferred ?? select.value;
+	select.replaceChildren();
+	for (const [value, label] of THINKING_LEVELS) {
+		if (!supported.has(value)) continue;
+		const option = el("option", "", label);
+		option.value = value;
+		select.append(option);
+	}
+	select.disabled = select.options.length === 0;
+	if (![...select.options].some((option) => option.value === next)) {
+		next = select.options[0]?.value ?? "off";
+	}
+	select.value = next;
 }
 
 function renderModels(models, defaultModel) {
@@ -947,16 +979,27 @@ function renderMaterialsBench() {
 		groups.get(material.kind).push(material);
 	}
 	for (const [kind, materials] of groups) {
-		const head = el("div", "mat-group");
+		const group = el("div", "mat-group");
+		const head = el("div", "mat-group-head");
 		head.append(el("h3", "", kindLabel(kind)));
 		head.append(el("span", "count", materials.length + " 条"));
-		list.append(head);
-		for (const material of materials) list.append(materialCard(material));
+		group.append(head);
+		// 组内单独一个 grid：分组标题是整行的，卡片才两列并排。
+		const grid = el("div", "mat-grid");
+		for (const material of materials) grid.append(materialCard(material));
+		group.append(grid);
+		list.append(group);
 	}
 }
 
-/** 素材卡。紧凑模式下收起动作，点一下即可修改。 */
-function materialCard(material, options = {}) {
+/**
+ * 素材卡的公共外壳：标题、种类、用法。
+ *
+ * 素材库与生文工作台的两处列表共用它。同一份素材在两处长得不一样，
+ * 作者每换个工作台就得重新认一遍哪张卡是干什么的。
+ * 元信息单独一个函数，因为右案的紧凑列表要把它排在行内展开的正文之后。
+ */
+function materialCardShell(material) {
 	const card = el("div", "card mat");
 	if (state.pickedMaterials.has(material.id)) card.classList.add("is-picked");
 	const head = el("div", "mat-head");
@@ -964,12 +1007,12 @@ function materialCard(material, options = {}) {
 	head.append(el("span", "kind", kindLabel(material.kind)));
 	if (material.status === "confirmed") head.append(el("span", "ok", "已确认"));
 	card.append(head);
-
 	if (material.usage) card.append(el("div", "usage", "用于：" + material.usage));
+	return card;
+}
 
-	const open = state.openMaterials.has(material.id);
-	if (open && material.content) card.append(el("div", "mat-body", material.content));
-
+/** 标签、装入情况、来源、字数 —— 一行小字。 */
+function appendMaterialMeta(card, material) {
 	const meta = [];
 	if (material.tags.length) meta.push("标签：" + material.tags.join("、"));
 	const names = material.chapterIds.map(chapterTitleOf).filter(Boolean);
@@ -979,15 +1022,43 @@ function materialCard(material, options = {}) {
 	meta.push(material.originId ? sourceLabel + " · 已入素材库" : sourceLabel);
 	if (material.content) meta.push(fmt(countWords(material.content)) + " 字");
 	card.append(el("div", "tagline", meta.join(" · ")));
+}
+
+/**
+ * 让一张素材卡可点、可拖。
+ *
+ * 动作条由调用方拼好传进来：两处列表能做的事不同（库里有六件，装配只有摘除与装入）。
+ * 但「点开看全文」和「拖给智能体」是两处都该有的，所以收在这里，免得各写一遍走样。
+ */
+function makePeekable(card, material, actions, dropHint) {
+	card.classList.add("is-peek");
+	card.title = "点开看全文；" + dropHint;
+	card.addEventListener("click", () => openMaterialView(material));
+	makeDraggable(card, material);
+	// 动作在卡内，别让点按钮顺手把卡也点开了。
+	actions.addEventListener("click", (event) => event.stopPropagation());
+	card.append(actions);
+	return card;
+}
+
+/** 素材卡。紧凑模式下收起动作，点一下即可修改。 */
+function materialCard(material, options = {}) {
+	const card = materialCardShell(material);
+	const open = state.openMaterials.has(material.id);
 
 	if (options.compact) {
+		// 右案的窄栏仍是行内展开，正文排在元信息之前。
+		if (open && material.content) card.append(el("div", "mat-body", material.content));
+		appendMaterialMeta(card, material);
 		card.classList.add("is-compact");
 		card.addEventListener("click", () => openMaterialDialog({ mode: "edit", material }));
 		return card;
 	}
 
+	appendMaterialMeta(card, material);
+
 	const actions = el("div", "mat-actions");
-	actions.append(button(open ? "收起" : "看全文", "btn btn-quiet btn-xs", () => toggleMaterial(material.id)));
+	actions.append(button("看全文", "btn btn-quiet btn-xs", () => openMaterialView(material)));
 
 	if (state.chapterId) {
 		const chapter = state.project.outline.find((item) => item.id === state.chapterId);
@@ -1017,8 +1088,76 @@ function materialCard(material, options = {}) {
 			void deleteMaterial(material),
 		),
 	);
-	card.append(actions);
-	return card;
+	return makePeekable(card, material, actions, "拖到右侧「设定官」即算呈给它");
+}
+
+/**
+ * 只读地看素材全文。
+ *
+ * 与编辑表单分开：看是看，改是改。作者在两列卡片里点开一条时只想读一遍，
+ * 不该被扔进一张要填满标题、usage、正文的表单里。
+ */
+function openMaterialView(material) {
+	$("material-view-title").textContent = material.title;
+	$("material-view-meta").textContent =
+		[kindLabel(material.kind), material.status === "confirmed" ? "已确认" : "草稿", fmt(countWords(material.content)) + " 字"]
+			.filter(Boolean)
+			.join(" · ");
+	$("material-view-usage").textContent = material.usage ? "用于：" + material.usage : "";
+	$("material-view-usage").classList.toggle("hidden", !material.usage);
+	$("material-view-body").textContent = material.content || "（此条尚无正文）";
+	$("material-view").showModal();
+}
+
+/**
+ * 让素材卡可以拖给设定官。
+ *
+ * 走 HTML5 拖放，不引依赖。dragover 必须 preventDefault，否则不会触发 drop。
+ * 自定义类型 "text/x-material" 优先于 text/plain：拖到别的编辑器上别把内部 id 当文本贴出去。
+ */
+function makeDraggable(card, material) {
+	card.draggable = true;
+	card.addEventListener("dragstart", (event) => {
+		event.dataTransfer.effectAllowed = "copy";
+		event.dataTransfer.setData("text/x-material", material.id);
+		event.dataTransfer.setData("text/plain", material.title);
+		card.classList.add("is-dragging");
+		// dragover 读不到 dataTransfer 的内容（浏览器只在 drop 时才给），
+		// 而落区的提示要说清「这条料会不会顺手装进本章」，所以自己记一笔。
+		draggingMaterialId = material.id;
+	});
+	card.addEventListener("dragend", () => {
+		card.classList.remove("is-dragging");
+		draggingMaterialId = null;
+	});
+}
+
+/** 把拖过来的素材收进「已选中」，与点「选中修改」同一条路。 */
+function dropMaterial(id) {
+	if (!materialById(id)) return;
+	state.pickedMaterials.add(id);
+	renderView();
+}
+
+/**
+ * 拖到执笔者的输入框：先确保本章装上了这条料，再把书名号里的标题写进交代。
+ *
+ * 两步缺一不可 —— 执笔者只拿到本章装配的素材，光把标题写进交代，
+ * 它是看不见这条料的内容的，那样「拖给模型」就是个空动作。
+ */
+async function dropMaterialToComposer(id) {
+	const material = materialById(id);
+	if (!material) return;
+	const chapter = state.project?.outline.find((item) => item.id === state.chapterId);
+	if (chapter && !chapter.materialIds.includes(id)) await assemble([id], []);
+	const input = $("writing-input");
+	const reference = "《" + material.title + "》";
+	const start = input.selectionStart ?? input.value.length;
+	const end = input.selectionEnd ?? start;
+	input.value = input.value.slice(0, start) + reference + input.value.slice(end);
+	const caret = start + reference.length;
+	input.setSelectionRange(caret, caret);
+	input.focus();
 }
 
 function toggleMaterial(id) {
@@ -1349,7 +1488,7 @@ function renderWritingBench() {
 			poolBox.append(el("div", "bench-empty", "素材库是空的。到「料」上传资料或让设定官备料。"));
 		} else {
 			poolBox.append(el("div", "bench-hint", "先立一章，才能把料装进去。"));
-			for (const material of allMaterials) poolBox.append(assemblyRow(material, "pool", true));
+			poolBox.append(materialGrid(allMaterials, "pool", true));
 		}
 		return;
 	}
@@ -1365,7 +1504,7 @@ function renderWritingBench() {
 	if (assembled.length === 0) {
 		assemblyBox.append(el("div", "bench-empty", "本章还没装料。正文由素材组装而成 —— 先从下面挑几条。"));
 	} else {
-		for (const material of assembled) assemblyBox.append(assemblyRow(material, "assembled"));
+		assemblyBox.append(materialGrid(assembled, "assembled"));
 	}
 
 	const modeSelect = document.createElement("select");
@@ -1407,25 +1546,25 @@ function renderWritingBench() {
 			),
 		);
 	} else {
-		for (const material of pool) poolBox.append(assemblyRow(material, "pool"));
+		poolBox.append(materialGrid(pool, "pool"));
 	}
 }
 
-function assemblyRow(material, variant, locked = false) {
-	const row = el("div", "as-row" + (variant === "pool" ? " is-pool" : ""));
-	const head = el("div", "as-head");
-	head.append(el("span", "kind", kindLabel(material.kind)));
-	head.append(el("span", "as-title", material.title));
-	row.append(head);
-	if (material.usage) row.append(el("div", "as-usage", material.usage));
+/**
+ * 生文工作台里的素材卡：与素材库同一套外壳，只是能做的事不同。
+ *
+ * assembled 是本章已装的，只能摘除；pool 是库中还没装的，可以装入。
+ * locked 指还没有章节 —— 料看得见，但没地方装。
+ */
+function assemblyCard(material, variant, locked = false) {
+	const card = materialCardShell(material);
+	appendMaterialMeta(card, material);
 
-	const open = state.openMaterials.has(material.id);
-	const actions = el("div", "as-actions");
-	actions.append(button(open ? "收起" : "看全文", "btn btn-quiet btn-xs", () => toggleMaterial(material.id)));
+	const actions = el("div", "mat-actions");
+	actions.append(button("看全文", "btn btn-quiet btn-xs", () => openMaterialView(material)));
 	if (variant === "assembled") {
 		actions.append(button("摘除", "btn btn-quiet btn-xs", () => void assemble([], [material.id])));
 	} else if (locked) {
-		// 还没有章节：料看得见，但没地方装。按钮停用，指向「立一章」。
 		const btn = button("装入本章", "btn btn-quiet btn-xs", () => {});
 		btn.disabled = true;
 		btn.title = "先立一章，才有落点";
@@ -1433,9 +1572,14 @@ function assemblyRow(material, variant, locked = false) {
 	} else {
 		actions.append(button("装入本章", "btn btn-quiet btn-xs", () => void assemble([material.id], [])));
 	}
-	row.append(actions);
-	if (open) row.append(el("div", "as-body", material.content));
-	return row;
+	return makePeekable(card, material, actions, "拖到右侧「执笔者」的输入框即装入本章");
+}
+
+/** 一组装配卡，两列并排 —— 与素材库同一套网格。 */
+function materialGrid(materials, variant, locked = false) {
+	const grid = el("div", "mat-grid");
+	for (const material of materials) grid.append(assemblyCard(material, variant, locked));
+	return grid;
 }
 
 /** 立一章的对话框。 */
@@ -1989,7 +2133,8 @@ zone.addEventListener("drop", (event) => {
 });
 
 $("model-select").addEventListener("change", () => {
-	// 已建的会话同步换笔，历史留着。
+	// 换笔即换档位范围：先按新模型收窄，再把收窄后的值发给会话。
+	renderThinkingLevels();
 	for (const sessionId of state.sessions.values()) {
 		fetch("/api/sessions/" + sessionId + "/model", {
 			method: "POST",
@@ -2003,10 +2148,80 @@ window.addEventListener("settings-changed", async () => {
 	const data = await api("/api/bootstrap").catch(() => null);
 	if (!data) return;
 	const previous = $("model-select").value;
+	const level = $("thinking-select").value;
+	state.models = data.models;
 	renderModels(data.models, data.defaultModel);
 	if (data.models.some((model) => model.id === previous)) $("model-select").value = previous;
+	// 档位能力可能刚被改过（比如给模型勾上了思考），按新能力重列。
+	renderThinkingLevels(level);
 });
 
+$("material-view-close").addEventListener("click", () => $("material-view").close());
+
+/**
+ * 设定官那一栏是拖放落区。
+ *
+ * dragover 必须 preventDefault —— 不阻止默认行为，浏览器不会派发 drop。
+ * dragleave 要判 relatedTarget：指针从卡片移到栏内子元素时也会触发 leave，
+ * 不判就会让高亮闪烁。
+ */
+const dropZone = $("material-drop");
+dropZone.addEventListener("dragover", (event) => {
+	if (!event.dataTransfer.types.includes("text/x-material")) return;
+	event.preventDefault();
+	event.dataTransfer.dropEffect = "copy";
+	dropZone.classList.add("is-over");
+	dropZone.querySelector(".drop-hint").classList.remove("hidden");
+});
+dropZone.addEventListener("dragleave", (event) => {
+	if (dropZone.contains(event.relatedTarget)) return;
+	dropZone.classList.remove("is-over");
+	dropZone.querySelector(".drop-hint").classList.add("hidden");
+});
+dropZone.addEventListener("drop", (event) => {
+	event.preventDefault();
+	dropZone.classList.remove("is-over");
+	dropZone.querySelector(".drop-hint").classList.add("hidden");
+	const id = event.dataTransfer.getData("text/x-material");
+	if (id) dropMaterial(id);
+});
+
+
+/**
+ * 执笔者的输入框也是落区：拖过来的料先装入本章，再把标题写进交代。
+ *
+ * 与设定官那栏的区别在于落点：那边落在整栏上，只做「选中」；
+ * 这边落在输入框上，所以要连带把料装进本章，否则执笔者看不见它。
+ */
+const composerZone = $("writing-composer");
+const composerHint = composerZone.querySelector(".drop-hint");
+composerZone.addEventListener("dragover", (event) => {
+	if (!event.dataTransfer.types.includes("text/x-material")) return;
+	event.preventDefault();
+	event.dataTransfer.dropEffect = "copy";
+	composerZone.classList.add("is-over");
+	// 三种后果各说各的：没有章节时装不成，别让提示许一个做不到的承诺。
+	const chapter = state.project?.outline.find((item) => item.id === state.chapterId);
+	const already = chapter && draggingMaterialId ? chapter.materialIds.includes(draggingMaterialId) : false;
+	composerHint.textContent = !chapter
+		? "松手即写进交代；先立一章才装得进料"
+		: already
+			? "松手即写进交代"
+			: "松手即装入本章，并写进交代";
+	composerHint.classList.remove("hidden");
+});
+composerZone.addEventListener("dragleave", (event) => {
+	if (composerZone.contains(event.relatedTarget)) return;
+	composerZone.classList.remove("is-over");
+	composerHint.classList.add("hidden");
+});
+composerZone.addEventListener("drop", (event) => {
+	event.preventDefault();
+	composerZone.classList.remove("is-over");
+	composerHint.classList.add("hidden");
+	const id = event.dataTransfer.getData("text/x-material");
+	if (id) void dropMaterialToComposer(id);
+});
 bindSettings();
 bootstrap().catch((error) => {
 	const box = $("view-manuscript");

@@ -497,7 +497,7 @@ try {
 	// 没有章节时也要看得见料：装配区给立章按钮，库里列出全部素材、装配按钮停用。
 	check(
 		"无章节时仍列出素材",
-		appSource.includes("allMaterials") && appSource.includes('assemblyRow(material, "pool", true)'),
+		appSource.includes("allMaterials") && appSource.includes('materialGrid(allMaterials, "pool", true)'),
 	);
 	check("无章节时的提示与停用按钮有样式", styleSource.includes(".bench-hint") && styleSource.includes(".btn:disabled"));
 
