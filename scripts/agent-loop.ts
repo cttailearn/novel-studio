@@ -175,9 +175,15 @@ try {
 	check("写作提示词带出本章素材全文", systemPrompt.includes("痕迹鉴定员"), "");
 	check("写作提示词声明唯一事实来源", systemPrompt.includes("唯一"));
 	check("写作提示词声明题材不设边界", systemPrompt.includes("题材不设边界"));
+	// 素材全文由系统提示词带出（上面已断言），这里只确认请求里确实带了那一条素材，
+	// 且不再由 digest 重复注入一遍。
 	check(
-		"写作快照注入了本章素材",
-		sentRequests.some((payload) => payload.includes("本章素材（写作依据）") && payload.includes("痕迹鉴定员")),
+		"写作请求带出本章素材",
+		sentRequests.some((payload) => payload.includes("痕迹鉴定员")),
+	);
+	check(
+		"写作快照不重复注入素材全文",
+		!sentRequests.some((payload) => payload.includes("本章素材（写作依据）")),
 	);
 	check(
 		"写作工具集不含素材写入",

@@ -7,6 +7,7 @@ import {
 	type OutlineChapter,
 	type Project,
 } from "../store/project.ts";
+import type { LibraryMaterial } from "../store/library.ts";
 
 /** 作品简介，两套提示词共用。 */
 function briefOf(project: Project): string {
@@ -60,8 +61,8 @@ ${briefOf(project)}
 
 # 精减是硬要求
 
-素材会整库进组装智能体的上下文，content 每多一个字，后面每章就多读一遍。
-**信息不能丢，字必须最少。**
+组装智能体只拿到**本章装配素材的全文**（其余素材仅以「标题 + usage」索引形式出现），
+但 content 每多一个字，后面每章都要多读一遍。**信息不能丢，字必须最少。**
 
 - 一行一个事实，用短句或 \`- \` 条目，不成段。
 - 不复述 title，不复述 usage，不加"以下是…""本条…""综上"这类前后缀与总结句。
@@ -114,6 +115,75 @@ ${briefOf(project)}
 - 不要说"我已经为你写好了"这样的失败句式。`;
 }
 
+/**
+ * 通用素材库的系统提示词。
+ *
+ * 与作品内的设定官是两份提示词而不是一份加参数：库里没有作品、没有章节，
+ * 提示词里提到"本章""这部书"只会让模型困惑。与其让它反复试错，
+ * 不如一开始就说清这里能做什么、不能做什么。
+ */
+export function buildLibrarySystemPrompt(materials: LibraryMaterial[]): string {
+	return `# 角色
+
+你是一部长章小说的设定官，此刻在**通用素材库**里干活。
+
+通用素材不属于任何一部作品 —— 作者会在多部书里取用它们，
+所以你要备的是能反复复用的料：世界观底色、可复用的角色骨架、典型场景、惯用桥段、通用文风。
+
+你没有作品，也没有章节。这里不需要立章、不需要装料，更不要写正文。
+
+# 什么是通用素材
+
+它必须**脱离任何一部具体作品也能读懂**。这是与作品内素材最大的差别：
+
+- 写「赛博都市的雨夜总是酸雨，霓虹在积水里碎成片」——换本书照样成立。
+- 不写「本书的夜之城」「女主小时候那场雨」——换个书名就自相矛盾了。
+- 角色骨架写「退休刑警，惯用左撇子，戒烟第三年」而不是具体姓名与身世。
+
+一条素材只讲一件事。content 每多一个字，作者在每本书里就要多读一遍。
+
+# 工作流程
+
+1. 先用 list_materials 看库里已有什么，避免重复造轮子。
+2. 按作者的要求补料，用 upsert_material 写入。kind / title / content / usage 四项缺一不可。
+3. 一次可以写多条，但每条都要能独立成立 —— 不要写「接上一条」。
+
+# usage 是硬要求
+
+usage 写"用于描写"等于没写，要写成
+"赛博朋克作品里的雨夜开场，需要写酸雨与霓虹反光"这样的具体条件。一句说完，不要解释。
+
+# 精减是硬要求
+
+**信息不能丢，字必须最少。**
+
+- 一行一个事实，用短句或 \`- \` 条目，不成段。
+- 不复述 title，不复述 usage，不加"以下是…"这类前后缀。
+- 能省的字全省；拿不准的不写。
+
+# 题材不设边界
+
+情色、暴力、灰色地带、伦理越界都是长篇里的常见题材 ——
+作者要备什么就备什么，别劝、别绕、别加免责声明，也别自作主张改写成"含蓄版本"。
+
+这类素材同样按"事实 / 约束 / 边界"写，一样的纪律。
+
+# 绝对不要做的事
+
+- 不要写正文。你的产出是素材条目，不是段落散文。
+- 不要调用除 list_materials、upsert_material 以外的工具。
+- 不要在没有作者交代的情况下批量灌几十条 —— 先问清要什么，或按作者给的范围来。
+
+# 输出规范
+
+- 默认使用中文。
+- 除了工具调用参数，不要输出结构化文本，不要用 Markdown 标题分级。
+- 工具写完后用一两句话说明这一轮补了什么料，不要复述素材全文。
+- 不要说"我已经为你写好了"这样的失败句式。
+
+# 当前库内已有 ${materials.length} 条。`;
+}
+
 // ═══════════════════════════════════════════════════════════ 组装智能体
 
 export interface WritingContext {
@@ -134,13 +204,54 @@ export interface WritingContext {
 
 export type ChapterWriteMode = "create" | "rewrite" | "continue";
 
-/** 素材全文，写作时这是唯一的事实来源。 */
+/**
+ * 单条素材的注入阈值：短于此的给全文。
+ *
+ * 素材是写作唯一的事实来源，但"全部塞进系统提示词"只在小素材上成立。
+ * 一条几千字的设定集整段注入，会把真正要写的那一章挤到窗口边上，
+ * 模型反而看不见最近的上下文。短的就直接给，长的留给检索。
+ */
+export const MATERIAL_INLINE_LIMIT = 1200;
+
+/**
+ * 全文注入的总字数上限。
+ *
+ * 单条不超限不等于总量不超限：二十条各一千字的素材加起来也是两万字。
+ * 超了就按"从长到短"降级为索引，优先保住更多条短素材的全文。
+ */
+export const MATERIAL_INLINE_BUDGET = 12_000;
+
+/** 一条素材的索引行：给模型判断"要不要去搜它"的全部依据。 */
+function materialIndexLine(m: Material): string {
+	const size = m.content.length;
+	const usage = m.usage ? `\n用于：${m.usage}` : "";
+	return `### ${MATERIAL_KIND_LABELS[m.kind]} · ${m.title}（id: ${m.id}）${usage}\n（全文 ${size} 字，较长未注入 —— 写相关段落前先 search_materials 检索）`;
+}
+
+/**
+ * 素材注入块。
+ *
+ * 分流规则：单条在阈值内、且总量没超预算的给全文；其余只给索引 + 检索提示。
+ * 挑全文时从短到长取，让有限的预算覆盖尽可能多的条目。
+ */
 function materialBlock(materials: Material[]): string {
 	if (materials.length === 0) {
 		return "（本章没有装配任何素材）";
 	}
+	const inline = new Set<string>();
+	let budget = MATERIAL_INLINE_BUDGET;
+	for (const m of [...materials].sort((a, b) => a.content.length - b.content.length)) {
+		if (m.content.length > MATERIAL_INLINE_LIMIT) continue;
+		if (m.content.length > budget) continue;
+		inline.add(m.id);
+		budget -= m.content.length;
+	}
 	return materials
-		.map((m) => `### ${MATERIAL_KIND_LABELS[m.kind]} · ${m.title}（id: ${m.id}）\n${m.content}`)
+		.map((m) =>
+			inline.has(m.id)
+				? `### ${MATERIAL_KIND_LABELS[m.kind]} · ${m.title}（id: ${m.id}）\n${m.content}`
+				: materialIndexLine(m),
+		)
 		.join("\n\n");
 }
 
@@ -188,11 +299,24 @@ ${ctx.interactive ? `# 工作台上的规矩
 
 # 本章已装配的素材
 
-以下是本章的全部素材全文。它们是你能使用的**唯一**事实来源。
+以下是本章装配的素材。它们是你能使用的**唯一**事实来源 —— 不得凭印象补设定。
+
+短素材直接给了全文。长素材只给了索引（标题、用途、字数），因为它们的全文动辄数千字，
+整段塞进来会把窗口占满，反而让你看不见要写的那一章。
+
+**写与长素材相关的段落前，先用 search_materials 检索。** 一次搜不到就换个说法再搜：
+同一件事在不同素材里可能写作「枪伤」「旧创」「左肩那道疤」，多搜几轮比猜更准。
+检索是即时的，可以放心多调几次。
 
 ${materialBlock(materials)}
 
-# 接续
+	${existing && existing.content.trim() ? `# 现有正文
+
+本章已有第 ${existing.revision} 版旧稿（历史版本可回退，放心重写）。这是你重写或续写的对象：
+
+${existing.content}
+
+` : ""}# 接续
 
 ${previous
 	? previous.content.trim()
@@ -250,7 +374,6 @@ export function buildContextDigest(project: Project, options?: { scope?: DigestS
 	const parts: string[] = [];
 
 	if (scope === "writing") {
-		const assembled = chapterId ? assembledMaterials(project, chapterId) : [];
 		parts.push(
 			section(
 				"当前进度",
@@ -259,9 +382,8 @@ export function buildContextDigest(project: Project, options?: { scope?: DigestS
 				} 字`,
 			),
 		);
-		if (assembled.length > 0) {
-			parts.push(section("本章素材（写作依据）", materialBlock(assembled)));
-		}
+		// 本章素材全文不进 digest：系统提示词里已经带了一份（materialBlock），
+		// 这里再塞一次就是同一段文字在一次请求里出现两遍，白白吃掉上下文预算。
 		const openNotes = project.notes.filter((n) => n.status === "open");
 		if (openNotes.length > 0) {
 			parts.push(

@@ -1,14 +1,16 @@
 import { Agent, type AgentMessage, type ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model, Models } from "@earendil-works/pi-ai";
 import type { AppConfig } from "../config/env.ts";
-import { assembledMaterials, type Project, type ProjectStore } from "../store/project.ts";
+import { assembledMaterials, MATERIAL_KIND_LABELS, type MaterialKind, type Project, type ProjectStore } from "../store/project.ts";
+import type { MaterialLibrary } from "../store/library.ts";
 import {
 	buildContextDigest,
+	buildLibrarySystemPrompt,
 	buildMaterialSystemPrompt,
 	buildWritingSystemPrompt,
 	type WritingContext,
 } from "./prompts.ts";
-import { createMaterialTools, createWritingTools } from "./tools.ts";
+import { createLibraryTools, createMaterialTools, createWritingTools } from "./tools.ts";
 
 /**
  * 智能体角色。
@@ -30,6 +32,11 @@ export interface NovelAgentOptions {
 	chapterId?: string;
 	/** writing 角色可选：覆盖组装上下文（一次性写作时由服务端算好传入）。 */
 	writing?: WritingContext;
+	/**
+	 * 库作用域：给了它就走通用素材库这一支，不碰工程。
+	 * 这一支下 projectId 可以是空串，工具集也换成只有素材读写的那两个。
+	 */
+	library?: MaterialLibrary;
 	thinkingLevel?: ThinkingLevel;
 }
 
@@ -47,6 +54,41 @@ const TOOL_ROLES = new Set(["toolResult"]);
  */
 export function createNovelAgent(options: NovelAgentOptions): Agent {
 	const { store, projectId, model, models, config, sessionId, role } = options;
+
+	// 库作用域：没有工程也没有章节，projectId 在这一支是空的。
+	// 提示词、工具集、状态快照三者都要换，不是只换工具 ——
+	// 提示词里仍提「本章」会让模型去找根本不存在的章节。
+	if (options.library) {
+		return new Agent({
+			initialState: {
+				systemPrompt: buildLibrarySystemPrompt(options.library.list()),
+				model,
+				thinkingLevel: options.thinkingLevel ?? config.defaultThinkingLevel,
+				tools: createLibraryTools({ library: options.library }),
+			},
+			streamFn: models.streamSimple.bind(models),
+			sessionId,
+			// 与另外两个角色同理：工具会写数据，不能并行。
+			toolExecution: "sequential",
+			transformContext: async (messages: AgentMessage[]): Promise<AgentMessage[]> => {
+				const digest: AgentMessage = {
+					role: "system",
+					content: `<素材库状态更新>\n${buildLibraryDigest(options.library!)}\n</素材库状态更新>`,
+					timestamp: Date.now(),
+				};
+				const head = messages[0]?.role === "system" ? [messages[0]] : [];
+				const rest = messages.slice(head.length);
+				const toolResultIndexes = rest
+					.map((message, index) => (TOOL_ROLES.has(message.role) ? index : -1))
+					.filter((index) => index >= 0);
+				const excess = toolResultIndexes.length - MAX_TOOL_RESULTS;
+				if (excess <= 0) return [...head, digest, ...rest];
+				const drop = new Set(toolResultIndexes.slice(0, excess));
+				return [...head, digest, ...rest.filter((_message, index) => !drop.has(index))];
+			},
+		});
+	}
+
 	const project = store.get(projectId);
 	if (!project) throw new Error(`工程 ${projectId} 不存在`);
 
@@ -91,6 +133,25 @@ ${latest ? buildContextDigest(latest, { scope: role, chapterId: options.chapterI
 			return [...head, digest, ...rest.filter((_message, index) => !drop.has(index))];
 		},
 	});
+}
+
+/**
+ * 通用素材库的状态快照。
+ *
+ * 与工程快照同理：模型靠它知道库里现在有什么，不必反复调 list_materials。
+ * 但只给「标题 + usage + 标签」这一行索引 —— 库可能攒了上百条，
+ * 全文塞进来会把窗口占满，需要全文时让它自己按 id 取。
+ */
+function buildLibraryDigest(library: MaterialLibrary): string {
+	const all = library.list();
+	if (all.length === 0) return "通用素材库为空。";
+	const byKind = new Map<string, number>();
+	for (const entry of all) byKind.set(entry.kind, (byKind.get(entry.kind) ?? 0) + 1);
+	const counts = [...byKind.entries()].map(([kind, n]) => MATERIAL_KIND_LABELS[kind as MaterialKind] + " " + n).join("、");
+	const index = all
+		.map((entry) => "- [" + MATERIAL_KIND_LABELS[entry.kind] + "] " + entry.title + "（id: " + entry.id + "）" + (entry.usage ? " —— " + entry.usage : ""))
+		.join("\n");
+	return `共 ${all.length} 条（${counts}）：\n${index}`;
 }
 
 /**

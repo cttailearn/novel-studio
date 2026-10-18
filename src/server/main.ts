@@ -7,7 +7,7 @@ import { Agent, type AgentEvent, type ThinkingLevel } from "@earendil-works/pi-a
 import type { Model } from "@earendil-works/pi-ai";
 import { createNovelAgent, type AgentRole } from "../ai/novel-agent.ts";
 import type { ChapterWriteMode, WritingContext } from "../ai/prompts.ts";
-import { extractText, MAX_UPLOAD_BYTES, UnsupportedUploadError } from "./upload.ts";
+import { extractText, MAX_UPLOAD_BYTES, UnsupportedUploadError, UploadTooLargeError } from "./upload.ts";
 import {
 	libraryFieldsOf,
 	materialFromLibrary,
@@ -45,7 +45,7 @@ import {
 	type Settings,
 } from "../config/settings.ts";
 import { loadEnvFile, readConfig, type AppConfig } from "../config/env.ts";
-import { assembledMaterials, linkMaterials, MATERIAL_KINDS, MATERIAL_KIND_LABELS, removeMaterial, ProjectStore, type MaterialKind, type Project } from "../store/project.ts";
+import { assembledMaterials, linkMaterials, MATERIAL_KINDS, MATERIAL_KIND_LABELS, MAX_DRAFT_HISTORY, removeMaterial, ProjectStore, type MaterialKind, type Project } from "../store/project.ts";
 
 loadEnvFile();
 const config = readConfig();
@@ -53,6 +53,30 @@ const publicDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 
 /** 写作作业的三种性质，与提示词里的"作业"一一对应。 */
 const WRITE_MODES: readonly ChapterWriteMode[] = ["create", "rewrite", "continue"];
+
+/**
+ * JSON 请求体上限。
+ *
+ * 长正文一次几万字，用不到 1 MB 以上太多；但素材导入、批量装料这类请求
+ * 可能带着整章正文，给到 8 MB 足够，也避免一个坏请求把内存吃光。
+ */
+const MAX_JSON_BYTES = 8 * 1024 * 1024;
+
+/**
+ * 带 HTTP 状态码的请求错误。
+ *
+ * readJsonBody 这类底层函数手里没有 res，只能抛；由 API 兜底翻译成状态码，
+ * 否则"请求体太大"和"不是合法 JSON"都会一路冒成 500。
+ */
+class HttpError extends Error {
+	readonly status: number;
+
+	constructor(status: number, message: string) {
+		super(message);
+		this.name = "HttpError";
+		this.status = status;
+	}
+}
 
 const MIME: Record<string, string> = {
 	".html": "text/html; charset=utf-8",
@@ -68,6 +92,8 @@ interface Session {
 	role: AgentRole;
 	/** writing 角色绑定的目标章节。 */
 	chapterId?: string;
+	/** 库作用域：不绑工程，工具直接读写通用素材库。 */
+	libraryScope?: boolean;
 	modelRef: string;
 	thinkingLevel: ThinkingLevel;
 	/** 当前模型对象。写作会话每轮重建智能体时要用它，不必重新解析。 */
@@ -78,26 +104,52 @@ interface Session {
 
 const sessions = new Map<string, Session>();
 
+/**
+ * 会话存活上限。早先这里只有 set/get 没有任何删除路径，而每个 Session 都抱着
+ * 完整对话历史 —— 用一天下来，Map 里的内存只增不减，最终把进程吃满。
+ */
+const SESSION_TTL_MS = 6 * 60 * 60 * 1000;
+const SESSION_MAX = 64;
+
+/** 按创建时间淘汰：既清超时会话，也给数量封顶。 */
+function pruneSessions(): void {
+	const now = Date.now();
+	for (const [id, session] of sessions) {
+		if (now - session.createdAt > SESSION_TTL_MS) sessions.delete(id);
+	}
+	if (sessions.size <= SESSION_MAX) return;
+	// 还超量就按创建时间丢最老的。
+	const ordered = [...sessions.entries()].sort((a, b) => a[1].createdAt - b[1].createdAt);
+	for (const [id] of ordered.slice(0, sessions.size - SESSION_MAX)) sessions.delete(id);
+}
+
 function json(res: ServerResponse, status: number, body: unknown): void {
 	const payload = JSON.stringify(body);
 	res.writeHead(status, { "content-type": "application/json; charset=utf-8", "content-length": Buffer.byteLength(payload) });
 	res.end(payload);
 }
 
-async function readJsonBody<T>(req: IncomingMessage, limitBytes = 1_000_000): Promise<T> {
+async function readJsonBody<T>(req: IncomingMessage, limitBytes = MAX_JSON_BYTES): Promise<T> {
+	// 声明了超限长度就直接拒绝，不必先把几 MB 收进内存再发现它太大。
+	const declared = Number(req.headers["content-length"]);
+	if (Number.isFinite(declared) && declared > limitBytes) {
+		throw new HttpError(413, "请求体超过 " + Math.round(limitBytes / 1024 / 1024) + " MB 上限");
+	}
 	const chunks: Buffer[] = [];
 	let size = 0;
 	for await (const chunk of req) {
 		const buf = chunk as Buffer;
 		size += buf.length;
-		if (size > limitBytes) throw new Error("请求体过大");
+		if (size > limitBytes) {
+			throw new HttpError(413, "请求体超过 " + Math.round(limitBytes / 1024 / 1024) + " MB 上限");
+		}
 		chunks.push(buf);
 	}
 	if (chunks.length === 0) return {} as T;
 	try {
 		return JSON.parse(Buffer.concat(chunks).toString("utf8")) as T;
 	} catch {
-		throw new Error("请求体不是合法 JSON");
+		throw new HttpError(400, "请求体不是合法 JSON");
 	}
 }
 
@@ -116,6 +168,17 @@ async function readRawBody(req: IncomingMessage, limitBytes: number): Promise<Bu
 	return Buffer.concat(chunks);
 }
 
+/** 声明的体积已经超限时提前拒绝，不必先收满 32 MB 再发现它太大。 */
+function exceedsUploadLimit(req: IncomingMessage): boolean {
+	const declared = Number(req.headers["content-length"]);
+	return Number.isFinite(declared) && declared > MAX_UPLOAD_BYTES;
+}
+
+/** 上传超限的统一回复。 */
+function uploadLimitError(res: ServerResponse): void {
+	json(res, 413, { error: "文件超过 " + Math.round(MAX_UPLOAD_BYTES / 1024 / 1024) + " MB 上限" });
+}
+
 function replaceAgent(session: Session, model: Model<any>): void {
 	session.model = model;
 	session.agent = createNovelAgent({
@@ -127,6 +190,8 @@ function replaceAgent(session: Session, model: Model<any>): void {
 		sessionId: session.id,
 		role: session.role,
 		thinkingLevel: session.thinkingLevel,
+		// 库作用域传的是库，不是工程；createNovelAgent 见到它就走另一支。
+		...(session.libraryScope ? { library: libraryStore } : {}),
 		...(session.chapterId ? { chapterId: session.chapterId } : {}),
 	});
 }
@@ -195,7 +260,6 @@ function refreshWritingAgent(session: Session): void {
 
 /** 统一的 NDJSON 流式响应。会话与一次性写作走同一条路。 */
 async function streamNdjson(
-	req: IncomingMessage,
 	res: ServerResponse,
 	agent: Agent,
 	modelRef: string,
@@ -213,14 +277,25 @@ async function streamNdjson(
 		if (res.writableEnded) return;
 		res.write(`${JSON.stringify(event)}\n`);
 	};
-	req.on("close", () => {
+	/**
+	 * 客户端断开就停笔。
+	 *
+	 * 早先监听的是 req 的 close，但请求体读尽之后 req 不会再触发 close ——
+	 * 于是关页、断网、按"止笔"之后模型仍在后台继续生成，还会照常覆盖正文。
+	 * 真正代表连接死活的是 res 的 close；正常结束时 writableEnded 已为 true，
+	 * 只有半途关闭才需要中止。
+	 */
+	const abortOnClose = () => {
+		if (res.writableEnded) return;
 		state.aborted = true;
 		agent.abort();
-	});
+	};
+	res.on("close", abortOnClose);
 
 	try {
 		await runAgentStream(agent, modelRef, input, emit, state);
 	} finally {
+		res.off("close", abortOnClose);
 		if (!res.writableEnded) res.end();
 	}
 }
@@ -352,10 +427,60 @@ function slugify(label: string): string {
 	return slug || `custom-${Date.now().toString(36)}`;
 }
 
+/**
+ * 把作品铺成可以带走的纯文本。
+ *
+ * 单章只给这一章的题头与正文；全书另加书名与骨相 —— 导出的东西通常要直接贴进
+ * 别的编辑器或投稿系统，多一层信息比少一层更容易删。没落笔的章节一律跳过：
+ * 导出成一片空白没有意义，还得用户自己回头删。
+ * 章序用阿拉伯数字：中文数字过了百章就开始别扭，导出件不该有这种上限。
+ */
+function buildExport(project: Project, chapterId: string | null, markdown: boolean): string {
+	const blocks: string[] = [];
+	if (!chapterId) {
+		blocks.push((markdown ? "# " : "") + project.title);
+		const meta = [project.genre, project.logline].filter(Boolean).join(" · ");
+		if (meta) blocks.push(meta);
+	}
+
+	project.outline.forEach((chapter, index) => {
+		if (chapterId && chapter.id !== chapterId) return;
+		const body = project.drafts[chapter.id]?.content.trim() ?? "";
+		// 单章导出即使还没落笔也要给出章名，否则用户拿到一个空文件不知所以。
+		if (!body && !chapterId) return;
+		const heading = (markdown ? "## " : "") + "第" + (index + 1) + "章 " + chapter.title;
+		blocks.push(body ? heading + "\n\n" + body : heading);
+	});
+
+	return blocks.join("\n\n") + "\n";
+}
+
+/** 导出文件名。路径分隔符与控制字符一律换成下划线，别让它爬出下载目录。 */
+function exportFilename(project: Project, chapterId: string | null, ext: string): string {
+	const safe = (value: string) => value.replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").replace(/\s+/g, " ").trim();
+	const book = safe(project.title) || "未命名";
+	if (!chapterId) return book + "." + ext;
+	const index = project.outline.findIndex((chapter) => chapter.id === chapterId);
+	const title = safe(project.outline[index]?.title ?? "") || chapterId;
+	return book + " 第" + (index + 1) + "章 " + title + "." + ext;
+}
+
 async function statusOf(id: string) {
 	return (await listProviderStatus()).find((provider) => provider.id === id);
 }
 
+/**
+ * 决定这一轮用哪支笔。
+ *
+ * 优先级：调用方指定 > 设置页选的默认 > .env 的 DEFAULT_MODEL。
+ *
+ * 早先这里是 body.modelRef?.trim() || config.defaultModel，直接跳过了设置页 ——
+ * 于是用户在设置页挑的默认模型只是摆设，改了不生效；DEFAULT_MODEL 未设时还会
+ * 拿到空串直接 400。两处 thinkingLevel 本来就读的是 settings，这里对齐成同一套。
+ */
+function resolveDefaultModel(requested?: string): string {
+	return requested?.trim() || settingsStore.get().defaultModel.trim() || config.defaultModel;
+}
 /** 设置页需要的完整视图：配置、运行时状态、内置厂商目录。 */
 async function settingsView() {
 	const settings = settingsStore.get();
@@ -508,16 +633,40 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		const project = store.get(chapterMatch[1]!);
 		if (!project) return json(res, 404, { error: "工程不存在" });
 		const chapterId = decodeURIComponent(chapterMatch[2]!);
-		const body = await readJsonBody<{ content?: string; title?: string }>(req);
+		// 大纲里没有这一章时不能凭一个 id 凭空造 draft：正文会挂不上任何章，
+		// 前端也永远列不出它，等于一份幽灵稿。
+		if (!project.outline.some((chapter) => chapter.id === chapterId)) {
+			return json(res, 404, { error: "章节不存在" });
+		}
+		const body = await readJsonBody<{ content?: string; title?: string; autosave?: boolean }>(req);
 		if (typeof body.content !== "string") return json(res, 400, { error: "缺少 content" });
 		// 取成常量：属性访问的类型收窄无法穿透闭包。
 		const content = body.content;
+		// autosave 是前端定时持久化的草稿：内容要存，但不构成版本点。
+		// 显式保存才归档旧稿 —— 每 1.5 秒一次的自动保存若都进 history，
+		// 最近 10 版会全是零碎片段，真正的版本历史就没了。
+		const autosave = body.autosave === true;
 		// 与智能体的 write_chapter 共用同一把按章的锁：两边都是整段覆盖，
 		// 谁后写谁赢会让先写的内容无声消失。
 		const saved = await store.withChapterLock(project.id, chapterId, () =>
 			store.mutate(project.id, (draft) => {
 				const existing = draft.drafts[chapterId];
 				const planned = draft.outline.find((c) => c.id === chapterId);
+				// 手动存稿和智能体写稿都会覆盖旧稿，走同一个归档逻辑。
+				const history = [...(existing?.history ?? [])];
+				// 内容没变就不留版本：连点两次"存稿"不该产生一份重复历史。
+				const sameContent = existing !== undefined && existing.content.trim() === content.trim();
+				if (existing && existing.content.trim() && !autosave && !sameContent) {
+					history.push({
+						revision: existing.revision,
+						title: existing.title,
+						content: existing.content,
+						materialIds: existing.materialIds,
+						updatedAt: existing.updatedAt,
+						mode: "manual",
+					});
+					while (history.length > MAX_DRAFT_HISTORY) history.shift();
+				}
 				draft.drafts[chapterId] = {
 					id: chapterId,
 					title: body.title?.trim() || existing?.title || chapterId,
@@ -527,10 +676,34 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 					// 首次存稿时继承该章的装配清单：正文是拿这些料写的，
 					// 留空会让"这段正文从什么料来"的回溯断掉。
 					materialIds: existing?.materialIds ?? planned?.materialIds ?? [],
+					history,
 				};
 			}),
 		);
 		return json(res, 200, { chapter: saved.drafts[chapterId], stats: store.stats(saved) });
+	}
+
+	// 导出：整本或单章。正文原样给出，不重排、不加字数标记 —— 导出的稿子要能直接进别的编辑器。
+	const exportMatch = pathname.match(/^\/api\/projects\/([\w-]+)\/export$/);
+	if (exportMatch && req.method === "GET") {
+		const project = store.get(exportMatch[1]!);
+		if (!project) return json(res, 404, { error: "工程不存在" });
+		const chapterId = url.searchParams.get("chapter");
+		if (chapterId && !project.outline.some((chapter) => chapter.id === chapterId)) {
+			return json(res, 404, { error: "章节不存在" });
+		}
+		const markdown = url.searchParams.get("format") === "md";
+		const ext = markdown ? "md" : "txt";
+		const text = buildExport(project, chapterId, markdown);
+		res.writeHead(200, {
+			"content-type": "text/plain; charset=utf-8",
+			"content-length": Buffer.byteLength(text),
+			// 文件名里有中文，只能走 RFC 5987 的 filename*：塞进 filename= 的非 ASCII 会被浏览器整个丢掉。
+			"content-disposition":
+				`attachment; filename="novel.${ext}"; filename*=UTF-8''${encodeURIComponent(exportFilename(project, chapterId, ext))}`,
+		});
+		res.end(text);
+		return;
 	}
 
 	const projectMatch = pathname.match(/^\/api\/projects\/([\w-]+)$/);
@@ -543,6 +716,9 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 
 		if (req.method === "DELETE") {
 			// 只删这部作品，不动素材库：库里记的取用情况是从工程现算的，会自己跟上。
+			// 整部作品没法像素材那样退回，所以删之前先把整本存一份快照，
+			// 删错了还能从快照里捞回来。
+			await store.snapshot(project, "before-project-delete");
 			await store.remove(projectId);
 			return json(res, 200, { ok: true });
 		}
@@ -577,9 +753,15 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 			chapterId?: string;
 			modelRef?: string;
 			thinkingLevel?: ThinkingLevel;
+			/** "library" 时不绑工程：作者要在开书之前先把通用素材备好。 */
+			scope?: string;
 		}>(req);
-		if (!body.projectId) return json(res, 400, { error: "缺少 projectId" });
-		if (!store.get(body.projectId)) return json(res, 404, { error: "工程不存在" });
+		// 库作用域不绑工程：那时作者还没建书，不该强迫他先随便开一卷。
+		const libraryScope = body.scope === "library";
+		if (!libraryScope) {
+			if (!body.projectId) return json(res, 400, { error: "缺少 projectId" });
+			if (!store.get(body.projectId)) return json(res, 404, { error: "工程不存在" });
+		}
 
 		// 默认是素材会话：写作是一次性动作，不走常驻会话。
 		const role: AgentRole = body.role === "writing" ? "writing" : "material";
@@ -587,7 +769,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 			return json(res, 400, { error: "写作会话需要 chapterId" });
 		}
 
-		const modelRef = body.modelRef?.trim() || config.defaultModel;
+		const modelRef = resolveDefaultModel(body.modelRef);
 		if (!modelRef) return json(res, 400, { error: "请指定模型" });
 
 		let model: Model<any>;
@@ -600,13 +782,14 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 
 		const session: Session = {
 			id: randomUUID(),
-			projectId: body.projectId,
+			projectId: body.projectId ?? "",
 			role,
+			...(libraryScope ? { libraryScope: true } : {}),
 			...(body.chapterId ? { chapterId: body.chapterId } : {}),
 			modelRef: `${model.provider}/${model.id}`,
 			thinkingLevel: body.thinkingLevel ?? settingsStore.get().defaultThinkingLevel,
 			agent: undefined as unknown as Agent,
-		model,
+			model,
 			createdAt: Date.now(),
 		};
 		try {
@@ -614,6 +797,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		} catch (error) {
 			return json(res, 400, { error: (error as Error).message });
 		}
+		pruneSessions();
 		sessions.set(session.id, session);
 		return json(res, 201, {
 			sessionId: session.id,
@@ -626,6 +810,11 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 	if (modelMatch && req.method === "POST") {
 		const session = sessions.get(modelMatch[1]!);
 		if (!session) return json(res, 404, { error: "会话不存在或已过期" });
+		// 生成途中换模型会把正在跑的那支智能体整支换掉：旧流还挂在旧对象上，
+		// 前端却以为下一轮已经换了脑子。让当前这轮先结束（或先中止）再换。
+		if (session.agent.state.isStreaming) {
+			return json(res, 409, { error: "当前这轮还在生成中，请先中止或等它结束再换模型" });
+		}
 		const body = await readJsonBody<{ modelRef?: string; thinkingLevel?: ThinkingLevel }>(req);
 		try {
 			const model = await resolveModel(body.modelRef ?? "");
@@ -650,6 +839,22 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		return json(res, 200, { ok: true });
 	}
 
+	/**
+	 * 丢弃一席对话。
+	 *
+	 * 会话是常驻的：同一个面板反复追问，历史会一直攒下去，最后既占窗口
+	 * 又让模型被前面的旧话牵着走。作者要能主动另起一席干净的。
+	 * 先掐断在跑的那一轮再删，否则流还挂在被删掉的会话上。
+	 */
+	const sessionMatch = pathname.match(/^\/api\/sessions\/([\w-]+)$/);
+	if (sessionMatch && req.method === "DELETE") {
+		const session = sessions.get(sessionMatch[1]!);
+		if (!session) return json(res, 404, { error: "会话不存在" });
+		session.agent.abort();
+		sessions.delete(session.id);
+		return json(res, 200, { ok: true });
+	}
+
 	const messageMatch = pathname.match(/^\/api\/sessions\/([\w-]+)\/messages$/);
 	if (messageMatch && req.method === "POST") {
 		const session = sessions.get(messageMatch[1]!);
@@ -661,7 +866,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		if (session.agent.state.isStreaming) return json(res, 409, { error: "上一条消息还在生成中" });
 		// 写作会话的组装上下文会随装料变化，每轮重建让提示词跟上。
 		if (session.role === "writing") refreshWritingAgent(session);
-		return streamNdjson(req, res, session.agent, session.modelRef, input);
+		return streamNdjson(res, session.agent, session.modelRef, input);
 	}
 
 	/**
@@ -698,7 +903,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		const blocked = writingPreflight(assembly);
 		if (blocked) return json(res, 409, { error: blocked });
 
-		const modelRef = body.modelRef?.trim() || config.defaultModel;
+		const modelRef = resolveDefaultModel(body.modelRef);
 		if (!modelRef) return json(res, 400, { error: "请指定模型" });
 		let model: Model<any>;
 		try {
@@ -721,7 +926,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 			writing: assembly,
 			thinkingLevel: body.thinkingLevel ?? settingsStore.get().defaultThinkingLevel,
 		});
-		return streamNdjson(req, res, agent, `${model.provider}/${model.id}`, instruction);
+		return streamNdjson(res, agent, `${model.provider}/${model.id}`, instruction);
 	}
 
 
@@ -828,12 +1033,16 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 	// 以下都是作者在工作台里的直接操作。它们与智能体的工具写同一套数据结构：
 	// 装料共用 linkMaterials，所以"人装的料"和"墨客装的料"不会把双向索引写歪。
 
-	/** 上传原料：只提取文本交回前端预览，不落盘、不建素材。 */
-	const uploadMatch = pathname.match(/^\/api\/projects\/([\w-]+)\/uploads$/);
-	if (uploadMatch && req.method === "POST") {
-		if (!store.get(uploadMatch[1]!)) return json(res, 404, { error: "工程不存在" });
+	/**
+	 * 上传原料：只提取文本交回前端预览，不落盘、不建素材。
+	 *
+	 * 库作用域不绑工程 —— 作者还没建书时也要能把资料喂给设定官，
+	 * 所以另开一条不带 projectId 的路，提取逻辑与作品那条完全共用。
+	 */
+	if (pathname === "/api/uploads" && req.method === "POST") {
 		const filename = url.searchParams.get("filename")?.trim();
 		if (!filename) return json(res, 400, { error: "缺少 filename" });
+		if (exceedsUploadLimit(req)) return uploadLimitError(res);
 		let buffer: Buffer;
 		try {
 			buffer = await readRawBody(req, MAX_UPLOAD_BYTES);
@@ -844,6 +1053,30 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		try {
 			return json(res, 200, { upload: { filename, ...extractText(filename, buffer) } });
 		} catch (error) {
+			if (error instanceof UploadTooLargeError) return json(res, 413, { error: error.message });
+			if (error instanceof UnsupportedUploadError) return json(res, 415, { error: error.message });
+			throw error;
+		}
+	}
+
+	/** 上传原料（作品作用域）：同上，只是多一道工程存在性检查。 */
+	const uploadMatch = pathname.match(/^\/api\/projects\/([\w-]+)\/uploads$/);
+	if (uploadMatch && req.method === "POST") {
+		if (!store.get(uploadMatch[1]!)) return json(res, 404, { error: "工程不存在" });
+		const filename = url.searchParams.get("filename")?.trim();
+		if (!filename) return json(res, 400, { error: "缺少 filename" });
+		if (exceedsUploadLimit(req)) return uploadLimitError(res);
+		let buffer: Buffer;
+		try {
+			buffer = await readRawBody(req, MAX_UPLOAD_BYTES);
+		} catch (error) {
+			return json(res, 413, { error: (error as Error).message });
+		}
+		if (buffer.length === 0) return json(res, 400, { error: "文件是空的" });
+		try {
+			return json(res, 200, { upload: { filename, ...extractText(filename, buffer) } });
+		} catch (error) {
+			if (error instanceof UploadTooLargeError) return json(res, 413, { error: error.message });
 			if (error instanceof UnsupportedUploadError) return json(res, 415, { error: error.message });
 			throw error;
 		}
@@ -908,8 +1141,10 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		}
 
 		if (req.method === "DELETE") {
+			// 删除前拍快照：素材可能是作者手写了很久的，删了就没了。
 			// removeMaterial 会顺手把它从各章装配清单里摘掉，
 			// 否则那些章节的"装料 N 条"会一直虚高。
+			await store.snapshot(project, "before-material-delete");
 			const saved = store.mutate(projectId, (draft) => {
 				removeMaterial(draft, materialId);
 			});
@@ -1146,6 +1381,59 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		return json(res, 200, { provider: settingsStore.getProvider(provider.id) });
 	}
 
+	// 落盘健康状况：前端据此提示"这一稿可能没存上"，而不是让用户以为存成功了。
+	if (pathname === "/api/storage" && req.method === "GET") {
+		const pending = store.pendingWrites();
+		// pending 仍按作品粒度（前端只读它）；pendingChapters 给出具体失败的章，
+		// 供排查与后续界面细化，旧前端不依赖这个字段。
+		const pendingChapters = store.pendingChapterWrites();
+		return json(res, 200, {
+			ok: pending.length === 0,
+			pending,
+			pendingChapters,
+			message: pending.length > 0 ? "有 " + pending.length + " 部作品未能落盘" : "",
+		});
+	}
+
+	// 手动触发重试，供前端在用户点"重试保存"时调用。
+	if (pathname === "/api/storage/retry" && req.method === "POST") {
+		await store.retryPending();
+		const pending = store.pendingWrites();
+		return json(res, 200, { ok: pending.length === 0, pending });
+	}
+
+	const snapshotMatch = pathname.match(/^\/api\/projects\/([\w-]+)\/snapshots$/);
+	if (snapshotMatch && req.method === "GET") {
+		if (!store.get(snapshotMatch[1]!)) return json(res, 404, { error: "工程不存在" });
+		return json(res, 200, { snapshots: await store.listSnapshots(snapshotMatch[1]!) });
+	}
+
+	const snapshotItemMatch = pathname.match(/^\/api\/projects\/([\w-]+)\/snapshots\/([^/]+)$/);
+	if (snapshotItemMatch && req.method === "POST") {
+		const projectId = snapshotItemMatch[1]!;
+		const current = store.get(projectId);
+		if (!current) return json(res, 404, { error: "工程不存在" });
+		const restored = await store.readSnapshot(projectId, decodeURIComponent(snapshotItemMatch[2]!));
+		if (!restored) return json(res, 404, { error: "快照不存在或已损坏" });
+		// 回滚前先给当前状态拍一份，否则回滚本身就成了不可逆操作。
+		await store.snapshot(current, "before-restore");
+		store.mutate(projectId, (draft) => {
+			// 逐字段覆盖而不是整体替换对象：drafts 需按 id 合并，
+			// 替换整个对象会让引用比较误判，从而触发全量重写。
+			draft.title = restored.title;
+			draft.genre = restored.genre;
+			draft.logline = restored.logline;
+			draft.synopsis = restored.synopsis;
+			draft.styleGuide = restored.styleGuide;
+			draft.targetWords = restored.targetWords;
+			draft.materials = restored.materials;
+			draft.outline = restored.outline;
+			draft.notes = restored.notes;
+			draft.drafts = { ...restored.drafts };
+		});
+		return json(res, 200, { project: store.get(projectId) });
+	}
+
 	return json(res, 404, { error: "未知接口" });
 }
 
@@ -1166,6 +1454,23 @@ async function serveStatic(res: ServerResponse, urlPath: string): Promise<void> 
 	res.end(body);
 }
 
+/**
+ * API 兜底：任何未捕获异常都翻成 JSON，绝不让它把进程带走。
+ *
+ * 请求体解析这类底层错误（413 / 400）没有 res 可写，只能抛；
+ * 在这里统一翻译成状态码。500 则说明是真正的意外，照旧记日志再回一句人话。
+ */
+async function handleApiSafely(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+	try {
+		await handleApi(req, res, url);
+	} catch (error) {
+		const status = error instanceof HttpError ? error.status : 500;
+		console.error("[server]", error);
+		if (!res.headersSent) json(res, status, { error: error instanceof Error ? error.message : String(error) });
+		else if (!res.writableEnded) res.end();
+	}
+}
+
 const store = await ProjectStore.open(config.dataDir);
 const libraryStore = await MaterialLibrary.open(config.dataDir);
 const settingsStore = await SettingsStore.open(config.dataDir);
@@ -1174,9 +1479,17 @@ settingsStore.replace(syncBuiltinProviders(settingsStore.get(), config.defaultMo
 initModelRuntime(settingsStore, credentialStore);
 
 const server = createServer((req, res) => {
-	const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+	let url: URL;
+	try {
+		url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+	} catch {
+		// 畸形请求行（例如扫描器发的 "GET http://["）会让 new URL 直接抛。
+		// 合法客户端不会这样请求，回 400 即可，但绝不能让整个进程退出。
+		json(res, 400, { error: "请求地址不合法" });
+		return;
+	}
 	const run = url.pathname.startsWith("/api/")
-		? handleApi(req, res, url)
+		? handleApiSafely(req, res, url)
 		: serveStatic(res, url.pathname);
 	run.catch((error) => {
 		console.error("[server]", error);
@@ -1188,6 +1501,12 @@ const server = createServer((req, res) => {
 server.listen(config.port, config.host, () => {
 	console.log(`novel-studio 已启动  http://${config.host}:${config.port}`);
 	console.log(`数据目录  ${config.dataDir}`);
+	// 上次退出时若有没存上的稿，在这里补写一次。磁盘满、文件被占用这类故障
+	// 多半是暂时的，重启后往往已经恢复，不补这一下用户就永远丢了那一稿。
+	void store.retryPending().then(() => {
+		const pending = store.pendingWrites();
+		if (pending.length > 0) console.error("[store] 仍有 " + pending.length + " 部作品未能落盘：" + pending.join(", "));
+	});
 	void listProviderStatus().then((providers) => {
 		const ready = providers.filter((provider) => provider.authSource !== "none" && provider.registered).map((provider) => provider.label);
 		console.log(ready.length > 0 ? `已配置厂商  ${ready.join(", ")}` : "未检测到厂商 API Key，请在 .env 中配置");

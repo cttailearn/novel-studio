@@ -14,6 +14,13 @@ import { inflateRawSync } from "node:zlib";
 export const MAX_TEXT_CHARS = 200_000;
 /** 上传体积上限（字节）。 */
 export const MAX_UPLOAD_BYTES = 32 * 1024 * 1024;
+/**
+ * docx 解压后的体积上限（字节）。
+ *
+ * 32 MB 的压缩包可以解出几个 GB —— 解压前必须先设上限，
+ * 否则一个 zip 炸弹就能把进程内存吃光。
+ */
+export const MAX_INFLATED_BYTES = 64 * 1024 * 1024;
 
 export interface ExtractedText {
 	/** 建议的素材标题：文件名去掉扩展名。 */
@@ -28,6 +35,9 @@ export interface ExtractedText {
 }
 
 export class UnsupportedUploadError extends Error {}
+
+/** 上传或解压后的体积超过上限。单独一类是为了让接口回 413 而不是 415。 */
+export class UploadTooLargeError extends Error {}
 
 const TEXT_EXTENSIONS = new Set([
 	".txt", ".text", ".md", ".markdown", ".log",
@@ -93,7 +103,10 @@ function docxXmlToText(xml: string): string {
 interface ZipEntry {
 	name: string;
 	method: number;
+	/** 压缩后字节数（中央目录声明）。 */
 	compressedSize: number;
+	/** 解压后字节数（中央目录声明，可能被恶意文件伪造）。 */
+	uncompressedSize: number;
 	localOffset: number;
 }
 
@@ -123,10 +136,14 @@ function readZipEntries(buffer: Buffer): ZipEntry[] {
 		const nameLength = buffer.readUInt16LE(cursor + 28);
 		const extraLength = buffer.readUInt16LE(cursor + 30);
 		const commentLength = buffer.readUInt16LE(cursor + 32);
+		// 目录项本身也可能越界：Read 前先确认整条记录（含文件名/扩展/注释）都在文件里，
+		// 否则 toString 会悄悄截断，把一条坏记录当成合法条目。
+		if (cursor + 46 + nameLength + extraLength + commentLength > buffer.length) break;
 		entries.push({
 			name: buffer.toString("utf8", cursor + 46, cursor + 46 + nameLength),
 			method: buffer.readUInt16LE(cursor + 10),
 			compressedSize: buffer.readUInt32LE(cursor + 20),
+			uncompressedSize: buffer.readUInt32LE(cursor + 24),
 			localOffset: buffer.readUInt32LE(cursor + 42),
 		});
 		cursor += 46 + nameLength + extraLength + commentLength;
@@ -136,12 +153,40 @@ function readZipEntries(buffer: Buffer): ZipEntry[] {
 
 function readZipFile(buffer: Buffer, entry: ZipEntry): Buffer {
 	// 本地文件头的文件名/扩展字段长度可能与中央目录不同，必须重新读一遍。
+	// 偏移与长度全部来自文件本身，先做边界检查：越界读不会抛可读的错误，
+	// 要么是 RangeError（接口变 500），要么读到垃圾数据。
+	if (entry.localOffset + 30 > buffer.length) {
+		throw new UnsupportedUploadError("docx 的 zip 目录指向了文件之外，文件可能已损坏");
+	}
 	const nameLength = buffer.readUInt16LE(entry.localOffset + 26);
 	const extraLength = buffer.readUInt16LE(entry.localOffset + 28);
 	const start = entry.localOffset + 30 + nameLength + extraLength;
-	const raw = buffer.subarray(start, start + entry.compressedSize);
-	if (entry.method === 0) return Buffer.from(raw);
-	if (entry.method === 8) return inflateRawSync(raw);
+	const end = start + entry.compressedSize;
+	if (start > buffer.length || end > buffer.length) {
+		throw new UnsupportedUploadError("docx 的 zip 条目越界，文件可能已损坏");
+	}
+	// 中央目录声明的解压体积先挡一道；真正的兜底是下面的 maxOutputLength，
+	// 因为恶意文件可以少报体积、让压缩流自己膨胀。
+	if (entry.uncompressedSize > MAX_INFLATED_BYTES) {
+		throw new UploadTooLargeError("docx 解压后超过 " + Math.round(MAX_INFLATED_BYTES / 1024 / 1024) + " MB 上限，已拒绝");
+	}
+	const raw = buffer.subarray(start, end);
+	if (entry.method === 0) {
+		if (raw.length > MAX_INFLATED_BYTES) {
+			throw new UploadTooLargeError("docx 解压后超过 " + Math.round(MAX_INFLATED_BYTES / 1024 / 1024) + " MB 上限，已拒绝");
+		}
+		return Buffer.from(raw);
+	}
+	if (entry.method === 8) {
+		try {
+			return inflateRawSync(raw, { maxOutputLength: MAX_INFLATED_BYTES });
+		} catch (error) {
+			if ((error as { code?: string }).code === "ERR_BUFFER_TOO_LARGE") {
+				throw new UploadTooLargeError("docx 解压后超过 " + Math.round(MAX_INFLATED_BYTES / 1024 / 1024) + " MB 上限，已拒绝");
+			}
+			throw new UnsupportedUploadError("docx 解压失败，文件可能已损坏");
+		}
+	}
 	throw new UnsupportedUploadError("docx 使用了不支持的压缩方式（method " + entry.method + "）");
 }
 

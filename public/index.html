@@ -41,41 +41,55 @@
 				</div>
 
 				<div class="beam-controls">
+					<button id="open-palette" class="btn btn-quiet btn-sm beam-search" title="检索与跳转（Ctrl+K / ⌘K）">
+						<span class="beam-search-glyph" aria-hidden="true">搜</span><span class="beam-search-label">检索</span><kbd class="beam-kbd">Ctrl K</kbd>
+					</button>
 					<select id="model-select" title="模型"></select>
 					<select id="thinking-select" title="推理档位"></select>
+					<button id="toggle-bible" class="btn btn-quiet btn-sm only-narrow" title="素材、大纲与待办" aria-controls="bible" aria-expanded="false">案</button>
+					<button id="open-shortcuts" class="btn btn-quiet theme-toggle" title="键盘快捷键" aria-label="键盘快捷键">?</button>
 					<button id="theme-toggle" class="btn btn-quiet theme-toggle" title="切换昼夜" aria-label="切换昼夜">
 						<span class="theme-glyph" aria-hidden="true"></span>
 					</button>
 					<button id="open-settings" class="btn btn-quiet" title="模型与供应商">设置</button>
 				</div>
-			</header>
+		</header>
+
+		<!-- 落盘失败时才出现。早先 API 照样返回 200，用户以为存上了，
+		     直到重启才发现那一稿没了。这里把后台的未落盘清单直接摊开。 -->
+			<div id="storage-banner" class="storage-banner hidden" role="alert">
+				<span class="storage-text" id="storage-text"></span>
+				<button id="storage-retry" class="btn btn-sm">重试保存</button>
+			</div>
+
+			<!-- 全部反馈走这里：底部浮出的短提示，成功、失败都不打断写作。 -->
+			<div id="toast-stack" class="toast-stack" aria-live="polite" aria-atomic="false"></div>
 
 			<!-- ── 左卷：写作台里只剩章目；选卷与素材库都在「案头」── -->
 			<aside class="rail">
 				<section class="rail-block rail-grow">
-				<section class="rail-block rail-grow">
 					<h2 class="rail-label"><i class="tick"></i>章目</h2>
 					<button id="add-chapter" class="rail-add">＋ 立一章</button>
+					<input id="chapter-filter" class="rail-filter" type="search" placeholder="搜章目…" autocomplete="off" aria-label="搜章目" />
 					<ol id="chapter-list" class="chapter-list"></ol>
 					<p id="chapter-empty" class="rail-note">尚无章目。点上面的「＋ 立一章」，或到「料」让设定官拟一份大纲。</p>
-				</section>
 				</section>
 			</aside>
 
 			<!-- ── 中台 ───────────────────────────────────────────── -->
 			<main class="stage">
 				<nav class="stage-bar">
-					<div class="tabs">
-						<button class="tab is-on" data-view="manuscript"><b>稿</b><span>文稿</span></button>
-						<button class="tab" data-view="materials"><b>料</b><span>素材工作台</span></button>
-						<button class="tab" data-view="writing"><b>文</b><span>生文工作台</span></button>
+					<div class="tabs" role="tablist" aria-label="写作区">
+						<button class="tab is-on" data-view="manuscript" role="tab" aria-selected="true" aria-controls="view-manuscript"><b>稿</b><span>文稿</span></button>
+						<button class="tab" data-view="materials" role="tab" aria-selected="false" aria-controls="view-materials"><b>料</b><span>素材工作台</span></button>
+						<button class="tab" data-view="writing" role="tab" aria-selected="false" aria-controls="view-writing"><b>文</b><span>生文工作台</span></button>
 					</div>
 					<div class="stage-actions" id="stage-actions"></div>
 				</nav>
 
 				<!-- 案头：卷宗与通用素材库。进书之前、出书之后都落在这里 -->
 				<section id="view-home" class="view view-bench is-on" aria-label="案头">
-					<div class="bench">
+					<div class="bench bench-three">
 						<div class="bench-pane">
 							<header class="pane-head">
 								<h3>卷宗</h3>
@@ -96,8 +110,40 @@
 								</div>
 							</header>
 							<p class="pane-lead">这里的料不属于任何一部作品：新建时取用，作品里改好的料也能存回来。</p>
+							<input id="library-search" class="mat-search" type="search" placeholder="搜通用素材：标题、用法、正文、标签" autocomplete="off" aria-label="搜通用素材" />
 							<div id="library-filter" class="mat-filter"></div>
 							<div id="library-list" class="material-list"></div>
+						</div>
+
+						<div class="bench-pane bench-talk" id="library-pane">
+							<header class="pane-head">
+								<h3>设定官</h3>
+								<span class="pane-note">备通用素材，不写正文</span>
+								<div class="pane-tools">
+									<button class="btn btn-quiet btn-sm" data-newchat="library">另起一席</button>
+									<button id="library-upload-pick" class="btn btn-quiet btn-sm">＋ 传资料</button>
+									<input
+										id="library-upload-input"
+										type="file"
+										multiple
+										hidden
+										accept=".txt,.text,.md,.markdown,.log,.csv,.tsv,.json,.yaml,.yml,.html,.htm,.xml,.docx"
+									/>
+								</div>
+							</header>
+							<div id="library-stream" class="stream"></div>
+							<ul id="library-uploads" class="upload-list compact"></ul>
+							<form id="library-composer" class="composer">
+								<textarea
+									id="library-input"
+									rows="3"
+									placeholder="交代活计：备一套赛博都市的世界观底色、写几个可复用的配角骨架……（Enter 发送，Shift+Enter 换行）"
+								></textarea>
+								<div class="composer-side">
+									<button type="submit" class="btn btn-ink">呈上</button>
+									<button type="button" class="btn btn-quiet hidden" data-abort="library">止笔</button>
+								</div>
+							</form>
 						</div>
 					</div>
 				</section>
@@ -131,6 +177,7 @@
 								<h3>素材库</h3>
 								<span id="material-count" class="pane-count"></span>
 							</header>
+							<input id="material-search" class="mat-search" type="search" placeholder="搜素材：标题、用法、正文、标签" autocomplete="off" aria-label="搜素材" />
 							<div id="material-filter" class="mat-filter"></div>
 							<div id="material-list" class="material-list"></div>
 						</div>
@@ -140,6 +187,9 @@
 							<header class="pane-head">
 								<h3>设定官</h3>
 								<span class="pane-note">产素材，不写正文</span>
+								<div class="pane-tools">
+									<button class="btn btn-quiet btn-sm" data-newchat="material">另起一席</button>
+								</div>
 							</header>
 							<div id="material-stream" class="stream"></div>
 							<div id="material-picked" class="picked-bar hidden"></div>
@@ -180,6 +230,9 @@
 							<header class="pane-head">
 								<h3>执笔者</h3>
 								<span class="pane-note">把素材组装成正文，不改素材</span>
+								<div class="pane-tools">
+									<button class="btn btn-quiet btn-sm" data-newchat="writing">另起一席</button>
+								</div>
 							</header>
 							<div id="writing-stream" class="stream"></div>
 							<form id="writing-composer" class="composer">
@@ -200,14 +253,19 @@
 			</main>
 
 			<!-- ── 右案 ───────────────────────────────────────────── -->
-			<aside class="desk-right">
-				<nav class="bible-tabs" id="bible-tabs">
-					<button class="bible-tab is-on" data-tab="materials">素材</button>
-					<button class="bible-tab" data-tab="outline">大纲</button>
-					<button class="bible-tab" data-tab="notes">待办</button>
+			<aside class="desk-right" id="desk-right">
+				<div class="bible-head">
+					<input id="bible-search" class="bible-search" type="search" placeholder="搜素材…" autocomplete="off" aria-label="搜右案" />
+					<button id="close-bible" class="btn btn-quiet btn-sm only-narrow" title="收起右案" aria-label="收起右案">×</button>
+				</div>
+				<nav class="bible-tabs" id="bible-tabs" role="tablist" aria-label="右案">
+					<button class="bible-tab is-on" data-tab="materials" role="tab" aria-selected="true">素材</button>
+					<button class="bible-tab" data-tab="outline" role="tab" aria-selected="false">大纲</button>
+					<button class="bible-tab" data-tab="notes" role="tab" aria-selected="false">待办</button>
 				</nav>
 				<div id="bible" class="bible"></div>
 			</aside>
+			<button id="bible-backdrop" class="bible-backdrop hidden" tabindex="-1" aria-label="收起右案"></button>
 		</div>
 
 		<dialog id="project-dialog" class="sheet sheet-wide sheet-form">
@@ -405,9 +463,161 @@
 				<label>惯用思深<select id="settings-default-thinking"></select></label>
 			</div>
 			<div class="settings-body">
-				<ul id="settings-providers" class="settings-providers"></ul>
+				<div class="providers-rail">
+					<!-- 搜索框独立于列表之外：放在 ul 里重渲染就得重建它，敲一个字焦点就没了 -->
+					<div class="search-wrap">
+						<input id="provider-search" class="provider-search" type="search" placeholder="搜索供应商…" autocomplete="off">
+					</div>
+					<ul id="settings-providers" class="settings-providers"></ul>
+				</div>
 				<div id="settings-detail" class="settings-detail"></div>
 			</div>
+		</dialog>
+
+		<!-- 快照：误删素材、误改大纲时的退路。删东西时系统会自动存一份，
+		     这里只是把它们摆出来看，并允许回滚。 -->
+		<dialog id="snapshot-dialog" class="sheet sheet-wide">
+			<header class="form-head">
+				<h3>存照</h3>
+				<p class="form-hint"><span id="snapshot-title"></span> 删素材或删作品时系统会自动存一份，保留最近 20 份。</p>
+			</header>
+			<div class="snap-list" id="snapshot-list"></div>
+			<footer class="form-foot">
+				<p id="snapshot-error" class="form-error"></p>
+				<div class="dialog-actions">
+					<button type="button" class="btn btn-quiet" onclick="document.getElementById('snapshot-dialog').close()">合上</button>
+				</div>
+			</footer>
+		</dialog>
+
+		<!-- 版本：服务端每次覆盖保存都会留档（最近 10 版），这里把它摆出来。
+		     恢复用的是同一份正文接口，当前稿会先被存成一版，所以回滚本身也可逆。 -->
+		<dialog id="history-dialog" class="sheet sheet-wide sheet-form history-dialog">
+			<header class="form-head">
+				<h3>版本</h3>
+				<p id="history-subtitle" class="form-hint"></p>
+			</header>
+			<div class="form-body">
+				<p class="history-lead">每次覆盖保存自动留档，保留最近 10 版。恢复会把当前稿也存为一版，随时可以再换回来。</p>
+				<div id="history-list" class="history-list"></div>
+			</div>
+			<footer class="form-foot">
+				<p id="history-error" class="form-error"></p>
+				<div class="dialog-actions">
+					<button type="button" class="btn btn-quiet" id="history-close">合上</button>
+				</div>
+			</footer>
+		</dialog>
+
+		<!-- 导出：范围与格式一次选清，避免操作条上摆四个按钮 -->
+		<dialog id="export-dialog" class="sheet sheet-form export-dialog">
+			<form id="export-form">
+				<header class="form-head">
+					<h3>导出</h3>
+					<p id="export-hint" class="form-hint"></p>
+				</header>
+				<div class="form-body">
+					<div class="field">
+						<span class="field-label">范围</span>
+						<div class="seg" id="export-scope">
+							<label><input type="radio" name="scope" value="chapter" /> 这一章</label>
+							<label><input type="radio" name="scope" value="book" /> 全书</label>
+						</div>
+					</div>
+					<div class="field">
+						<span class="field-label">格式</span>
+						<div class="seg">
+							<label><input type="radio" name="format" value="txt" checked /> 纯文本 .txt</label>
+							<label><input type="radio" name="format" value="md" /> Markdown .md</label>
+						</div>
+					</div>
+					<p class="field-note">导出的稿子保持原样，不加字数或标记，可直接贴进别的编辑器；未落笔的章节会被跳过。</p>
+				</div>
+				<footer class="form-foot">
+					<p id="export-error" class="form-error"></p>
+					<div class="dialog-actions">
+						<button type="button" class="btn btn-quiet" id="export-cancel">作罢</button>
+						<button type="submit" class="btn btn-ink">导出</button>
+					</div>
+				</footer>
+			</form>
+		</dialog>
+
+		<!-- 排版：只影响读稿与改稿的呈现，不动正文一个字 -->
+		<dialog id="type-dialog" class="sheet sheet-form type-dialog">
+			<header class="form-head">
+				<h3>排版</h3>
+				<p class="form-hint">只影响读稿与改稿的呈现，不写入正文。</p>
+			</header>
+			<div class="form-body">
+				<div class="field">
+					<span class="field-label">字号</span>
+					<div class="seg" id="type-size">
+						<label><input type="radio" name="size" value="15" /> 小</label>
+						<label><input type="radio" name="size" value="17" /> 中</label>
+						<label><input type="radio" name="size" value="19" /> 大</label>
+						<label><input type="radio" name="size" value="21" /> 特大</label>
+					</div>
+				</div>
+				<div class="field">
+					<span class="field-label">行距</span>
+					<div class="seg" id="type-line">
+						<label><input type="radio" name="line" value="1.8" /> 紧凑</label>
+						<label><input type="radio" name="line" value="2.05" /> 标准</label>
+						<label><input type="radio" name="line" value="2.3" /> 舒展</label>
+					</div>
+				</div>
+				<div class="field">
+					<span class="field-label">版心</span>
+					<div class="seg" id="type-measure">
+						<label><input type="radio" name="measure" value="30" /> 窄</label>
+						<label><input type="radio" name="measure" value="36" /> 中</label>
+						<label><input type="radio" name="measure" value="44" /> 宽</label>
+					</div>
+				</div>
+				<label class="checkline"><input type="checkbox" id="type-focus" /> 专注模式（隐藏左右两栏，Esc 退出）</label>
+			</div>
+			<footer class="form-foot">
+				<p class="form-error"></p>
+				<div class="dialog-actions">
+					<button type="button" class="btn btn-quiet" id="type-reset">恢复默认</button>
+					<button type="button" class="btn btn-ink" id="type-close">合上</button>
+				</div>
+			</footer>
+		</dialog>
+
+		<!-- 检索面板：章目、素材、动作一处可达 -->
+		<dialog id="palette-dialog" class="palette" aria-label="检索与跳转">
+			<div class="palette-head">
+				<input id="palette-input" type="search" placeholder="搜章目、素材，或输入动作名…" autocomplete="off" aria-label="检索" />
+				<kbd>Esc</kbd>
+			</div>
+			<div id="palette-results" class="palette-results" role="listbox" aria-label="结果"></div>
+		</dialog>
+
+		<!-- 键盘说明：快捷键不该只活在 README 里 -->
+		<dialog id="shortcuts-dialog" class="sheet sheet-form shortcuts-dialog">
+			<header class="form-head">
+				<h3>键盘</h3>
+				<p class="form-hint">写作时手不离键盘。</p>
+			</header>
+			<div class="form-body">
+				<dl class="keys">
+					<div><dt><kbd>Ctrl</kbd><kbd>K</kbd></dt><dd>检索与跳转</dd></div>
+					<div><dt><kbd>Ctrl</kbd><kbd>S</kbd></dt><dd>立即存稿（改稿时）</dd></div>
+					<div><dt><kbd>Ctrl</kbd><kbd>1</kbd> / <kbd>2</kbd> / <kbd>3</kbd></dt><dd>切到 稿 / 料 / 文</dd></div>
+					<div><dt><kbd>Alt</kbd><kbd>↑</kbd> / <kbd>↓</kbd></dt><dd>上一章 / 下一章</dd></div>
+					<div><dt><kbd>Esc</kbd></dt><dd>退出专注模式 / 退出改稿 / 关闭弹窗</dd></div>
+					<div><dt><kbd>Enter</kbd></dt><dd>对话发送；Shift+Enter 换行</dd></div>
+					<div><dt><kbd>?</kbd></dt><dd>打开这张表</dd></div>
+				</dl>
+			</div>
+			<footer class="form-foot">
+				<p class="form-error"></p>
+				<div class="dialog-actions">
+					<button type="button" class="btn btn-quiet" id="shortcuts-close">合上</button>
+				</div>
+			</footer>
 		</dialog>
 
 		<script type="module" src="/app.js"></script>

@@ -45,6 +45,11 @@ function headersFor(api: ApiFormat, apiKey: string): Record<string, string> {
 	}
 }
 
+/** 拉取模型列表的超时与重试间隔。拉列表是"点一下等一下"的交互，拖太久等于卡死。 */
+const FETCH_TIMEOUT_MS = 20_000;
+const FETCH_RETRY_MS = 600;
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 /** 从上游拉取模型列表。不会写入任何配置，只返回候选。 */
 export async function fetchUpstreamModels(input: {
 	baseUrl: string;
@@ -57,16 +62,33 @@ export async function fetchUpstreamModels(input: {
 	const { baseUrl, api, apiKey, noAuthRequired, signal } = input;
 	if (!baseUrl.trim()) throw new ModelFetchError("请先填写 Base URL");
 	if (!apiKey?.trim() && !noAuthRequired) throw new ModelFetchError("请先填写 API Key");
+	// 无鉴权时仍需要一个占位头：不少自建服务（如 LM Studio）要求该头存在才肯响应。
 	const auth = apiKey?.trim() || "not-required";
-
 	const url = modelsUrl(baseUrl, api);
-	let response: Response;
-	try {
-		response = await fetch(url, { headers: headersFor(api, auth), signal });
-	} catch (error) {
-		if ((error as Error).name === "AbortError") throw error;
-		throw new ModelFetchError(`连接失败：${(error as Error).message}`);
+	// 上游不响应时不能无限挂着：调用方常常不传 signal，早先这里就是无限等待。
+	// 限流与临时故障重试两次，4xx 里的 429 除外 —— 那是"等会儿再来"的信号。
+	const deadline = AbortSignal.timeout(FETCH_TIMEOUT_MS);
+	const abort = signal ? AbortSignal.any([signal, deadline]) : deadline;
+	let response: Response | undefined;
+	for (let attempt = 0; attempt < 3; attempt++) {
+		try {
+			response = await fetch(url, { headers: headersFor(api, auth), signal: abort });
+		} catch (error) {
+			// 调用方主动取消要原样抛出去，不要包装成"连接失败"。
+			if (signal?.aborted) throw error;
+			if (attempt === 2) {
+				throw new ModelFetchError(
+					deadline.aborted ? `连接超时（${FETCH_TIMEOUT_MS / 1000} 秒无响应）` : `连接失败：${(error as Error).message}`,
+				);
+			}
+			await delay(FETCH_RETRY_MS * (attempt + 1));
+			continue;
+		}
+		const retryable = response.status === 429 || response.status >= 500;
+		if (!retryable || attempt === 2) break;
+		await delay(FETCH_RETRY_MS * (attempt + 1));
 	}
+	if (!response) throw new ModelFetchError("连接失败");
 
 	if (!response.ok) {
 		const detail = (await response.text().catch(() => "")).slice(0, 300);

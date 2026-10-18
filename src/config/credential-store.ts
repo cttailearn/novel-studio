@@ -12,6 +12,8 @@ import type { AuthOperationOptions, Credential, CredentialInfo, CredentialStore 
 export class FileCredentialStore implements CredentialStore {
 	private credentials = new Map<string, Credential>();
 	private readonly chains = new Map<string, Promise<unknown>>();
+	/** 原文件解析失败时置位：此时任何 flush 都可能抹掉用户仅有的密钥副本，故拒绝写入。 */
+	private writeBlocked = false;
 
 	private readonly file: string;
 
@@ -31,7 +33,14 @@ export class FileCredentialStore implements CredentialStore {
 					if (credential && typeof credential === "object") store.credentials.set(providerId, credential);
 				}
 			} catch (error) {
-				console.warn("[credentials] 解析凭据文件失败，已忽略:", error);
+				// 解析失败时必须拒绝写入。早先这里是"忽略并用空表继续"，
+				// 于是下一次 setKey 的 flush 会拿「空表 + 一个新 key」覆盖原文件，
+				// 把用户所有厂商密钥一次性抹掉。宁可让应用报错，也不能毁掉原文。
+				store.writeBlocked = true;
+				console.error(
+					"[credentials] 凭据文件解析失败，已阻止写入以防覆盖原文。请检查 " + file + " :",
+					error,
+				);
 			}
 		}
 		return store;
@@ -113,6 +122,13 @@ export class FileCredentialStore implements CredentialStore {
 	}
 
 	private async flush(): Promise<void> {
+		if (this.writeBlocked) {
+			// 内存里的 map 此刻是不完整的（打开时没读进来），写下去就是覆盖。
+			throw new Error(
+				"凭据文件 " + path.basename(this.file) + " 无法解析，已阻止写入。" +
+					"请先修复或移走该文件，再保存密钥，以免现有密钥被覆盖。",
+			);
+		}
 		const payload = JSON.stringify(Object.fromEntries(this.credentials), null, 2);
 		// 临时文件名必须唯一：串行化是按 provider 粒度的，不同 provider 的并发写
 		// 会落到同一个固定 tmp 上互相覆盖；多个 store 实例指向同一文件时同理。

@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import {
 	countWords,
 	linkMaterials,
+	MAX_DRAFT_HISTORY,
 	MATERIAL_KINDS,
 	MATERIAL_KIND_LABELS,
 	type ContinuityNote,
@@ -13,6 +14,7 @@ import {
 	type Project,
 	type ProjectStore,
 } from "../store/project.ts";
+import type { LibraryMaterial, MaterialLibrary } from "../store/library.ts";
 
 /** 工具执行结果：content 是模型看到的文本，details 给前端展示。 */
 function result(text: string, details: unknown = undefined): AgentToolResult<unknown> {
@@ -84,9 +86,96 @@ function materialBody(material: Material): string {
 	return material.content ? "\n  " + material.content.split("\n").join("\n  ") : "";
 }
 
+/**
+ * 一处命中最多的行数。
+ *
+ * 相邻命中要并成一段以保持原文连续，但并起来没有上限就会失控：
+ * 素材里若每行都含这个词（比如通篇写同一种天气），整篇会被并成一段，
+ * 检索就退化成了全文注入 —— 正是要避免的那件事。
+ */
+const MAX_SNIPPET_LINES = 8;
+
+/**
+ * 把检索词切开。
+ *
+ * 中文没有词边界，所以按二元组切：「酸雨霓虹」→ 酸雨/雨霓/霓虹。
+ * 这样「霓虹」能命中「霓虹灯」，也不会因为中间多了个「的」就整句落空。
+ * 西文按非字母数字切，整词匹配。
+ */
+function queryTokens(query: string): string[] {
+	const tokens = new Set<string>();
+	for (const part of query.toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
+		if (!part) continue;
+		if (/^[\x00-\x7f]+$/.test(part) || part.length <= 2) {
+			tokens.add(part);
+			continue;
+		}
+		for (let i = 0; i + 2 <= part.length; i++) tokens.add(part.slice(i, i + 2));
+	}
+	return [...tokens];
+}
+
+/** 一处命中：某条素材的某几行。 */
+interface MaterialHit {
+	material: Material;
+	from: number;
+	to: number;
+	score: number;
+}
+
+/**
+ * 在素材里按关键词找相关片段。
+ *
+ * 逐行打分而不是整篇向量化：素材本来就是"一行一个事实"写的，
+ * 行就是天然的语义单位；而且这条路不依赖任何外部服务，离线也准。
+ * 命中行向前后各扩一行作上下文，相邻命中合并成一段，免得同一处被切碎。
+ */
+function searchMaterials(pool: Material[], query: string, limit: number): MaterialHit[] {
+	const tokens = queryTokens(query);
+	if (tokens.length === 0) return [];
+	const hits: MaterialHit[] = [];
+	for (const material of pool) {
+		const rows = material.content.split("\n");
+		const ranges: { from: number; to: number; score: number }[] = [];
+		for (let i = 0; i < rows.length; i++) {
+			const lower = rows[i]!.toLowerCase();
+			if (!lower.trim()) continue;
+			let score = 0;
+			for (const token of tokens) if (lower.includes(token)) score += token.length;
+			if (score === 0) continue;
+			const from = Math.max(0, i - 1);
+			const to = Math.min(rows.length - 1, i + 1);
+			const last = ranges[ranges.length - 1];
+			// 与上一处相接或重叠就并起来，保持原文连续 ——
+			// 但合并后若超过上限就另起一段，免得密集命中把整篇并成一块。
+			const mergedTo = last ? Math.max(last.to, to) : to;
+			if (last && from <= last.to + 1 && mergedTo - last.from + 1 <= MAX_SNIPPET_LINES) {
+				last.to = mergedTo;
+				last.score += score;
+			} else {
+				// 另起时从上一段末尾之后开始，两段不重叠：同一片原文
+				// 被切成互相覆盖的两块，既费字又让人以为读的是两处。
+				const start = last ? Math.max(from, last.to + 1) : from;
+				ranges.push({ from: start, to: Math.max(start, to), score });
+			}
+		}
+		for (const range of ranges) hits.push({ material, ...range });
+	}
+	return hits.sort((a, b) => b.score - a.score).slice(0, limit);
+}
+
+/** 命中片段渲染成模型能直接读的文本，带素材出处与行号。 */
+function renderHit(hit: MaterialHit): string {
+	const rows = hit.material.content.split("\n");
+	const body = rows
+		.slice(hit.from, hit.to + 1)
+		.map((row) => "  " + row)
+		.join("\n");
+	return `【${MATERIAL_KIND_LABELS[hit.material.kind]} · ${hit.material.title}】第 ${hit.from + 1}-${hit.to + 1} 行\n${body}`;
+}
 // ═══════════════════════════════════════════════════════════ 两套智能体共用的工具
 
-/** get_project_brief / list_chapters / read_chapter / list_materials / add_note / list_notes / resolve_note */
+/** get_project_brief / list_chapters / read_chapter / list_materials / search_materials / add_note / list_notes / resolve_note */
 function sharedTools(deps: NovelToolDeps): AgentTool<any>[] {
 	return [
 		defineTool({
@@ -268,6 +357,52 @@ function sharedTools(deps: NovelToolDeps): AgentTool<any>[] {
 				return result("已关闭待办：" + note.category + " / " + note.subject, note);
 			},
 		}),
+
+		defineTool({
+			name: "search_materials",
+			label: "检索素材片段",
+			description:
+				"在本章装配的素材里按关键词找相关片段，返回命中处的原文与出处。" +
+				"长素材的全文没有直接注入系统提示词（会把窗口占满），写与它相关的段落前要用这里取。" +
+				"中文按二元组匹配，所以「霓虹」能命中「霓虹灯」。一次搜不到就换个说法再搜 —— " +
+				"同一件事在不同素材里可能写作「枪伤」「旧创」「左肩那道疤」，多搜几轮比猜更准。" +
+				"materialId 只搜某一条；不传则搜本章全部装配素材。",
+			parameters: Type.Object(
+				{
+					query: nonEmpty("要找什么，用自然语言或关键词都行"),
+					materialId: optionalText("只在这一条素材里搜；留空则搜本章全部装配素材"),
+					limit: Type.Optional(Type.Number({ description: "最多返回几处命中，默认 6，上限 20" })),
+				},
+				{ description: "检索素材" },
+			),
+			execute: async (_toolCallId, params) => {
+				const p = getProject(deps);
+				// 只搜本章装配的素材：它们是这一章唯一的事实来源，
+				// 未装配的料即使相关也不该被拿来写这一章。
+				const assembled = p.materials.filter((m) => m.chapterIds.length > 0);
+				const pool = params.materialId
+					? p.materials.filter((m) => m.id === params.materialId)
+					: assembled;
+				if (pool.length === 0) {
+					return result(
+						params.materialId
+							? "找不到素材 " + params.materialId + "。"
+							: "本章还没有装配任何素材，没有可检索的内容。先让设定官用 attach_materials 装料。",
+						[],
+					);
+				}
+				const limit = Math.min(20, Math.max(1, Math.floor(params.limit ?? 6)));
+				const hits = searchMaterials(pool, params.query, limit);
+				if (hits.length === 0) {
+					return result(
+						"没有匹配「" + params.query + "」的片段（搜了 " + pool.length + " 条素材）。" +
+							"换个说法再试：同义、上位词、或只取其中一个词。",
+						[],
+					);
+				}
+				return result(hits.map(renderHit).join("\n\n"), hits);
+			},
+		}),
 	];
 }
 
@@ -351,9 +486,14 @@ function updateOutlineTool(deps: NovelToolDeps): AgentTool<any> {
 					}
 				}
 			});
+			// 把被丢弃的 id 报回去。静默过滤会让模型以为装料成功了，
+			// 下一步才发现这一章没料可写，却不知道是哪个 id 写错了。
+			const requested = (params.chapters ?? []).flatMap((c) => c.chapterIds ?? []);
+			const missing = requested.filter((id) => !known.has(id));
 			return result(
 				"大纲已更新，当共 " + saved.outline.length + " 章：\n" +
-					lines(saved.outline.map((c) => "[" + c.id + "] " + c.title + "（" + c.status + "）装料" + c.materialIds.length + "条")),
+					lines(saved.outline.map((c) => "[" + c.id + "] " + c.title + "（" + c.status + "）装料" + c.materialIds.length + "条")) +
+					(missing.length > 0 ? "\n\n以下素材 id 不存在，未装入（先 upsert_material 确认 id）：" + missing.join("、") : ""),
 				saved.outline,
 			);
 		},
@@ -435,9 +575,12 @@ function upsertMaterialTool(deps: NovelToolDeps): AgentTool<any> {
 				}
 			});
 			const material = saved.materials.find((m) => m.id === id);
+			// 点名没生效的章节 id：静默丢掉的话，模型会以为关联完成了。
+			const unknown = provided ? params.chapterIds!.filter((cid) => !validChapters.has(cid)) : [];
 			return result(
 				(existing ? "已更新素材《" : "已新建素材《") + (material?.title ?? "") + "》（id: " + id + "）" +
-					(requested.length > 0 ? "，已关联到 " + requested.length + " 章。" : "。"),
+					(requested.length > 0 ? "，已关联到 " + requested.length + " 章。" : "。") +
+					(unknown.length > 0 ? "以下章节 id 不存在，未关联：" + unknown.join("、") : ""),
 				material,
 			);
 		},
@@ -478,13 +621,17 @@ function attachMaterialsTool(deps: NovelToolDeps): AgentTool<any> {
 		),
 		execute: async (_toolCallId, params) => {
 			const mode = params.mode ?? "add";
+			let skipped: string[] = [];
 			const saved = deps.store.mutate(deps.projectId, (p) => {
-				linkMaterials(p, params.chapterId, params.materialIds, mode);
+				skipped = linkMaterials(p, params.chapterId, params.materialIds, mode).skipped;
 			});
 			const chapter = saved.outline.find((c) => c.id === params.chapterId);
 			if (!chapter) return result("找不到章节 " + params.chapterId + "。先用 update_outline 建立。");
+			// 早先 linkMaterials 算出的 skipped 被丢掉了，模型只看到"现有装料 N 条"，
+			// 会以为 id 全都装上了。把没生效的 id 点名，它才知道该先去建素材。
 			return result(
-				"《" + chapter.title + "》现有装料 " + chapter.materialIds.length + " 条。",
+				"《" + chapter.title + "》现有装料 " + chapter.materialIds.length + " 条。" +
+					(skipped.length > 0 ? "\n以下素材 id 不存在，未装入（先 upsert_material 确认 id）：" + skipped.join("、") : ""),
 				chapter,
 			);
 		},
@@ -532,11 +679,34 @@ function writeChapterTool(deps: NovelToolDeps): AgentTool<any> {
 		),
 		execute: async (_toolCallId, params) => {
 			const mode = params.mode ?? "create";
+			// 只允许写章目里真有的章。模型偶尔会拿着上一轮的章号自由发挥，
+			// 旧实现会照着这个 id 造出一份不在大纲里的「幽灵正文」。
+			const project = getProject(deps);
+			if (!project.outline.some((chapter) => chapter.id === params.chapterId)) {
+				throw new Error(
+					"章节 " + params.chapterId + " 不在本章目里，不能凭空写入；请先用 update_outline 立章，或改用已有章节的 id。",
+				);
+			}
 			const written = await deps.store.withChapterLock(deps.projectId, params.chapterId, () => {
 				const p = getProject(deps);
 				const existing = p.drafts[params.chapterId];
 				const planned = p.outline.find((chapter) => chapter.id === params.chapterId);
-				return deps.store.mutate(deps.projectId, (draft) => {
+			return deps.store.mutate(deps.projectId, (draft) => {
+					// 覆盖前先把旧稿归档。rewrite / continue 都建立在旧稿之上，
+					// 一次写坏就是整章丢失，而 revision 只是个计数器，找不回内容。
+					const history = [...(existing?.history ?? [])];
+					if (existing && existing.content.trim()) {
+						history.push({
+							revision: existing.revision,
+							title: existing.title,
+							content: existing.content,
+							materialIds: existing.materialIds,
+							updatedAt: existing.updatedAt,
+							mode,
+						});
+						// 只留最近若干版：正文动辄数万字，全量留档会把工程文件撑爆。
+						while (history.length > MAX_DRAFT_HISTORY) history.shift();
+					}
 					draft.drafts[params.chapterId] = {
 						id: params.chapterId,
 						title: params.title,
@@ -545,6 +715,7 @@ function writeChapterTool(deps: NovelToolDeps): AgentTool<any> {
 						updatedAt: Date.now(),
 						// 没显式传素材时，依次回落到上一版记录、本章装配清单。
 						materialIds: params.materialIds ?? existing?.materialIds ?? planned?.materialIds ?? [],
+						history,
 					};
 					const meta = draft.outline.find((chapter) => chapter.id === params.chapterId);
 					// 有正文就该是 drafted：素材智能体常把章节留在 outlined，
@@ -571,4 +742,139 @@ export function createWritingTools(deps: NovelToolDeps): AgentTool<any>[] {
 		...sharedTools(deps),
 		writeChapterTool(deps),
 	];
+}
+
+// ═══════════════════════════════════════════════════════════ 通用素材库作用域
+
+/**
+ * 通用素材库用的工具集。
+ *
+ * 作者要在开书之前先把料备好，那时还没有工程、也没有大纲 ——
+ * 所以这里不是把作品工具换个 store，而是另起一套：库里没有章节可立、
+ * 没有装料可挂，给出那些工具只会让模型反复撞空。
+ * 能做的只有两件事：看库里有什么，往库里写一条。
+ */
+export interface LibraryToolDeps {
+	library: MaterialLibrary;
+}
+
+/** 库条目的一行摘要。与作品素材同格式，但不带"已装入"——库里没有章节。 */
+function libraryLine(entry: LibraryMaterial): string {
+	const head = "[" + MATERIAL_KIND_LABELS[entry.kind] + "] " + entry.title + "（id: " + entry.id + "）";
+	const bits: string[] = [];
+	if (entry.usage) bits.push("用于：" + entry.usage);
+	if (entry.tags.length > 0) bits.push("标签：" + entry.tags.join("、"));
+	if (entry.status === "confirmed") bits.push("已确认");
+	return bits.length > 0 ? head + "\n  " + bits.join("；") : head;
+}
+
+function libraryBody(entry: LibraryMaterial): string {
+	return entry.content ? "\n  " + entry.content.split("\n").join("\n  ") : "";
+}
+
+export function createLibraryTools(deps: LibraryToolDeps): AgentTool<any>[] {
+	return [
+		defineTool({
+			name: "list_materials",
+			label: "查看通用素材库",
+			description:
+				"列出通用素材库里已有的条目。每条含 id、种类、标题、用途（usage）与标签；full 为 true 时附带全文。" +
+				"写新条目前先调用它，避免和已有的重复。",
+			parameters: Type.Object(
+				{
+					kind: Type.Optional(Type.String({ description: "按种类筛选，如 character / world / plot" })),
+					query: optionalText("按标题、用途或标签筛选"),
+					full: Type.Optional(Type.Boolean({ description: "为 true 时返回素材全文，默认只给摘要" })),
+				},
+				{ description: "查看通用素材库" },
+			),
+			execute: async (_toolCallId, params) => {
+				const all = deps.library.list();
+				const filter = params.kind?.trim().toLowerCase();
+				const query = params.query?.trim().toLowerCase();
+				let found = all;
+				if (filter) found = found.filter((m) => m.kind === filter);
+				if (query) {
+					found = found.filter(
+						(m) =>
+							m.title.toLowerCase().includes(query) ||
+							m.usage.toLowerCase().includes(query) ||
+							m.tags.some((tag) => tag.toLowerCase().includes(query)),
+					);
+				}
+				if (found.length === 0) {
+					return result(
+						filter || query ? "没有符合条件的条目。库里共 " + all.length + " 条。" : "通用素材库还是空的。",
+						[],
+					);
+				}
+				const text = found
+					.map((m) => libraryLine(m) + (params.full === true ? libraryBody(m) : ""))
+					.join("\n");
+				return result(text, found);
+			},
+		}),
+
+		defineTool({
+			name: "upsert_material",
+			label: "新建 / 更新通用素材",
+			description:
+				"新建或更新一条**通用素材**。通用素材不属于任何一部作品，作者会在多部书里取用它们，" +
+				"所以要写成脱离具体作品也能看懂的东西：不要写「这是本书」「主角」这类只在这部书里成立的说法。" +
+				"新建时必须给齐 kind / title / content / usage 四项；更新（带 id）时只给要改的字段。" +
+				"usage 要写清什么情况下该用这条料，一句说完。content 必须精减：只留事实、约束、边界，不写散文。",
+			parameters: Type.Object(
+				{
+					id: optionalText("已存在条目的 id；新建时留空"),
+					kind: Type.Optional(materialKindSchema),
+					title: optionalText("标题。新建必填，更新时可省"),
+					content: optionalText("素材内容：只写事实、约束与边界，一行一个事实，务必精减。新建必填，更新时可省"),
+					usage: optionalText("装配提示：什么情况下该用这条素材。新建必填，更新时可省"),
+					tags: Type.Optional(stringArray("标签、别名")),
+				},
+				{ description: "通用素材条目" },
+			),
+			execute: async (_toolCallId, params) => {
+				const id = params.id?.trim() || randomUUID();
+				const existing = deps.library.get(id);
+				// 四个字段在 schema 里都是可选的（更新时只给要改的那几项），
+				// 新建的完整性在这里补校验，让模型当轮自己改对。
+				if (!existing) {
+					const missing: string[] = [];
+					if (!params.kind) missing.push("kind（素材种类）");
+					if (!params.title?.trim()) missing.push("title（标题）");
+					if (!params.content?.trim()) missing.push("content（素材内容）");
+					if (!params.usage?.trim()) missing.push("usage（装配提示）");
+					if (missing.length > 0) {
+						return result(
+							"新建通用素材还缺：" + missing.join("、") + "。请重新调用 upsert_material 补全后再试。" +
+								"（若本意是修改已有条目，请带上它的 id。）",
+						);
+					}
+				}
+				// create 负责新 id 与默认状态，update 负责逐字段覆盖 ——
+				// 按有无 existing 分流，两条路径的字段含义才一致。
+				const fields = {
+					kind: params.kind ?? existing?.kind ?? ("other" as MaterialKind),
+					title: params.title?.trim() || existing?.title,
+					content: params.content?.trim() ? params.content : existing?.content,
+					usage: params.usage?.trim() || existing?.usage,
+					tags: params.tags ?? existing?.tags,
+				};
+				const saved = existing
+					? deps.library.update(existing.id, fields)!
+					: deps.library.create(fields);
+				return result(
+					(existing ? "已更新通用素材《" : "已新建通用素材《") + saved.title + "》（id: " + saved.id + "）。" +
+						"作者可在任意作品里取用它。",
+					saved,
+				);
+			},
+		}),
+	];
+}
+
+function emptyLibraryMaterial(id: string, kind: MaterialKind): LibraryMaterial {
+	const now = Date.now();
+	return { id, kind, title: "", content: "", tags: [], usage: "", status: "draft", createdAt: now, updatedAt: now };
 }

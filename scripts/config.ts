@@ -4,7 +4,7 @@
  *
  * 运行：pnpm test:config
  */
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
@@ -122,6 +122,38 @@ try {
 	settingsReopened.removeProvider("p1");
 	check("删除供应商", settingsReopened.getProvider("p1") === undefined);
 	check("删除时清空失效的默认模型", settingsReopened.get().defaultModel === "");
+
+	// 配置文件损坏不能静默当空配置：下一次落盘会把原文覆盖掉，
+	// 用户配好的供应商、模型与默认模型全丢且没有备份。
+	// 预期行为：原文改名隔离为 settings.json.corrupt-<时间戳>，应用用默认值继续且仍可写。
+	console.log("\n设置文件损坏隔离");
+	const corruptDir = path.join(dir, "settings-corrupt");
+	await mkdir(corruptDir, { recursive: true });
+	const corruptFile = path.join(corruptDir, "settings.json");
+	const corruptRaw = '{ "providers": [ 这不是合法 JSON';
+	await writeFile(corruptFile, corruptRaw, "utf8");
+	const recovered = await SettingsStore.open(corruptDir);
+	check("损坏时用默认配置继续", recovered.get().providers.length === 0, String(recovered.get().providers.length));
+	const corruptNames = await readdir(corruptDir);
+	const keptName = corruptNames.find((name) => name.startsWith("settings.json.corrupt-"));
+	check("原文件被改名为 .corrupt-<时间戳>", keptName !== undefined, corruptNames.join(","));
+	check(
+		"隔离文件保留原内容",
+		keptName !== undefined && (await readFile(path.join(corruptDir, keptName), "utf8")) === corruptRaw,
+		String(keptName),
+	);
+	recovered.upsertProvider({ id: "p1", label: "P1", kind: "custom", baseUrl: "https://x.test/v1", api: "openai-completions", models: [], enabled: true, updatedAt: 0 });
+	await new Promise((resolve) => setTimeout(resolve, 120));
+	const rewritten = await readFile(corruptFile, "utf8").catch(() => undefined);
+	let rewrittenProviders: Array<{ id?: string }> = [];
+	try {
+		rewrittenProviders = (JSON.parse(rewritten ?? "{}") as { providers?: Array<{ id?: string }> }).providers ?? [];
+	} catch {
+		rewrittenProviders = [];
+	}
+	check("隔离后设置仍可写", rewrittenProviders.some((provider) => provider.id === "p1"), String(rewritten));
+	const recoveredReopened = await SettingsStore.open(corruptDir);
+	check("隔离后重开仍是用户新配置", recoveredReopened.getProvider("p1")?.label === "P1");
 
 	// ---------------------------------------------------------------- 供应商目录
 	console.log("\n内置供应商目录");

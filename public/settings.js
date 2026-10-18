@@ -36,6 +36,16 @@ export const THINKING_LEVELS = [
 	["max", "尽思"],
 ];
 
+/**
+ * 档位展示文案：中文水墨词后头跟一句原始值。
+ *
+ * 中文词只管意境，真正写进 .env 或调 API 的是括号里的那个词，
+ * 摆在一起免得对着屏幕猜 high 到底是「深思」还是「尽思」。
+ */
+export function levelText(value, label) {
+	return `${label}（${value}）`;
+}
+
 /** 档位值取水墨文案；认不出的原样透出，免得静默吞掉。 */
 function levelLabel(value) {
 	return THINKING_LEVELS.find((level) => level[0] === value)?.[1] ?? value;
@@ -119,7 +129,7 @@ function renderDefaults() {
 	const thinking = $("settings-default-thinking");
 	thinking.replaceChildren();
 	for (const [value, label] of THINKING_LEVELS) {
-		const option = el("option", "", label);
+		const option = el("option", "", levelText(value, label));
 		option.value = value;
 		thinking.append(option);
 	}
@@ -149,19 +159,10 @@ function renderProviderList() {
 	const list = $("settings-providers");
 	list.replaceChildren();
 
-	// 搜索框：内置供应商有 40 个，没有它没法找
-	const searchWrap = el("li", "search-wrap");
-	const search = document.createElement("input");
-	search.type = "search";
-	search.className = "provider-search";
-	search.placeholder = "搜索供应商…";
-	search.value = view.query;
-	search.addEventListener("input", () => {
-		view.query = search.value.trim().toLowerCase();
-		renderProviderList();
-	});
-	searchWrap.append(search);
-	list.append(searchWrap);
+	// 搜索框在 index.html 里，不归这里管：它若跟着列表一起重建，
+	// 每敲一个字就被销毁一次，焦点掉回 body，第二个字永远敲不进去。
+	// 也别在这里回写它的 value：view.query 是小写化过的，回写会把作者
+	// 刚敲的大小写抹掉、把光标弹回末尾。
 
 	const builtin = view.data.providers.filter((p) => p.kind === "builtin");
 	const custom = view.data.providers.filter((p) => p.kind === "custom");
@@ -489,7 +490,7 @@ function renderCustomModels(box, provider) {
 				else next.delete(value);
 				void saveModel(provider.id, { ...model, reasoning: true, thinkingLevels: [...next] });
 			});
-			wrap.append(box, document.createTextNode(labelText));
+			wrap.append(box, document.createTextNode(labelText), el("span", "level-code", `（${value}）`));
 			levels.append(wrap);
 		}
 		levelsCell.append(levels);
@@ -728,4 +729,9 @@ export function bindSettings() {
 	$("settings-close").addEventListener("click", () => $("settings-dialog").close());
 	$("settings-default-model").addEventListener("change", () => void saveDefaults());
 	$("settings-default-thinking").addEventListener("change", () => void saveDefaults());
+	// 搜索只重画列表，搜索框本身不动，焦点才留得住
+	$("provider-search").addEventListener("input", (event) => {
+		view.query = event.target.value.trim().toLowerCase();
+		renderProviderList();
+	});
 }

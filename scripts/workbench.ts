@@ -8,8 +8,10 @@
  * 运行：pnpm test:server
  */
 import { spawn } from "node:child_process";
+import { closeSync, openSync, readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { createServer } from "node:net";
+import { createServer, request as httpRequest } from "node:http";
+import { createServer as createProbeServer, connect } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -49,7 +51,7 @@ await writeFile(path.join(dir, seedId + ".json"), JSON.stringify(seed, null, 2),
 
 function freePort(): Promise<number> {
 	return new Promise((resolve, reject) => {
-		const probe = createServer();
+		const probe = createProbeServer();
 		probe.on("error", reject);
 		probe.listen(0, "127.0.0.1", () => {
 			const address = probe.address();
@@ -62,6 +64,96 @@ function freePort(): Promise<number> {
 const port = await freePort();
 const base = `http://127.0.0.1:${port}`;
 
+// ------------------------------------------------------------------ 假上游
+//
+// 客户端断开要真的把上游请求掐掉，而真实模型需要 Key 与网络。这里起一个
+// OpenAI Chat Completions 兼容的本地假上游：回一段持续输出的 SSE，
+// 只要消费者断开，服务端那侧的连接就会关掉 —— 正好用来断言"中止真的传到了上游"。
+const mockPort = await freePort();
+let upstreamHits = 0;
+let resolveUpstreamClosed: () => void = () => undefined;
+const upstreamClosed = new Promise<void>((resolve) => {
+	resolveUpstreamClosed = resolve;
+});
+const mockServer = createServer((req, res) => {
+	if (req.method !== "POST" || !String(req.url ?? "").endsWith("/chat/completions")) {
+		res.writeHead(404).end();
+		return;
+	}
+	req.resume();
+	upstreamHits += 1;
+	res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", connection: "keep-alive" });
+	const send = (delta: Record<string, unknown>) => {
+		if (res.writableEnded) return;
+		res.write(
+			"data: " +
+				JSON.stringify({
+					id: "mock-1",
+					object: "chat.completion.chunk",
+					created: Date.now(),
+					model: "mock",
+					choices: [{ index: 0, delta, finish_reason: null }],
+				}) +
+				"\n\n",
+		);
+	};
+	send({ role: "assistant", content: "" });
+	send({ content: "正在写。" });
+	const timer = setInterval(() => send({ content: "……" }), 100);
+	res.on("close", () => {
+		clearInterval(timer);
+		resolveUpstreamClosed();
+	});
+});
+await new Promise<void>((resolve) => mockServer.listen(mockPort, "127.0.0.1", resolve));
+
+// 设置页的自定义供应商指向假上游：有它才能在无 Key、无外网的测试里走通生成链路。
+await writeFile(
+	path.join(dir, "settings.json"),
+	JSON.stringify(
+		{
+			version: 1,
+			// 不设默认模型：已有的"无可用模型"断言依赖默认模型为空；
+			// 需要假上游的用例会显式传 modelRef。
+			defaultModel: "",
+			defaultThinkingLevel: "off",
+			providers: [
+				{
+					id: "mock",
+					label: "本地假上游",
+					kind: "custom",
+					baseUrl: `http://127.0.0.1:${mockPort}/v1`,
+					api: "openai-completions",
+					noAuthRequired: true,
+					models: [
+						{
+							id: "mock",
+							name: "mock",
+							contextWindow: 100_000,
+							maxTokens: 4_000,
+							reasoning: false,
+							thinkingLevels: ["off"],
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+						},
+					],
+					enabled: true,
+					updatedAt: 0,
+				},
+			],
+		},
+		null,
+		2,
+	),
+	"utf8",
+);
+
+// 子进程日志写文件而不是接管道：受限环境里命名管道可能不可用
+// （spawn 默认 stdio:"pipe" 会 EPERM），文件描述符在 Windows 与沙箱里都更稳。
+const logOut = path.join(dir, "server.out.log");
+const logErr = path.join(dir, "server.err.log");
+const outFd = openSync(logOut, "w");
+const errFd = openSync(logErr, "w");
+
 const child = spawn(process.execPath, ["--experimental-strip-types", "src/server/main.ts"], {
 	cwd: root,
 	env: {
@@ -73,11 +165,15 @@ const child = spawn(process.execPath, ["--experimental-strip-types", "src/server
 		// 别让仓库里的 .env 把端口与数据目录顶掉。
 		NOVEL_STUDIO_ENV_FILE: path.join(dir, "absent.env"),
 	},
-	stdio: ["ignore", "pipe", "pipe"],
+	stdio: ["ignore", outFd, errFd],
 });
-let serverLog = "";
-child.stdout.on("data", (chunk) => { serverLog += chunk.toString(); });
-child.stderr.on("data", (chunk) => { serverLog += chunk.toString(); });
+closeSync(outFd);
+closeSync(errFd);
+
+/** 子进程日志按需读：只有就绪失败或退出时才需要它。 */
+function serverLog(): string {
+	return readFileSync(logOut, "utf8") + readFileSync(logErr, "utf8");
+}
 
 interface Reply {
 	status: number;
@@ -100,10 +196,21 @@ async function req(method: string, urlPath: string, body?: unknown, raw?: Buffer
 	return { status: res.status, data };
 }
 
+/** 导出回的是纯文本，还要看响应头，所以不能走上面那个只认 JSON 的 req。 */
+async function reqText(urlPath: string): Promise<{ status: number; text: string; disposition: string; type: string }> {
+	const res = await fetch(base + urlPath);
+	return {
+		status: res.status,
+		text: await res.text(),
+		disposition: res.headers.get("content-disposition") ?? "",
+		type: res.headers.get("content-type") ?? "",
+	};
+}
+
 async function waitReady(timeoutMs = 30_000): Promise<void> {
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
-		if (child.exitCode !== null) throw new Error("服务进程已退出：\n" + serverLog);
+		if (child.exitCode !== null) throw new Error("服务进程已退出：\n" + serverLog());
 		try {
 			const res = await fetch(base + "/api/bootstrap");
 			if (res.ok) return;
@@ -112,7 +219,80 @@ async function waitReady(timeoutMs = 30_000): Promise<void> {
 		}
 		await new Promise((resolve) => setTimeout(resolve, 150));
 	}
-	throw new Error("服务未在超时内就绪：\n" + serverLog);
+	throw new Error("服务未在超时内就绪：\n" + serverLog());
+}
+
+/** 轮询等待某个条件成立，超时返回 false。 */
+async function waitFor(predicate: () => Promise<boolean> | boolean, timeoutMs = 5_000): Promise<boolean> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		if (await predicate()) return true;
+		await new Promise((resolve) => setTimeout(resolve, 40));
+	}
+	return false;
+}
+
+/** 固定等待一段时间后给出 false，与 Promise.race 配合做超时。 */
+function timeout(ms: number): Promise<boolean> {
+	return new Promise((resolve) => setTimeout(() => resolve(false), ms));
+}
+
+/**
+ * 直接发一段原始 HTTP 请求。
+ *
+ * fetch 造不出畸形请求行，也不会在声明超大 Content-Length 后只发头不发体；
+ * 而这两件事正是入口加固要测的边界。
+ */
+function rawHttp(head: string, timeoutMs = 5_000): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const socket = connect(port, "127.0.0.1", () => socket.write(head));
+		let data = "";
+		const timer = setTimeout(() => {
+			socket.destroy();
+			resolve(data);
+		}, timeoutMs);
+		socket.on("data", (chunk) => {
+			data += chunk.toString("utf8");
+			if (data.includes("\r\n\r\n")) {
+				clearTimeout(timer);
+				socket.destroy();
+				resolve(data);
+			}
+		});
+		socket.on("error", (error) => {
+			clearTimeout(timer);
+			reject(error);
+		});
+	});
+}
+
+/** 发起一次生成请求，读到第一段 NDJSON 即算开始；destroy 用来模拟关页/断网。 */
+function streamSessionMessage(sessionId: string): { destroy: () => void; started: Promise<void> } {
+	let resolveStarted: () => void = () => undefined;
+	const started = new Promise<void>((resolve) => {
+		resolveStarted = resolve;
+	});
+	let settled = false;
+	const client = httpRequest(base + `/api/sessions/${sessionId}/messages`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+	});
+	client.on("response", (res) => {
+		let buffer = "";
+		res.on("data", (chunk) => {
+			if (settled) return;
+			buffer += chunk.toString("utf8");
+			if (buffer.includes("\n")) {
+				settled = true;
+				resolveStarted();
+			}
+		});
+		res.on("error", () => undefined);
+	});
+	// 客户端主动 destroy 后必然报错，这里不把它当测试失败。
+	client.on("error", () => undefined);
+	client.end(JSON.stringify({ input: "写点什么" }));
+	return { destroy: () => client.destroy(), started };
 }
 
 try {
@@ -122,6 +302,34 @@ try {
 	const bootstrap = await req("GET", "/api/bootstrap");
 	check("bootstrap 列出种子工程", bootstrap.data.projects.some((p: any) => p.id === seedId));
 	check("bootstrap 带出模型目录", Array.isArray(bootstrap.data.models));
+
+	// ---- 入口与请求体加固 ----
+	console.log("\n入口加固");
+	// 畸形请求行曾让 new URL 在 createServer 回调里裸抛，直接带走整个进程。
+	const malformed = await rawHttp("GET http://[ HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+	check("畸形请求行返回 400", malformed.startsWith("HTTP/1.1 400"), malformed.split("\r\n")[0]);
+	check("畸形请求后服务仍存活", (await req("GET", "/api/bootstrap")).status === 200);
+
+	const badJson = await req("POST", "/api/projects", undefined, Buffer.from("{ 不是合法 JSON", "utf8"));
+	check("坏 JSON 返回 400 而不是 500", badJson.status === 400, String(badJson.status) + " " + JSON.stringify(badJson.data));
+
+	// 只发请求头、不真正传 9 MB：服务端应在读体之前就按 Content-Length 拒绝。
+	const oversizedJson = await rawHttp(
+		"POST /api/projects HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: 9000000\r\nConnection: close\r\n\r\n",
+	);
+	check("JSON 请求体超 8MB 返回 413", oversizedJson.startsWith("HTTP/1.1 413"), oversizedJson.split("\r\n")[0]);
+
+	const oversizedUpload = await rawHttp(
+		"POST /api/uploads?filename=a.txt HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/octet-stream\r\nContent-Length: 40000000\r\nConnection: close\r\n\r\n",
+	);
+	check("上传声明超 32MB 返回 413", oversizedUpload.startsWith("HTTP/1.1 413"), oversizedUpload.split("\r\n")[0]);
+
+	const storage = await req("GET", "/api/storage");
+	check(
+		"落盘状态同时给 pending 与 pendingChapters",
+		Array.isArray(storage.data.pending) && typeof storage.data.pendingChapters === "object",
+		JSON.stringify(storage.data),
+	);
 
 	// ---- 工程 ----
 	console.log("\n工程");
@@ -348,6 +556,74 @@ try {
 	check("连立两章不撞号", second.data.chapter.id !== made.data.chapter.id, `${made.data.chapter.id} / ${second.data.chapter.id}`);
 	check("只要标题也能立章", second.data.chapter.summary === "" && second.data.chapter.targetWords === 0);
 
+	// ---- 导出 ----
+	// 导出的稿子要能直接带走：单章、整本、markdown 三种口径，外加中文文件名。
+	const draftText = "老周把船缆绕在桩上，等一个不来的客人。\n\n江面起了雾。";
+	const savedDraft = await req("PATCH", `/api/projects/${seedId}/chapters/${made.data.chapter.id}`, { content: draftText });
+	check("存稿返回 200", savedDraft.status === 200 && savedDraft.data.chapter.content === draftText, String(savedDraft.status));
+
+	// 大纲里没有的章节不能被正文写入凭空造成 draft（那样正文永远挂不上任何章）。
+	const ghostPatch = await req("PATCH", `/api/projects/${seedId}/chapters/ghost-chapter`, { content: "无主正文" });
+	check("PATCH 不存在的章节返回 404", ghostPatch.status === 404, String(ghostPatch.status));
+	const afterGhost = await req("GET", `/api/projects/${seedId}`);
+	check("幽灵章节没有被造出来", afterGhost.data.project.drafts["ghost-chapter"] === undefined);
+
+	// 自动保存只持久化、不构成版本点；显式保存才归档旧稿，内容没变也不留重复版本。
+	const autosave1 = await req("PATCH", `/api/projects/${seedId}/chapters/${made.data.chapter.id}`, {
+		content: "自动保存第一版",
+		autosave: true,
+	});
+	const autosave2 = await req("PATCH", `/api/projects/${seedId}/chapters/${made.data.chapter.id}`, {
+		content: "自动保存第二版",
+		autosave: true,
+	});
+	check(
+		"连续两次自动保存不产生版本",
+		autosave1.status === 200 && autosave2.data.chapter.history.length === 0,
+		JSON.stringify(autosave2.data.chapter?.history),
+	);
+	check("自动保存的内容已生效", autosave2.data.chapter.content === "自动保存第二版", autosave2.data.chapter.content);
+	// 版本历史不追加，但 revision/updatedAt 必须照常推进：前端靠它显示稿次与保存时间。
+	check("自动保存也递增 revision", autosave2.data.chapter.revision === 3, String(autosave2.data.chapter.revision));
+	check("自动保存也刷新 updatedAt", autosave2.data.chapter.updatedAt >= autosave1.data.chapter.updatedAt);
+	const explicitSave = await req("PATCH", `/api/projects/${seedId}/chapters/${made.data.chapter.id}`, { content: "显式保存稿" });
+	check("显式保存归档旧稿", explicitSave.data.chapter.history.length === 1, String(explicitSave.data.chapter.history.length));
+	check(
+		"归档的是自动保存的最后一版",
+		explicitSave.data.chapter.history[0]?.content === "自动保存第二版",
+		explicitSave.data.chapter.history[0]?.content,
+	);
+	const repeatSave = await req("PATCH", `/api/projects/${seedId}/chapters/${made.data.chapter.id}`, { content: "显式保存稿" });
+	check("内容相同再保存不产生重复版本", repeatSave.data.chapter.history.length === 1, String(repeatSave.data.chapter.history.length));
+	// 还原成导出用例的正文：后面的断言依赖这份内容。
+	await req("PATCH", `/api/projects/${seedId}/chapters/${made.data.chapter.id}`, { content: draftText });
+
+	const oneChapter = await reqText(`/api/projects/${seedId}/export?chapter=${made.data.chapter.id}`);
+	check("单章导出返回 200", oneChapter.status === 200, String(oneChapter.status));
+	check(
+		"单章导出带章题与正文",
+		oneChapter.text.includes("第3章") && oneChapter.text.includes("空渡") && oneChapter.text.includes("等一个不来的客人"),
+		oneChapter.text.slice(0, 60),
+	);
+	check("单章导出不含书名", !oneChapter.text.includes("种子工程"), oneChapter.text.slice(0, 60));
+	check("单章导出是纯文本附件", oneChapter.type.includes("text/plain") && oneChapter.disposition.includes("attachment"), oneChapter.disposition);
+	// 中文名塞进 filename= 会被浏览器整个丢掉，必须走 RFC 5987。
+	check("导出文件名走 RFC 5987", oneChapter.disposition.includes("filename*=UTF-8''"), oneChapter.disposition);
+
+	const wholeBook = await reqText(`/api/projects/${seedId}/export`);
+	check("整本导出以书名开头", wholeBook.text.startsWith("种子工程"), wholeBook.text.slice(0, 20));
+	check("整本导出收录已落笔的章", wholeBook.text.includes("江面起了雾"), wholeBook.text.slice(0, 60));
+	// 空章导出成一片空白没有意义，只会让用户自己回头删。
+	check("整本导出跳过没落笔的章", !wholeBook.text.includes("第四章"), wholeBook.text.slice(-60));
+
+	const asMarkdown = await reqText(`/api/projects/${seedId}/export?format=md`);
+	check("markdown 导出加书名标题", asMarkdown.text.startsWith("# 种子工程"), asMarkdown.text.slice(0, 20));
+	check("markdown 导出加章标题", asMarkdown.text.includes("## 第"), asMarkdown.text.slice(0, 60));
+	check("markdown 文件名后缀是 .md", asMarkdown.disposition.includes(".md"), asMarkdown.disposition);
+
+	check("导出不存在的章节返回 404", (await reqText(`/api/projects/${seedId}/export?chapter=ghost`)).status === 404);
+	check("导出不存在的作品返回 404", (await reqText("/api/projects/nope/export")).status === 404);
+
 	// 新章要被成文链路认作合法章节：没装料时是 409（缺料），不是 404（章节不存在）。
 	// 这条正是「立完章就能装料成文」的最小证据。
 	const preflightNew = await req("POST", `/api/projects/${seedId}/chapters/${made.data.chapter.id}/write`, { mode: "create" });
@@ -437,6 +713,31 @@ try {
 	const ghostAbort = await req("POST", "/api/sessions/ghost/abort");
 	check("中止不存在的会话返回 404", ghostAbort.status === 404);
 
+	// ---- 生成中断与换模型 ----
+	console.log("\n生成中断");
+	const mockSession = await req("POST", "/api/sessions", { projectId: seedId, role: "material", modelRef: "mock/mock" });
+	check("本地假上游可建会话", mockSession.status === 201, JSON.stringify(mockSession.data));
+	const streamSessionId = String(mockSession.data.sessionId ?? "");
+	const stream = streamSessionMessage(streamSessionId);
+	const started = await Promise.race([stream.started.then(() => true), timeout(5_000)]);
+	check("生成流已开始", started, "等待 NDJSON 首包超时");
+	const hitUpstream = await waitFor(() => upstreamHits > 0);
+	check("假上游收到生成请求", hitUpstream, String(upstreamHits));
+	// 生成途中换模型会把正在跑的智能体换掉：必须先拒绝。
+	const busySwitch = await req("POST", `/api/sessions/${streamSessionId}/model`, { modelRef: "mock/mock" });
+	check("生成中换模型返回 409", busySwitch.status === 409, String(busySwitch.status) + " " + JSON.stringify(busySwitch.data));
+	// 模拟关页：断开客户端连接，服务端必须把上游请求一起掐掉。
+	stream.destroy();
+	const aborted = await Promise.race([upstreamClosed.then(() => true), timeout(8_000)]);
+	check("客户端断开后上游连接被中止", aborted, "上游连接未在超时内关闭");
+	check("中止后服务仍存活", (await req("GET", "/api/bootstrap")).status === 200);
+	const afterAbortSwitch = await req("POST", `/api/sessions/${streamSessionId}/model`, { modelRef: "mock/mock" });
+	check(
+		"中止后可以换模型",
+		afterAbortSwitch.status === 200,
+		String(afterAbortSwitch.status) + " " + JSON.stringify(afterAbortSwitch.data),
+	);
+
 	// ---- 删除素材的连带清理 ----
 	console.log("\n删除素材");
 	const beforeDelete = await req("GET", `/api/projects/${seedId}`);
@@ -471,6 +772,87 @@ try {
 	check("脚本里有进卷与回案头", appSource.includes("enterProject") && appSource.includes("leaveWorkspace"));
 	const style = await fetch(base + "/style.css");
 	const styleSource = await style.text();
+
+	// id 必须唯一：$() 取的是文档里第一个同名元素，重了就会静默取错，
+	// 而症状离现场很远（比如"另起一卷点了没反应"）。这类错值得单列一条守住。
+	const idCounts = new Map<string, number>();
+	for (const match of indexHtml.matchAll(/\sid="([^"]+)"/g)) {
+		idCounts.set(match[1]!, (idCounts.get(match[1]!) ?? 0) + 1);
+	}
+	const duplicateIds = [...idCounts.entries()].filter(([, n]) => n > 1).map(([id]) => id);
+	check("页面里的 id 不重复", duplicateIds.length === 0, duplicateIds.join(" "));
+
+	// app.js 里 $() 取的每个 id 都得解析得到：要么写在页面上，要么由脚本自己创建。
+	// 取到 null 会在那一步炸，而报错现场常常离真正的原因很远。
+	const htmlIds = new Set(idCounts.keys());
+	const dynamicIds = new Set([...appSource.matchAll(/\.id\s*=\s*"([^"]+)"/g)].map((m) => m[1]!));
+	const referenced = new Set([...appSource.matchAll(/\$\("([^"]+)"\)/g)].map((m) => m[1]!));
+	const missingIds = [...referenced].filter((id) => !htmlIds.has(id) && !dynamicIds.has(id));
+	check("脚本引用的 id 都存在（静态或脚本自建）", missingIds.length === 0, missingIds.join(" "));
+
+	// 高度链：桌面是 100vh 网格，里面每一级都得显式 min-height:0，
+	// 否则内容一长就把父级顶开，页面出现滚动条、输入框被推到屏幕外。
+	// 缺哪一级都看不出来，所以逐条点名守。
+	const heightChain: [string, RegExp][] = [
+		[".stage", /\.stage\s*\{[^}]*min-height:\s*0/],
+		[".view", /\.view\s*\{[^}]*min-height:\s*0/],
+		[".bench", /\.bench\s*\{[^}]*min-height:\s*0/],
+		[".bench-pane", /\.bench-pane\s*\{[^}]*min-height:\s*0/],
+		[".stream", /\.stream\s*\{[^}]*min-height:\s*0/],
+	];
+	const brokenChain = heightChain.filter(([, re]) => !re.test(styleSource)).map(([name]) => name);
+	check("高度链每级都归零了 min-height", brokenChain.length === 0, brokenChain.join(" "));
+
+	// 文稿页是整条高度链上唯一的滚动容器。body 是 overflow:hidden，
+	// 这一格不写 overflow，长章节就被直接裁掉：翻不到底，也拖不动。
+	check(
+		"文稿页自己就是滚动容器",
+		/#view-manuscript\s*\{[^}]*overflow:\s*auto/.test(styleSource),
+		"#view-manuscript 缺 overflow:auto",
+	);
+	// 留白必须挂在还活着的选择器上：.ms 曾经是一条谁都不匹配的死规则，
+	// 滚动与留白一起静默失效了很久。
+	check(
+		"稿纸留白没挂在死选择器上",
+		!/^\s*\.ms\s*\{/m.test(styleSource) && /#view-manuscript\s*\{[^}]*padding:/.test(styleSource),
+		".ms 无人使用；留白应写在 #view-manuscript 上",
+	);
+	// 章节操作条吸在稿台顶部，排在正文之前：写作时手要够得着「存稿」，
+	// 不该被一整章的篇幅压在底下。
+	check(
+		"章节操作条吸顶",
+		styleSource.includes("#view-manuscript .actions-center") &&
+			/\.actions-center[^}]*position:\s*sticky/.test(styleSource.replace(/\n/g, " ")) &&
+			/\n#view-manuscript \.actions-center \{[^}]*top:/.test(styleSource.replace(/\t/g, "")),
+		"缺少吸顶的章节操作条",
+	);
+	check(
+		"操作条排在正文之前",
+		/box\.append\(chapterToolbar\(chapter, index, content\)\);\s*\n\s*box\.append\(page\);/.test(appSource),
+		"操作条应 append 在 page 之前",
+	);
+	// 稿纸必须给死宽度。稿台是 flex 纵向容器，margin:auto 会关掉 align-self:stretch，
+	// 只写 max-width 的话稿纸退化成 fit-content：读稿时被长句顶到上限看着正常，
+	// 一进改稿模式正文成了唯一内容，宽度就塌到 textarea 的 cols 默认值（20 字）。
+	check(
+		"稿纸有确定宽度（不被 fit-content 收窄）",
+		/\.ms-page \{[^}]*width:\s*100%/.test(styleSource.replace(/\n/g, " ")) &&
+			/\.front-matter \{[^}]*width:\s*100%/.test(styleSource.replace(/\n/g, " ")),
+		".ms-page / .front-matter 缺 width:100%",
+	);
+	// 改稿框按内容撑开，别把一章关进固定高度的小窗里。
+	check(
+		"改稿框按内容自动撑高",
+		appSource.includes("function fitEditor") &&
+			/editor\.addEventListener\("input"[\s\S]{0,160}?fitEditor\(editor\)/.test(appSource) &&
+			/\.ms-edit \{[^}]*resize:\s*none/.test(styleSource.replace(/\n/g, " ")),
+		"缺少 fitEditor 或 .ms-edit 的 resize:none",
+	);
+	// 导出：作者要能把稿子带走，单章与整本都得有出口。
+	check("脚本里有导出逻辑", appSource.includes("exportProject") && appSource.includes("/export"));
+	check("总目与章节工具条都有导出入口", appSource.includes('"导出全书"') && appSource.includes("openExportDialog(chapter.id)"));
+	check("导出会解回中文文件名", appSource.includes("exportName") && appSource.includes("filename\\*=UTF-8''"));
+	check("没有正文时不导出空文件", appSource.includes("还没有正文可导出"));
 	check("样式可访问", style.status === 200 && styleSource.includes(".bench-pane"));
 	check("样式里有案头布局", styleSource.includes(".desk.is-home"));
 	// 思考过程要能收起：是 <details>，不是一块常驻的文本。
@@ -487,13 +869,41 @@ try {
 	);
 	check("选中条与选中卡有样式", styleSource.includes(".picked-bar") && styleSource.includes(".card.mat.is-picked"));
 	// 一轮跑完要重载工程：新素材才会同步进素材库与生文工作台，然后才能装配。
-	const sendBody = appSource.slice(appSource.indexOf("async function sendMessage"), appSource.indexOf("async function sendMessage") + 1600);
+	// 现在收尾走 reloadProjectSafely（先包一层错误提示），所以给足切片长度并只认函数前缀。
+	const sendBody = appSource.slice(appSource.indexOf("async function sendMessage"), appSource.indexOf("async function sendMessage") + 2800);
 	check("对议跑完会重载工程以同步素材", sendBody.includes("reloadProject"));
 	// 立一章：章节是装料的落点，没有章就看不了也装不了料。
 	check("左卷有立章入口", indexHtml.includes('id="add-chapter"'));
 	check("有立章对话框", indexHtml.includes('id="chapter-dialog"') && indexHtml.includes('id="chapter-form"'));
 	check("脚本里有立章逻辑", appSource.includes("openChapterDialog") && appSource.includes('"/chapters"'));
 	check("立章入口有样式", styleSource.includes(".rail-add"));
+
+	// 存照：误删素材、误改大纲时的退路，只有 API 没有入口等于没有。
+	check("作品卡有存照入口", appSource.includes("存照") && appSource.includes("openSnapshotDialog"));
+	check("有存照对话框", indexHtml.includes('id="snapshot-dialog"') && indexHtml.includes('id="snapshot-list"'));
+	check("存照行有样式", styleSource.includes(".snap-row") && styleSource.includes(".snap-when"));
+	check("脚本里有回滚逻辑", appSource.includes("restoreSnapshot") && appSource.includes("/snapshots/"));
+	// 回滚是破坏性的，不能一点就生效。
+	check("回滚需二次确认", appSource.includes("pendingSnapshotRestore") && appSource.includes("再点一次确认回滚"));
+	// 落盘失败必须有可见提示，否则用户以为存上了。
+	check("有落盘失败横幅", indexHtml.includes('id="storage-banner"') && styleSource.includes(".storage-banner"));
+	check("脚本里有落盘轮询与重试", appSource.includes("refreshStorageStatus") && appSource.includes("/api/storage/retry"));
+
+	// 库作用域：案头上的设定官要能选模型、能收资料。
+	// 早先案头把模型下拉藏了，加上智能体之后就没法用它备料。
+	check("案头不再藏模型选择", !styleSource.includes(".desk.is-home #model-select"));
+	check("库面板有传资料入口", indexHtml.includes('id="library-upload-pick"') && indexHtml.includes('id="library-upload-input"'));
+	check("库面板有原料列表", indexHtml.includes('id="library-uploads"'));
+	check("库上传走不绑工程的接口", appSource.includes('"/api/uploads"') && appSource.includes('handleFiles([...event.target.files], "library")'));
+	check("库原料列表有样式", styleSource.includes(".upload-list.compact"));
+	check("库提炼指令要求脱离作品", appSource.includes("脱离本书也成立"));
+
+	// 另起一席：会话是常驻的，作者要能主动清一次，否则历史一直攒。
+	check("三个面板都有另起一席", (indexHtml.match(/data-newchat=/g) ?? []).length === 3, String((indexHtml.match(/data-newchat=/g) ?? []).length));
+	check("另起一席有二次确认", appSource.includes("pendingNewChat") && appSource.includes("再点一次：弃掉这席"));
+	check("另起一席会删服务端会话", appSource.includes('method: "DELETE"') && appSource.includes("/api/sessions/"));
+	check("另起一席会清面板与快照", appSource.includes("state.transcripts.delete(key)") && appSource.includes("replaceChildren()"));
+	check("发话会收掉确认态", appSource.includes("state.pendingNewChat = null"));
 	// 没有章节时也要看得见料：装配区给立章按钮，库里列出全部素材、装配按钮停用。
 	check(
 		"无章节时仍列出素材",
@@ -520,29 +930,65 @@ try {
 	const outside = styleSource.split(lightTokens).join("").split(darkTokens).join("");
 	const hardcoded = outside.match(/#[0-9a-fA-F]{3,8}\b|rgba?\(/g) ?? [];
 	check("令牌块之外没有硬编码颜色", hardcoded.length === 0, hardcoded.slice(0, 4).join(" "));
-	// 引用的令牌都要有定义，否则会解析失败
-	const declared = new Set<string>([
-		...lightTokens.matchAll(/(--[a-z0-9-]+)\s*:/g),
-		...darkTokens.matchAll(/(--[a-z0-9-]+)\s*:/g),
-	].map((m) => m[1]!));
+	// 引用的令牌都要有定义，否则会解析失败。
+	// 定义不限于主题块：局部令牌（稿台的留白分量）挂在自己的选择器上是正当写法，
+	// 只扫 :root 会把它误判成未定义。主题覆盖另有下面那条专门守。
+	const declared = new Set<string>([...styleSource.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1]!));
 	const undefinedTokens = [...new Set([...styleSource.matchAll(/var\(\s*(--[a-z0-9-]+)/g)].map((m) => m[1]!))]
 		.filter((name) => !declared.has(name));
 	check("引用的令牌都有定义", undefinedTokens.length === 0, undefinedTokens.join(" "));
 	// 两套主题要覆盖同一组「会变色的」令牌
 	const lightNames = new Set([...lightTokens.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1]!));
 	const darkNames = new Set([...darkTokens.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1]!));
-	const themeInvariant = new Set(["--serif", "--kai", "--sans", "--mono", "--song", "--noise", "--wash"]);
+	const themeInvariant = new Set([
+		"--serif", "--kai", "--sans", "--mono", "--song", "--noise", "--wash",
+		// 排版三件套（字号/行距/版心）是全局设置，不随昼夜变化，故不要求在暗色块里重复。
+		"--ms-font-size", "--ms-line-height", "--ms-measure",
+	]);
 	const uncovered = [...lightNames].filter((n) => !darkNames.has(n) && !themeInvariant.has(n));
 	check("会变色的令牌暗色都有覆盖", uncovered.length === 0, uncovered.join(" "));
 	const traversal = await fetch(base + "/../package.json");
 	check("路径遍历被挡住", traversal.status === 403 || traversal.status === 404, String(traversal.status));
 	const unknown = await req("GET", "/api/nope");
 	check("未知接口返回 404", unknown.status === 404);
+
+	// 库作用域的上传：不绑工程也要能把资料喂给设定官。
+	const libUpload = await req("POST", "/api/uploads?filename=%E9%9B%A8%E5%A4%9C.md", undefined, Buffer.from("赛博都市的雨夜总是酸雨。", "utf8"));
+	check(
+		"库上传接口可用（不绑工程）",
+		libUpload.status === 200 && String(libUpload.data.upload?.text ?? "").includes("酸雨"),
+		String(libUpload.status),
+	);
+	check("库上传带回文件名", libUpload.data.upload?.filename === "雨夜.md", String(libUpload.data.upload?.filename));
+	const libUploadNoName = await req("POST", "/api/uploads", undefined, Buffer.from("x"));
+	check("库上传缺 filename 报 400", libUploadNoName.status === 400, String(libUploadNoName.status));
+
+	// 库作用域的会话：同样不绑工程。
+	// 测试环境没配模型，所以这里注定停在"请指定模型"——
+	// 关键是它不该报"缺少 projectId"，那才说明库作用域真的跳过了工程门槛。
+	const libSession = await req("POST", "/api/sessions", { scope: "library", role: "material" });
+	check(
+		"库会话不要求 projectId",
+		libSession.status !== 400 || String(libSession.data.error ?? "").includes("模型"),
+		libSession.status + " " + String(libSession.data.error ?? ""),
+	);
+	check("库会话不报缺少 projectId", !String(libSession.data.error ?? "").includes("projectId"), String(libSession.data.error ?? ""));
+	// 对照：不带 scope 时缺 projectId 必须被挡下。
+	const libSessionNoProject = await req("POST", "/api/sessions", { role: "material" });
+	check("缺 projectId 仍报 400", libSessionNoProject.status === 400, String(libSessionNoProject.status));
+	check("缺 projectId 的报错点名它", String(libSessionNoProject.data.error ?? "").includes("projectId"), String(libSessionNoProject.data.error ?? ""));
+
+	// 另起一席要能删掉服务端会话，否则它会一直挂到 TTL 到期。
+	const goneSession = await req("DELETE", "/api/sessions/does-not-exist");
+	check("删不存在的会话返回 404", goneSession.status === 404, String(goneSession.status));
+	check("删会话的路由确实注册了", !String(goneSession.data.error ?? "").includes("未知接口"), String(goneSession.data.error ?? ""));
 } catch (error) {
 	failures += 1;
 	console.log("\n运行中断：" + (error as Error).message);
 } finally {
 	child.kill();
+	mockServer.closeAllConnections();
+	mockServer.close();
 	// 落盘是异步的，给进程与文件句柄一点收尾时间。
 	await new Promise((resolve) => setTimeout(resolve, 300));
 	await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });

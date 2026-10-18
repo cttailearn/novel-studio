@@ -17,11 +17,9 @@ export interface AppConfig {
 	port: number;
 	host: string;
 	dataDir: string;
-	/** "provider/modelId"；为空表示由前端选择。 */
+	/** "provider/modelId"；为空表示由设置页或前端选择。 */
 	defaultModel: string;
 	defaultThinkingLevel: ThinkingLevel;
-	maxTokens: number | undefined;
-	temperature: number | undefined;
 }
 
 const THINKING_LEVELS: readonly ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
@@ -42,7 +40,5 @@ export function readConfig(): AppConfig {
 		dataDir: path.resolve(process.cwd(), process.env.DATA_DIR?.trim() || "./data"),
 		defaultModel: process.env.DEFAULT_MODEL?.trim() || "",
 		defaultThinkingLevel: THINKING_LEVELS.includes(thinking) ? thinking : "off",
-		maxTokens: num(process.env.MAX_TOKENS),
-		temperature: num(process.env.TEMPERATURE),
 	};
 }

@@ -23,8 +23,30 @@ export class SettingsStore {
 		await mkdir(dataDir, { recursive: true });
 		const file = path.join(dataDir, "settings.json");
 		const raw = await readFile(file, "utf8").catch(() => undefined);
-		const settings = raw ? normalizeSettings(safeParse(raw)) : normalizeSettings(null);
-		return new SettingsStore(file, settings);
+		if (raw === undefined) return new SettingsStore(file, normalizeSettings(null));
+
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(raw);
+		} catch (error) {
+			// 解析失败不能当成"空配置"直接继续：下一次落盘会拿默认配置覆盖原文，
+			// 用户配的供应商、模型与默认模型全没了，而且没有备份。
+			// 改名隔离，原文留在磁盘上可人工恢复；这次先用默认值把应用跑起来。
+			const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+			const kept = file + ".corrupt-" + stamp;
+			try {
+				await rename(file, kept);
+				console.error(
+					"[settings] 设置文件不是合法 JSON，已隔离为 " + path.basename(kept) + "，本次使用默认设置。请检查该文件恢复自定义配置：",
+					error,
+				);
+			} catch (renameError) {
+				// 改名失败（例如被占用）时宁可保留原文件，也别让它被后续写入覆盖。
+				console.error("[settings] 设置文件不是合法 JSON，且隔离改名失败（本次使用默认设置）:", renameError, error);
+			}
+			return new SettingsStore(file, normalizeSettings(null));
+		}
+		return new SettingsStore(file, normalizeSettings(parsed));
 	}
 
 	get(): Settings {
@@ -94,14 +116,5 @@ export class SettingsStore {
 			.catch((error) => console.error("[settings] 落盘失败:", error))
 			.then(() => undefined);
 		return this.writeChain;
-	}
-
-}
-function safeParse(raw: string): unknown {
-	try {
-		return JSON.parse(raw);
-	} catch (error) {
-		console.warn("[settings] 解析设置文件失败，已忽略:", error);
-		return null;
 	}
 }

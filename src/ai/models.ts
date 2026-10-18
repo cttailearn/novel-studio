@@ -327,8 +327,16 @@ export async function resolveModel(reference: string): Promise<Model<Api>> {
 	if (!ref) throw new ModelResolutionError("未指定模型");
 
 	const { models } = getRuntime();
-	const direct = ref.includes("/") ? models.getModel(...(ref.split("/") as [string, string])) : undefined;
-	if (direct) return direct;
+	// 只按第一个斜杠切分：模型 id 本身可以含斜杠（OpenRouter 的 "vendor/model"），
+	// 早先的 ref.split("/") 会把三段的 id 拆成 provider=vendor、id=model 并静默失配，
+	// 最后落到模糊匹配，命中一个"看起来差不多"的模型。
+	if (ref.includes("/")) {
+		const cut = ref.indexOf("/");
+		const providerId = ref.slice(0, cut);
+		const modelId = ref.slice(cut + 1);
+		const hit = models.getModel(providerId, modelId);
+		if (hit) return hit;
+	}
 
 	const available = await models.getAvailable();
 	const normalized = ref.toLowerCase();

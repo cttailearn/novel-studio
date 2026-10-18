@@ -28,6 +28,7 @@
 	--indigo:      #3b4c66;   /* 靛青 */
 	--moss:        #55684a;   /* 苔绿 */
 	--seal:        #9c2f22;   /* 印泥 */
+	--on-paper:    #f8f2e6;   /* 落在墨底上的字（亮色主题的主按钮悬停） */
 	--on-cinnabar: #f8f2e6;   /* 落在朱砂上的字 */
 	--song:   var(--serif);   /* 正文用的宋体；此前引用了未定义的 --song，会落回无衬线 */
 
@@ -35,6 +36,10 @@
 	--kai:   "Kaiti SC", "STKaiti", "KaiTi", "楷体", var(--serif);
 	--sans:  -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
 	--mono:  "Cascadia Code", "SF Mono", Consolas, monospace;
+	/* 稿台排版偏好。JS 会按「排版」里的选择改写这三个变量。 */
+	--ms-font-size: 17px;
+	--ms-line-height: 2.05;
+	--ms-measure: 36em;
 
 	--noise: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='260' height='260'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='260' height='260' filter='url(%23n)' opacity='0.4'/%3E%3C/svg%3E");
 	/* 纸纤维的叠色方式：亮纸上 multiply 才像纸，暗纸上要换成 lighten */
@@ -169,10 +174,12 @@ body::before {
 	z-index: 2;
 	display: grid;
 	grid-template-columns: 264px minmax(0, 1fr) 322px;
-	grid-template-rows: 58px minmax(0, 1fr);
+	/* alert 行平时是 0 高（横幅 display:none），出现时才占位。 */
+	grid-template-rows: 58px auto minmax(0, 1fr);
 	grid-template-areas:
-		"beam  beam  beam"
-		"rail  stage  desk";
+		"beam   beam  beam"
+		"alert  alert alert"
+		"rail   stage  desk";
 	height: 100vh;
 	animation: settle 900ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
 }
@@ -184,13 +191,14 @@ body::before {
 	grid-template-columns: minmax(0, 1fr);
 	grid-template-areas:
 		"beam"
+		"alert"
 		"stage";
 }
 .desk.is-home .rail,
 .desk.is-home .desk-right { display: none; }
 .desk.is-home .stage-bar { display: none; }
-.desk.is-home #model-select,
-.desk.is-home #thinking-select { display: none; }
+/* 案头上的设定官也要用模型，所以这支笔和档位在这里同样要能选。
+   早先这里是 display:none —— 那时案头还没有智能体，现在藏起来就没法备料了。 */
 
 /* 写作台里的两个工作台自带素材库与装配清单，右案此时重复，让出宽度。
    grid-template-areas 必须跟着列数一起改：两边不一致时整条声明会作废。 */
@@ -198,6 +206,7 @@ body::before {
 	grid-template-columns: 264px minmax(0, 1fr);
 	grid-template-areas:
 		"beam  beam"
+		"alert alert"
 		"rail  stage";
 }
 .desk.is-bench .desk-right { display: none; }
@@ -284,6 +293,8 @@ body::before {
 	display: flex;
 	flex-direction: column;
 	overflow: hidden;
+	/* 同为网格项：不显式归零就会被内容顶大，把整页顶出滚动条。 */
+	min-height: 0;
 }
 
 .rail-block { display: flex; flex-direction: column; padding: 16px 12px 8px; min-height: 0; }
@@ -364,9 +375,9 @@ body::before {
 .chapter-item .ct { flex: 1; min-width: 0; font-family: var(--serif); font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chapter-item .cw { flex: none; font-size: 10.5px; color: var(--ink-4); font-variant-numeric: tabular-nums; }
 .chapter-item .dotmark {
-	position: absolute;
-	right: 9px;
-	top: 13px;
+	flex: none;
+	align-self: center;
+	margin-left: 2px;
 	width: 5px;
 	height: 5px;
 	border-radius: 50%;
@@ -381,6 +392,10 @@ body::before {
 	display: flex;
 	flex-direction: column;
 	min-width: 0;
+	/* 网格项默认 min-height:auto，会被内容顶大 —— 这一格一旦撑开，
+	   整条高度链（stage → view → bench → pane → stream）就全失效，
+	   页面出现滚动条而不是对话区自己滚。 */
+	min-height: 0;
 	background:
 	var(--sheen),
 		var(--paper);
@@ -424,15 +439,26 @@ body::before {
 
 /* ── 文稿 ────────────────────────────────────────────────── */
 
-.ms {
-	flex: 1;
-	overflow-y: auto;
-	padding: 46px 40px 96px;
-	animation: fade 520ms ease both;
+/* 稿台自己就是滚动容器。
+   body 是 overflow:hidden，骨架又是 100vh 的网格，往下每一级都只写了 min-height:0 ——
+   整条链上没有任何一个滚动条，长章节因此被直接裁掉：翻不到底，也拖不动。
+   留白放在滚动容器上而不是稿纸上，是为了让吸顶的操作条能靠负外边距撑进留白 —— 见下方 .actions-center。 */
+#view-manuscript {
+	/* 留白的三个分量要能被操作条引用：sticky 的偏移量是相对内容盒算的，
+	   条子得知道该往外顶多少才贴得住上下边。 */
+	--ms-pad-t: 46px;
+	--ms-pad-x: 40px;
+	--ms-pad-b: 96px;
+	overflow: auto;
+	padding: var(--ms-pad-t) var(--ms-pad-x) var(--ms-pad-b);
+	overscroll-behavior: contain;
 }
-@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
 
-.ms-page { max-width: 36em; margin: 0 auto; }
+/* width:100% 不能省。稿台是 flex 纵向容器，而 margin:auto 会关掉 align-self:stretch ——
+   只写 max-width 的话，稿纸退化成 fit-content：读稿时被长句顶到 36em 上限看着正常，
+   一进改稿模式正文就成了唯一内容，宽度塌到 textarea 的 cols 默认值（20 字），
+   于是编辑框窄成一条。给它一个确定宽度，再由 max-width 收口。 */
+.ms-page { width: 100%; max-width: var(--ms-measure, 36em); margin: 0 auto; animation: fade 520ms ease both; }
 
 .ms-head { text-align: center; margin-bottom: 40px; }
 .ms-kicker { margin: 0 0 12px; font-size: 11.5px; letter-spacing: 0.24em; color: var(--ink-3); }
@@ -451,10 +477,12 @@ body::before {
 .ms-text {
 	position: relative;
 	font-family: var(--serif);
-	font-size: 17px;
-	line-height: 2.05;
+	font-size: var(--ms-font-size, 17px);
+	line-height: var(--ms-line-height, 2.05);
 	letter-spacing: 0.02em;
 	color: var(--ink);
+	/* 正文里偶尔会有不带空格的长串（网址、生造词），默认会把稿台顶出横向滚动条 */
+	overflow-wrap: break-word;
 }
 .ms-text::before {
 	content: "";
@@ -483,21 +511,23 @@ body::before {
 }
 
 .ms-edit {
+	display: block;
 	width: 100%;
 	min-height: 420px;
-	resize: vertical;
+	/* 高度由脚本按内容撑开（见 fitEditor），这里不留拖拽手柄，免得两者互相打架。 */
+	resize: none;
+	overflow: hidden;
 	padding: 0;
 	border: 0;
 	background: transparent;
 	color: var(--ink);
 	font-family: var(--serif);
-	font-size: 17px;
-	line-height: 2.05;
+	font-size: var(--ms-font-size, 17px);
+	line-height: var(--ms-line-height, 2.05);
 	letter-spacing: 0.02em;
 }
-.ms-edit:focus { outline: none; }
 
-.front-matter { max-width: 44em; margin: 0 auto; padding: 46px 40px 96px; animation: fade 520ms ease both; }
+.front-matter { width: 100%; max-width: 44em; margin: 0 auto; animation: fade 520ms ease both; }
 .front-head { text-align: center; margin-bottom: 40px; }
 .front-head h2 { margin: 0 0 10px; font-family: var(--kai); font-size: 26px; letter-spacing: 0.2em; font-weight: 600; }
 .front-head p { margin: 0; font-size: 12.5px; color: var(--ink-3); line-height: 1.9; }
@@ -529,6 +559,9 @@ body::before {
 
 .stream {
 	flex: 1;
+	/* 对话区要自己滚，不能被内容顶高。flex 项的 min-height 默认是 auto，
+	   内容一长它就把父容器撑开，页面跟着出现滚动条。 */
+	min-height: 0;
 	overflow-y: auto;
 	padding: 34px 40px 12px;
 	display: flex;
@@ -648,6 +681,8 @@ body::before {
 	display: flex;
 	flex-direction: column;
 	overflow: hidden;
+	/* 与 .rail 同理：网格项不归零 min-height 就会被内容顶大。 */
+	min-height: 0;
 }
 
 .bible-tabs { display: flex; flex: none; border-bottom: 1px solid var(--rule); }
@@ -871,7 +906,19 @@ select { max-width: 230px; cursor: pointer; }
 .field input, .field select, .field textarea { width: 100%; max-width: none; }
 .field .hint { font-size: 11px; color: var(--ink-4); margin-top: 4px; line-height: 1.6; }
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-
+/* 落盘失败横幅：唯一的"你的东西没存上"提示，用朱砂色把它从水墨里拎出来。 */
+.storage-banner {
+	grid-area: alert;
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 8px 20px;
+	background: var(--cinnabar-tint);
+	border-bottom: 1px solid var(--cinnabar);
+	color: var(--ink);
+	font-size: 12.5px;
+}
+.storage-text { flex: 1; }
 .hidden { display: none !important; }
 .muted { color: var(--ink-3); }
 
@@ -922,12 +969,15 @@ select { max-width: 230px; cursor: pointer; }
 
 .settings-body { flex: 1; display: grid; grid-template-columns: 274px 1fr; min-height: 0; }
 
+/* 左栏拆成「搜索框 + 列表」两截：搜索框不参与列表重渲染，否则每敲一个字就被重建一次。 */
+.providers-rail { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--rule); }
 .settings-providers {
 	list-style: none;
 	margin: 0;
-	padding: 10px;
-	border-right: 1px solid var(--rule);
+	padding: 0 10px 10px;
 	overflow-y: auto;
+	flex: 1;
+	min-height: 0;
 	display: flex;
 	flex-direction: column;
 	gap: 2px;
@@ -1012,6 +1062,7 @@ select { max-width: 230px; cursor: pointer; }
 	cursor: pointer;
 }
 .model-table .levels input { width: auto; margin: 0; }
+.model-table .levels .level-code { color: var(--ink-4); font-family: var(--mono); font-size: 9.5px; }
 .model-table tr.is-default td { background: var(--cinnabar-tint); }
 .model-id { font-family: var(--mono); font-size: 11.5px; }
 .row-actions { display: flex; gap: 4px; justify-content: flex-end; }
@@ -1020,26 +1071,48 @@ select { max-width: 230px; cursor: pointer; }
 /* ── 响应式 ──────────────────────────────────────────────── */
 
 @media (max-width: 1240px) {
-	.desk { grid-template-columns: 240px minmax(0, 1fr); grid-template-areas: "beam beam" "rail stage"; }
-	.desk-right { display: none; }
+	.desk { grid-template-columns: 240px minmax(0, 1fr); grid-template-areas: "beam beam" "alert alert" "rail stage"; }
+	.desk.is-bench { grid-template-columns: 240px minmax(0, 1fr); }
+	/* 右案改成抽屉：窄屏不能让它彻底消失 —— 大纲与待办还得够得着。 */
+	.desk-right {
+		position: fixed;
+		top: 0;
+		right: 0;
+		bottom: 0;
+		width: min(360px, 86vw);
+		z-index: 60;
+		display: flex;
+		visibility: hidden;
+		transform: translateX(102%);
+		transition: transform var(--wash), visibility var(--wash);
+		box-shadow: -12px 0 36px var(--shadow);
+	}
+	.desk.is-bible-open .desk-right { transform: none; visibility: visible; }
+	.bible-backdrop { display: block; position: fixed; inset: 0; z-index: 59; border: 0; padding: 0; background: var(--backdrop); }
+	.only-narrow { display: inline-flex !important; }
 }
 
 @media (max-width: 900px) {
 	.desk {
 		grid-template-columns: minmax(0, 1fr);
-		grid-template-rows: 58px auto minmax(0, 1fr);
-		grid-template-areas: "beam" "rail" "stage";
+		grid-template-rows: 58px auto auto minmax(0, 1fr);
+		grid-template-areas: "beam" "alert" "rail" "stage";
 	}
 	.rail { flex-direction: row; border-right: 0; border-bottom: 1px solid var(--rule); max-height: 152px; }
 	.rail-block { flex: 1; min-width: 0; }
 	.rail-block + .rail-block { border-top: 0; border-left: 1px solid var(--rule-soft); }
-	.beam-mid { display: none; }
+	/* 窄窗只收书名与统计，回案头的路不能一起收掉。 */
+	.beam-mid { display: flex; flex: none; }
+	.beam-mid .beam-title,
+	.beam-mid .beam-stats { display: none; }
 	.stream, .composer { padding-left: 20px; padding-right: 20px; }
-	.ms { padding: 30px 20px 70px; }
+	#view-manuscript { --ms-pad-t: 30px; --ms-pad-x: 20px; --ms-pad-b: 70px; }
 	.settings-body { grid-template-columns: minmax(0, 1fr); }
-	.settings-providers { display: none; }
+	.providers-rail { display: none; }
 	/* 屏幕窄下来后一栏只剩两百来像素，两列并排已读不下标题与用法，退回单列。 */
 	.mat-grid { grid-template-columns: minmax(0, 1fr); }
+	/* 触屏 / 窄窗没有 hover：动作条常显，否则装入、改、删根本点不到。 */
+	.card.mat.is-peek .mat-actions { max-height: none; margin-top: 9px; opacity: 1; overflow: visible; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1048,7 +1121,8 @@ select { max-width: 230px; cursor: pointer; }
 
 /* ── 供应商搜索与新增（内置厂商 41 个，没有搜索没法用） ── */
 
-.search-wrap { padding: 2px 4px 8px; position: sticky; top: 0; background: var(--paper-lo); z-index: 2; }
+/* 搜索框现在在列表之外，本身不滚动，sticky 不再需要。 */
+.search-wrap { padding: 12px 14px 8px; background: var(--paper-lo); flex: none; }
 .provider-search { width: 100%; max-width: none; font-size: 12.5px; padding: 6px 9px; }
 .provider-search::-webkit-search-cancel-button { cursor: pointer; }
 
@@ -1084,6 +1158,9 @@ select { max-width: 230px; cursor: pointer; }
 	display: grid;
 	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 }
+/* 案头是三栏：卷宗、通用素材库、库的设定官。工作台仍是两栏。
+   必须写在 .bench 之后 —— 同特异性下后写者胜，放前面会被两栏盖掉。 */
+.bench.bench-three { grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr) minmax(0, 1fr); }
 .bench-pane {
 	min-width: 0;
 	min-height: 0;
@@ -1135,6 +1212,48 @@ select { max-width: 230px; cursor: pointer; }
 	white-space: pre-wrap;
 }
 
+/* ── 存照 ──────────────────────────────────────────────────── */
+
+.snap-list {
+	max-height: 52vh;
+	overflow-y: auto;
+	border-top: 1px solid var(--rule);
+	border-bottom: 1px solid var(--rule);
+	padding: 4px 0;
+}
+.snap-row {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 9px 2px;
+	border-bottom: 1px dashed var(--rule);
+}
+.snap-row:last-child { border-bottom: 0; }
+.snap-main { flex: 1; min-width: 0; }
+.snap-when {
+	font-family: var(--mono);
+	font-size: 12.5px;
+	color: var(--ink-2);
+}
+.snap-why {
+	font-family: var(--kai);
+	font-size: 12px;
+	color: var(--ink-4);
+	margin-top: 1px;
+}
+.snap-size {
+	font-family: var(--mono);
+	font-size: 11px;
+	color: var(--ink-4);
+	flex: none;
+}
+
+/* 存照对话框：条目少时贴着内容，多起来才由列表内部滚动。
+   必须用 fit-content 而不是 auto —— <dialog> 处在 .sheet-wide[open] 的 flex 容器里，
+   height:auto 会被解析成整屏高，内容全挤在顶上。 */
+.snap-list { flex: none; }
+#snapshot-dialog { height: fit-content; max-height: min(760px, 86vh); }
+
 /* ── 上传原料 ────────────────────────────────────────────── */
 
 .dropzone {
@@ -1185,6 +1304,24 @@ select { max-width: 230px; cursor: pointer; }
 }
 .upload-actions { display: flex; gap: 4px; margin-top: 9px; flex-wrap: wrap; }
 
+/* 库面板的原料列表：栏窄、且夹在对话与输入框之间，所以压紧一档。
+   它自己滚动，不把设定官的对话区挤没。 */
+.upload-list.compact {
+	margin: 0;
+	padding: 8px 20px;
+	gap: 6px;
+	max-height: 168px;
+	overflow-y: auto;
+	border-top: 1px solid var(--rule-soft);
+	flex: none;
+}
+.upload-list.compact .upload-item { padding: 6px 9px; }
+.upload-list.compact .upload-preview { -webkit-line-clamp: 1; }
+.upload-list.compact .upload-actions { margin-top: 6px; }
+.upload-list.compact:empty { display: none; }
+
+/* 拖资料到设定官面板上的落点提示。 */
+.bench-pane.is-over { background: var(--cinnabar-wash); }
 /* ── 素材与装配清单 ──────────────────────────────────────── */
 
 .material-list, .assembly-list, .pool-list { display: flex; flex-direction: column; }
@@ -1230,14 +1367,27 @@ select { max-width: 230px; cursor: pointer; }
 .bench-talk .msg.assistant .msg-body { font-size: 15px; line-height: 1.95; }
 
 .actions-center { justify-content: center; padding: 18px 0 0; margin: 0; }
-
-/* 素材表单的两列 */
+/* 章节操作条钉在稿台顶部，排在正文之前。
+   写作时手要够得着「存稿」，不该被一整章的篇幅压在底下；
+   底色必须不透明，否则滚过去的正文会从按钮缝里透出来。 */
+#view-manuscript .actions-center {
+	position: sticky;
+	/* 负偏移把操作条撑进稿台的上部留白，否则条子上方会漏出一条滚过去的正文。 */
+	top: calc(var(--ms-pad-t) * -1);
+	margin: calc(var(--ms-pad-t) * -1) calc(var(--ms-pad-x) * -1) 0;
+	padding: 20px var(--ms-pad-x) 22px;
+	/* 下缘淡出，免得像一块贴上去的板子。 */
+	background: linear-gradient(to top, transparent 0, var(--paper) 22px);
+}
 .form-row { display: grid; grid-template-columns: 148px minmax(0, 1fr); gap: 12px; }
 
 @media (max-width: 1180px) {
 	.bench { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
+	/* 案头那三栏也要跟着堆叠：.bench-three 特异性更高，不显式写会把它顶掉，
+	   结果窄屏下三栏继续并排，每栏只剩一百来像素。 */
+	.bench.bench-three { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr); }
 	.bench-pane + .bench-pane { border-left: 0; border-top: 1px solid var(--rule); }
-	.desk.is-bench { grid-template-columns: minmax(0, 1fr); }
+	.desk.is-bench { grid-template-columns: minmax(0, 1fr); grid-template-areas: "beam" "alert" "stage"; }
 	.desk.is-bench .rail { display: none; }
 }
 
@@ -1594,7 +1744,7 @@ select { max-width: 230px; cursor: pointer; }
 .tab,
 .btn,
 .chip,
-.card.mat,
+.card.mat {
 	transition: background var(--wash), border-color var(--wash), color var(--wash), box-shadow var(--wash), transform var(--wash);
 }
 
@@ -1699,3 +1849,397 @@ select { max-width: 230px; cursor: pointer; }
 	}
 	.desk { animation: none; }
 }
+
+/* ══════════════════════════════════════════════════════════════
+   体验层：检索、提示、版本、排版、专注、抽屉与等待态
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── 触屏与窄窗的通用开关 ─────────────────────────────────── */
+.only-narrow { display: none; }
+
+/* ── 顶栏检索与快捷键提示 ─────────────────────────────────── */
+.beam-search {
+	display: inline-flex;
+	align-items: center;
+	gap: 7px;
+	color: var(--ink-3);
+}
+.beam-search:hover { color: var(--ink); }
+.beam-search-glyph {
+	display: none;
+	font-family: var(--kai);
+	font-size: 13px;
+	letter-spacing: 0.04em;
+}
+.beam-kbd,
+kbd {
+	font-family: var(--mono);
+	font-size: 10px;
+	line-height: 1;
+	padding: 3px 5px;
+	border: 1px solid var(--rule);
+	border-bottom-width: 2px;
+	border-radius: 3px;
+	background: var(--paper-hi);
+	color: var(--ink-4);
+}
+
+/* ── 检索框（左卷、料、右案）──────────────────────────────── */
+.rail-filter {
+	width: 100%;
+	margin: 0 0 8px;
+	font-size: 12px;
+}
+.mat-search {
+	width: 100%;
+	margin: 0 0 10px;
+	font-size: 12.5px;
+}
+.mat-filter:empty { display: none; }
+/* 默认的搜索清除按钮是系统蓝，和纸墨不搭；清空用 Esc 或退格即可。 */
+.rail-filter::-webkit-search-cancel-button,
+.mat-search::-webkit-search-cancel-button,
+.bible-search::-webkit-search-cancel-button,
+.palette-head input::-webkit-search-cancel-button { display: none; }
+.chapter-search-empty {
+	list-style: none;
+	padding: 14px 4px;
+	font-size: 11.5px;
+	color: var(--ink-4);
+	font-family: var(--kai);
+}
+.bible-head {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 10px 10px 0;
+	flex: none;
+}
+.bible-search { flex: 1; min-width: 0; }
+
+/* ── 浮层提示 ─────────────────────────────────────────────── */
+.toast-stack {
+	position: fixed;
+	left: 50%;
+	bottom: 24px;
+	transform: translateX(-50%);
+	z-index: 1000;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 8px;
+	pointer-events: none;
+}
+.toast {
+	pointer-events: auto;
+	display: flex;
+	align-items: flex-start;
+	gap: 9px;
+	max-width: min(580px, 90vw);
+	padding: 10px 15px;
+	border: 1px solid var(--rule-strong);
+	border-left: 3px solid var(--ink-3);
+	border-radius: 4px;
+	background: var(--paper-hi);
+	color: var(--ink);
+	box-shadow: 0 8px 26px var(--shadow);
+	font-size: 12.5px;
+	line-height: 1.7;
+	cursor: pointer;
+	animation: toast-in 220ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+.toast-error { border-left-color: var(--cinnabar); }
+.toast-ok { border-left-color: var(--moss); }
+.toast-warn { border-left-color: var(--amber); }
+.toast.is-gone { opacity: 0; transform: translateY(6px); transition: opacity 200ms ease, transform 200ms ease; }
+.toast-mark {
+	flex: none;
+	font-family: var(--mono);
+	font-size: 11px;
+	color: var(--ink-4);
+	margin-top: 1px;
+}
+.toast-error .toast-mark { color: var(--cinnabar); }
+.toast-ok .toast-mark { color: var(--moss); }
+.toast-warn .toast-mark { color: var(--amber); }
+.toast-text { min-width: 0; }
+@keyframes toast-in {
+	from { opacity: 0; transform: translateY(8px); }
+	to   { opacity: 1; transform: none; }
+}
+
+/* ── 自动存稿状态 ─────────────────────────────────────────── */
+.actions-center { flex-wrap: wrap; row-gap: 8px; }
+.ms-save-state {
+	align-self: center;
+	min-width: 4.8em;
+	font-size: 11px;
+	color: var(--ink-4);
+	font-variant-numeric: tabular-nums;
+	letter-spacing: 0.04em;
+}
+.ms-save-state.is-dirty { color: var(--cinnabar); }
+
+/* ── 等待首字 ─────────────────────────────────────────────── */
+.msg.waiting {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 10px 2px;
+	border: 0;
+	background: transparent;
+	color: var(--ink-3);
+	font-family: var(--kai);
+	font-size: 13px;
+	letter-spacing: 0.1em;
+}
+.waiting-dots {
+	flex: none;
+	width: 16px;
+	height: 16px;
+	border-radius: 50%;
+	border: 2px solid var(--rule-strong);
+	border-top-color: var(--cinnabar);
+	animation: waiting-spin 900ms linear infinite;
+}
+@keyframes waiting-spin { to { transform: rotate(360deg); } }
+
+/* ── 版本抽屉 ─────────────────────────────────────────────── */
+.history-lead {
+	margin: 0 0 14px;
+	font-size: 12px;
+	line-height: 1.8;
+	color: var(--ink-3);
+}
+.history-list { display: flex; flex-direction: column; gap: 10px; }
+.history-row {
+	padding: 11px 14px;
+	border: 1px solid var(--rule);
+	border-radius: 4px;
+	background: var(--paper-hi);
+}
+.history-row.is-current { border-color: var(--cinnabar-edge); background: var(--cinnabar-tint); }
+.history-head {
+	display: flex;
+	align-items: baseline;
+	flex-wrap: wrap;
+	gap: 4px 10px;
+	font-size: 12px;
+	color: var(--ink-3);
+}
+.history-version { font-family: var(--kai); font-size: 14.5px; color: var(--ink); letter-spacing: 0.06em; }
+.history-mode { color: var(--cinnabar); }
+.history-when { color: var(--ink-4); font-variant-numeric: tabular-nums; }
+.history-words { margin-left: auto; color: var(--ink-4); font-variant-numeric: tabular-nums; }
+.history-row > .btn { margin-top: 8px; }
+.history-preview { margin-top: 6px; }
+.history-preview > summary {
+	cursor: pointer;
+	font-size: 11.5px;
+	color: var(--ink-3);
+	list-style: none;
+}
+.history-preview > summary::-webkit-details-marker { display: none; }
+.history-preview > summary::before { content: "▸ "; color: var(--ink-4); }
+.history-preview[open] > summary::before { content: "▾ "; }
+.history-text {
+	max-height: 300px;
+	overflow: auto;
+	margin: 8px 0 0;
+	padding: 10px 12px;
+	border-radius: 3px;
+	background: var(--paper-sunk);
+	font-family: var(--serif);
+	font-size: 13px;
+	line-height: 1.9;
+	white-space: pre-wrap;
+}
+.history-empty { padding: 10px 0; font-size: 12px; color: var(--ink-4); }
+.history-hint { margin: 6px 0 0; font-size: 11px; color: var(--ink-4); }
+
+/* ── 导出 / 排版 / 快捷键 ─────────────────────────────────── */
+.export-dialog,
+.type-dialog,
+.shortcuts-dialog {
+	width: min(560px, 92vw);
+	/* dialog 的 UA 样式把上下两条 inset 都钉成 0，height:auto 会被拉满一屏；
+	   fit-content 才是「内容多高就多高」。 */
+	height: fit-content;
+	max-height: min(800px, 90vh);
+}
+.export-dialog .form-body,
+.type-dialog .form-body,
+.shortcuts-dialog .form-body { flex: 0 1 auto; }
+
+.seg { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+.seg label {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	margin: 0;
+	padding: 5px 13px;
+	border: 1px solid var(--rule);
+	border-radius: 999px;
+	background: var(--paper-hi);
+	color: var(--ink-2);
+	font-size: 12.5px;
+	cursor: pointer;
+	transition: border-color var(--wash), background var(--wash), color var(--wash);
+}
+.seg label:has(input:checked) {
+	border-color: var(--cinnabar);
+	color: var(--cinnabar);
+	background: var(--cinnabar-wash);
+}
+.seg label:has(input:disabled) { opacity: 0.45; cursor: not-allowed; }
+.seg input { width: auto; margin: 0; accent-color: var(--cinnabar); }
+/* 单选框换成墨点：系统蓝圆点与纸墨不搭，焦点环也不该是个方框。 */
+.seg input[type="radio"] {
+	appearance: none;
+	display: inline-block;
+	flex: none;
+	width: 13px;
+	height: 13px;
+	padding: 0;
+	border: 1px solid var(--ink-4);
+	border-radius: 50%;
+	background: transparent;
+}
+.seg input[type="radio"]:checked {
+	border-color: var(--cinnabar);
+	background: var(--cinnabar);
+	box-shadow: inset 0 0 0 3px var(--paper-hi);
+}
+.seg input[type="radio"]:focus-visible {
+	outline: 2px solid var(--cinnabar);
+	outline-offset: 2px;
+}
+
+.keys { margin: 0; display: flex; flex-direction: column; gap: 2px; }
+.keys > div {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 24px;
+	padding: 9px 0;
+	border-bottom: 1px dashed var(--rule-soft);
+}
+.keys > div:last-child { border-bottom: 0; }
+.keys dt { display: flex; align-items: center; gap: 4px; }
+.keys dd { margin: 0; font-size: 12.5px; color: var(--ink-3); }
+
+.front-progress { margin-top: 8px !important; color: var(--cinnabar) !important; font-variant-numeric: tabular-nums; }
+
+/* ── 检索面板 ─────────────────────────────────────────────── */
+.palette {
+	position: fixed;
+	inset: 10vh 0 auto;
+	margin: 0 auto;
+	width: min(660px, 92vw);
+	padding: 0;
+	border: 1px solid var(--rule-strong);
+	border-radius: 6px;
+	background: var(--paper);
+	color: var(--ink);
+	box-shadow: 0 24px 70px var(--shadow);
+	overflow: hidden;
+}
+.palette::backdrop { background: var(--backdrop); backdrop-filter: blur(2px); }
+.palette-head {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 12px 14px;
+	border-bottom: 1px solid var(--rule);
+}
+.palette-head input {
+	flex: 1;
+	min-width: 0;
+	border: 0;
+	background: transparent;
+	color: var(--ink);
+	font-family: var(--serif);
+	font-size: 16px;
+	padding: 4px 2px;
+	outline: none;
+}
+.palette-results { max-height: min(58vh, 520px); overflow-y: auto; padding: 6px; }
+.palette-row {
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+	padding: 9px 12px;
+	border-radius: 4px;
+	cursor: pointer;
+}
+.palette-row.is-on { background: var(--ink-wash); }
+.palette-group {
+	flex: none;
+	margin-top: 2px;
+	padding: 1px 5px;
+	border: 1px solid var(--rule);
+	border-radius: 3px;
+	font-size: 10.5px;
+	color: var(--ink-4);
+}
+.palette-main { min-width: 0; }
+.palette-label { font-size: 13.5px; color: var(--ink); }
+.palette-hint {
+	max-width: 520px;
+	margin-top: 2px;
+	font-size: 11.5px;
+	color: var(--ink-4);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.palette-empty { padding: 28px 16px; text-align: center; font-size: 12.5px; color: var(--ink-4); font-family: var(--kai); }
+
+/* ── 专注模式 ─────────────────────────────────────────────── */
+.desk.is-focus {
+	grid-template-columns: minmax(0, 1fr);
+	grid-template-areas: "beam" "alert" "stage";
+}
+.desk.is-focus .rail,
+.desk.is-focus .desk-right { display: none !important; }
+.desk.is-focus .stage-bar { display: none; }
+.desk.is-focus .beam-mid { justify-content: center; }
+.desk.is-focus #view-manuscript {
+	--ms-pad-t: 58px;
+	--ms-pad-x: 64px;
+	--ms-pad-b: 150px;
+}
+body.focus-mode { background: var(--paper); }
+
+/* ── 顶栏在窄窗里的取舍 ───────────────────────────────────── */
+.beam-stats { overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 1320px) {
+	.brand-text p { display: none; }
+	.beam-mid { gap: 8px; }
+	/* 统计在窄窗里让位给书名与模型：进度还能在稿台与案头看到。 */
+	.beam-stats { display: none; }
+	.beam-controls select { max-width: 150px; }
+	.beam-search-label { display: none; }
+	.beam-search-glyph { display: inline; }
+	.beam-kbd { display: none; }
+}
+
+/* ── 触屏：动作条常显（hover 永不到达）────────────────────── */
+@media (hover: none) {
+	.card.mat.is-peek .mat-actions {
+		max-height: none;
+		margin-top: 9px;
+		opacity: 1;
+		overflow: visible;
+	}
+}
+
+/* ── settings.js 用到的按钮别名（此前只有样式表外的类名）───── */
+.btn-primary {
+	background: var(--ink);
+	border-color: var(--ink);
+	color: var(--paper-hi);
+}
+.btn-primary:hover:not(:disabled) { background: var(--ink-lift); border-color: var(--ink-lift); color: var(--on-paper); }
+.btn-ghost { background: transparent; border-color: var(--rule); color: var(--ink-3); }
+.btn-ghost:hover:not(:disabled) { border-color: var(--ink-4); color: var(--ink); }

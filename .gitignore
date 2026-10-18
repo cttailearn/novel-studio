@@ -57,3 +57,5 @@ Desktop.ini
 # ---- 工具产物 ----
 # PI-Desktop 的方案快照，不进版本库
 .pi/
+# 本地 UI 审查截图与临时浏览器配置
+.audit/

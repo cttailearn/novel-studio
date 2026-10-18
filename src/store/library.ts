@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { MATERIAL_KINDS, type Material, type MaterialKind, type MaterialStatus } from "./project.ts";
 
@@ -116,14 +116,29 @@ export class MaterialLibrary {
 					? list.map(normalizeLibraryMaterial).filter((item): item is LibraryMaterial => item !== undefined)
 					: [];
 			} catch (error) {
-				console.warn("[library] 解析 library.json 失败，按空库处理:", error);
+				// 损坏时隔离而不是就地覆盖。通用素材库里同样可能有作者手写很久的条目，
+				// 静默降级成空库之后，下一次 persist 就会拿空库覆盖原文 —— 那些条目永远没了。
+				// 改名为 .corrupt 保留，用户确认后可自行改名恢复。
+				const kept = file + ".corrupt";
+				await rename(file, kept).catch(() => undefined);
+				console.error(
+					"[library] library.json 解析失败，已隔离为 " + path.basename(kept) + "，按空库启动。原文仍在 data/ 目录。:",
+					error,
+				);
 			}
 		}
 		return new MaterialLibrary(file, materials);
 	}
 
+	/**
+	 * 库条目。
+	 *
+	 * 返回副本而不是内部数组：早先这里直接 return this.materials，
+	 * 调用方一个原地 sort/splice 就能把库改坏，而落盘时写的是同一个数组 ——
+	 * 界面上看不见任何异常，磁盘上的条目却没了。
+	 */
 	list(): LibraryMaterial[] {
-		return this.materials;
+		return this.materials.map((entry) => ({ ...entry, tags: [...entry.tags] }));
 	}
 
 	get(id: string): LibraryMaterial | undefined {
@@ -175,14 +190,23 @@ export class MaterialLibrary {
 	/**
 	 * 串行化落盘，写法与设置一致：随机临时名 + rename + 重试。
 	 * Windows 上 rename 覆盖已存在文件会偶发 EPERM，所以必须重试。
+	 *
+	 * 覆盖前把当前内容留一份为 library.json.bak：库里可能有作者手写很久的条目，
+	 * 一次误写就全没了，而库不像工程那样有快照可退。备份是这里唯一的退路，
+	 * 所以哪怕多一次拷贝也要做。
 	 */
 	private persist(): Promise<void> {
+		// 快照必须在调用这一刻拍，不能等链上轮到它再读 this.materials ——
+		// payload 若只是引用，排队期间后续改动会把它一起改掉，
+		// 于是每一次写入序列化的都是"最后那个状态"，备份也就永远等于当前内容。
+		const snapshot: LibraryFile = { materials: this.materials.map((entry) => ({ ...entry, tags: [...entry.tags] })) };
 		this.writeChain = this.writeChain
 			.catch(() => undefined)
 			.then(async () => {
-				const payload: LibraryFile = { materials: this.materials };
 				const tmp = this.file + "." + randomUUID() + ".tmp";
-				await writeFile(tmp, JSON.stringify(payload, null, 2), "utf8");
+				await writeFile(tmp, JSON.stringify(snapshot, null, 2), "utf8");
+				// 备份失败不该挡住正事：拿不到旧内容也要把新内容写下去。
+				await copyFile(this.file, this.file + ".bak").catch(() => undefined);
 				for (let attempt = 0; ; attempt++) {
 					try {
 						await rename(tmp, this.file);
