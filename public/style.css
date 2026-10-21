@@ -3101,13 +3101,14 @@ body.focus-mode { background: var(--paper); }
 }
 
 /* 「呈上」有没有字可呈：没字时淡下去，有字才亮。
-   手机上这一条输入框就是整块屏，按钮亮没亮是「按下去有没有反应」的唯一线索。 */
+   手机上这一条输入框就是整块屏，按钮亮没亮是「按下去有没有反应」的唯一线索。
+   只加一圈朱砂细边，不改字色 —— 它是 .btn-ink（墨底纸字），
+   把字改成朱砂在墨底上会糊成一片。 */
 .composer button[type="submit"] {
-	transition: opacity var(--brush), color var(--brush), border-color var(--brush), background var(--brush);
+	transition: opacity var(--brush), box-shadow var(--brush);
 }
 .composer.is-typing button[type="submit"] {
-	color: var(--cinnabar);
-	border-color: var(--cinnabar-edge);
+	box-shadow: inset 0 1px 0 var(--panel-hi), 0 0 0 1px var(--cinnabar-edge);
 }
 
 /* 触屏上图标钮也要撑到 48px：它没有文字，小了就只剩一个点 */

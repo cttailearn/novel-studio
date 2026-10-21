@@ -59,6 +59,18 @@
 				padding: 24px;
 				background: var(--paper, Canvas);
 				transition: opacity 0.2s ease;
+				/* 兜底的兜底：脚本整个没跑起来时，别让一块纸永远盖着应用。
+				   15 秒足够慢网络下把两份数据问完；真到这一步，宁可露出没画完的
+				   界面，也不能让人对着一块死纸。正常摘除由 app.js 负责，这条只在
+				   它失手时生效。 */
+				animation: boot-give-up 0s linear 15s forwards;
+			}
+			@keyframes boot-give-up {
+				to {
+					opacity: 0;
+					visibility: hidden;
+					pointer-events: none;
+				}
 			}
 			/* 摘掉时不留下一个挡点击的空壳 */
 			#boot-skeleton.is-gone {
