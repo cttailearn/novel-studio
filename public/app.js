@@ -116,7 +116,7 @@ const state = {
 	exportChapterId: null,
 	/** 专注模式与排版偏好。 */
 	focusMode: false,
-	typography: { size: 17, line: 2.05, measure: 36 },
+	typography: { size: 17, line: 2.05, measure: 54 },
 };
 
 /** 素材表单的落点：新建（可能来自某条上传）还是改已有的。 */
@@ -710,7 +710,11 @@ function dismissBootSkeleton() {
 // ═══════════════════════════════════════════════════ 排版与专注
 
 const TYPE_KEY = "novel-studio/typography";
-const TYPE_DEFAULTS = { size: 17, line: 2.05, measure: 36 };
+const TYPE_DEFAULTS = { size: 17, line: 2.05, measure: 54 };
+/* 版心三档：窄 45em / 中 54em / 宽 66em（17px 字号下约 765 / 918 / 1122 像素）。
+   早先那套是 30/36/44，整体偏窄；存下来的旧值在读取时按 1.5 倍迁到新档，不让老偏好把人锁在窄版心里。 */
+const TYPE_MEASURES = [45, 54, 66];
+const TYPE_MEASURES_LEGACY = { 30: 45, 36: 54, 44: 66 };
 
 /** 只落在浏览器里：这是阅读偏好，不该跟着作品走，也不该污染服务端的工程文件。 */
 function loadTypography() {
@@ -722,7 +726,8 @@ function loadTypography() {
 			const measure = Number(saved.measure);
 			if ([15, 17, 19, 21].includes(size)) state.typography.size = size;
 			if ([1.8, 2.05, 2.3].includes(line)) state.typography.line = line;
-			if ([30, 36, 44].includes(measure)) state.typography.measure = measure;
+			if (TYPE_MEASURES.includes(measure)) state.typography.measure = measure;
+			else if (TYPE_MEASURES_LEGACY[measure]) state.typography.measure = TYPE_MEASURES_LEGACY[measure];
 		}
 	} catch {
 		// 存坏了就用默认值，别让排版偏好把页面拖死。
