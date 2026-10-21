@@ -629,15 +629,17 @@ body::before {
 /* 稿台自己就是滚动容器。
    body 是 overflow:hidden，骨架又是 100vh 的网格，往下每一级都只写了 min-height:0 ——
    整条链上没有任何一个滚动条，长章节因此被直接裁掉：翻不到底，也拖不动。
-   留白放在滚动容器上而不是稿纸上，是为了让吸顶的操作条能靠负外边距撑进留白 —— 见下方 .actions-center。 */
+
+   上留白**不能**放在这个滚动容器上：容器有 padding-top，吸顶的操作条就会被垫下去一截
+   （条子的 overflow 会跟着 padding 走），台口永远留一道缝。所以上面留白给零，
+   改由稿纸 .ms-page / 总目 .front-matter 自己撑着；左右与底部留白仍留在这里。 */
 #view-manuscript {
-	/* 留白的三个分量要能被操作条引用：sticky 的偏移量是相对内容盒算的，
-	   条子得知道该往外顶多少才贴得住上下边。 */
+	/* 三个分量仍要能被别处引用：稿纸靠 --ms-pad-t 撑天头，操作条靠 --ms-pad-x 出血。 */
 	--ms-pad-t: 46px;
 	--ms-pad-x: 40px;
 	--ms-pad-b: 96px;
 	overflow: auto;
-	padding: var(--ms-pad-t) var(--ms-pad-x) var(--ms-pad-b);
+	padding: 0 var(--ms-pad-x) var(--ms-pad-b);
 	overscroll-behavior: contain;
 }
 
@@ -645,7 +647,14 @@ body::before {
    只写 max-width 的话，稿纸退化成 fit-content：读稿时被长句顶到 54em 上限看着正常，
    一进改稿模式正文就成了唯一内容，宽度塌到 textarea 的 cols 默认值（20 字），
    于是编辑框窄成一条。给它一个确定宽度，再由 max-width 收口。 */
-.ms-page { width: 100%; max-width: var(--ms-measure, 54em); margin: 0 auto; animation: fade 520ms ease both; }
+.ms-page {
+	width: 100%;
+	max-width: var(--ms-measure, 54em);
+	margin: 0 auto;
+	/* 天头留白在稿纸上，不在滚动容器上 —— 容器留了就垫高了吸顶的操作条。 */
+	padding-top: var(--ms-pad-t);
+	animation: fade 520ms ease both;
+}
 
 .ms-head { text-align: center; margin-bottom: 40px; }
 .ms-kicker { margin: 0 0 12px; font-size: 11.5px; letter-spacing: 0.24em; color: var(--ink-3); }
@@ -730,7 +739,14 @@ body::before {
 	letter-spacing: 0.02em;
 }
 
-.front-matter { width: 100%; max-width: 44em; margin: 0 auto; animation: fade 520ms ease both; }
+.front-matter {
+	width: 100%;
+	max-width: 44em;
+	margin: 0 auto;
+	/* 与 .ms-page 同理：天头在纸上，滚动容器上不留 top padding。 */
+	padding-top: var(--ms-pad-t);
+	animation: fade 520ms ease both;
+}
 .front-head { text-align: center; margin-bottom: 40px; }
 .front-head h2 { margin: 0 0 10px; font-family: var(--kai); font-size: 26px; letter-spacing: 0.2em; font-weight: 600; }
 .front-head p { margin: 0; font-size: 12.5px; color: var(--ink-3); line-height: 1.9; }
@@ -1687,10 +1703,12 @@ select { max-width: 230px; cursor: pointer; }
 	   自己也成了一个层叠上下文，跟 z-index:0 的元素画在同一层）—— 只给定位不给层级，
 	   正文会按文档顺序画到条子上面去，这正是之前正文盖住按钮的原因。 */
 	z-index: 2;
-	/* 负外边距吃掉稿台上部留白，条子于是正好顶在滚动口上沿。
-	   下边留出 18px：投影的淡出段落在纸里，静止时就不会糊住题签第一行。 */
-	margin: calc(var(--ms-pad-t) * -1) calc(var(--ms-pad-x) * -1) 18px;
-	padding: 18px var(--ms-pad-x) 16px;
+	/* 上边不留负外边距了：滚动容器已经没有 top padding，条子的自然位置就是台口。
+	   只保留左右出血（让它横贯整个滚动口）与下沿的 18px —— 那 18px 是给投影的
+	   淡出段落的，不是缝。 */
+	margin: 0 calc(var(--ms-pad-x) * -1) 18px;
+	/* 上 6px 是按钮与台口之间的全部间距，再小按钮就贴死在横线上了。 */
+	padding: 6px var(--ms-pad-x) 14px;
 	/* 底色要和台面咬合。台面是「纸 + 顶上一道天光」（.stage 的 --sheen），
 	   只铺 --paper 会在台口留下一道比四周暗的横带；照抄同一层天光就接上了。 */
 	background: var(--sheen), var(--paper);
