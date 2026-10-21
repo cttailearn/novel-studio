@@ -3,8 +3,10 @@
 	<head>
 		<meta charset="utf-8" />
 		<!-- viewport-fit=cover：让页面铺到刘海与 Home Indicator 之下，安全区由 CSS 的 env() 补。
-		     不禁缩放：正文放大是读长章的人自己的权利。 -->
-		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+		     不禁缩放：正文放大是读长章的人自己的权利。
+		     interactive-widget=resizes-content：安卓 Chrome 弹出软键盘时缩的是布局视口，
+		     顶栏与输入条才会跟着让位；不写这一条，键盘会直接盖住正文下半屏。 -->
+		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
 		<title>墨耕 · AI 长章小说创作台</title>
 		<meta name="color-scheme" content="light dark" />
 		<!-- theme-color 随应用内的昼夜切换走，由脚本改写；系统主题由 media 那份兜底。 -->
@@ -16,6 +18,11 @@
 		<meta name="apple-mobile-web-app-capable" content="yes" />
 		<meta name="apple-mobile-web-app-title" content="墨耕" />
 		<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+		<!-- 可安装到主屏：安卓 Chrome 认 manifest，图标是一枚朱砂方章。
+		     放在主题脚本之前：图标与清单要尽早开始取，别等 DOM 解析完。 -->
+		<link rel="manifest" href="/manifest.json" />
+		<link rel="icon" href="/icon.svg" type="image/svg+xml" />
+		<link rel="apple-touch-icon" href="/icon.svg" />
 		<script>
 			// 主题必须在首帧之前定下来，否则暗色用户会先看到一屏白纸。
 			// 这段要排在样式表之前：data-theme 晚于 CSS 生效，第一帧就已经是错色了。
@@ -34,11 +41,174 @@
 				}
 			})();
 		</script>
+		<!-- 首屏骨架的结构兜底。
+		     它盖着的是整个应用：定位、层级、尺寸必须由这里保证 —— 万一 style.css
+		     还没写这一块、或者压根没取到，它也不能变成页面顶上的一块空白把布局顶下去。
+		     颜色一概走令牌（纸色），这一块只管位置与节奏，配色仍归 style.css。
+		     排在这里是有意的：style.css 里若也写了 #boot-skeleton，以它为准。 -->
+		<style>
+			#boot-skeleton {
+				position: fixed;
+				inset: 0;
+				z-index: 200;
+				display: flex;
+				flex-direction: column;
+				align-items: center;
+				justify-content: center;
+				gap: var(--sp-3, 12px);
+				padding: 24px;
+				background: var(--paper, Canvas);
+				transition: opacity 0.2s ease;
+			}
+			/* 摘掉时不留下一个挡点击的空壳 */
+			#boot-skeleton.is-gone {
+				opacity: 0;
+				pointer-events: none;
+			}
+			#boot-skeleton .boot-seal {
+				font-size: var(--fs-xl, 22px);
+				padding: 6px 10px;
+			}
+			#boot-skeleton .boot-word {
+				margin: 0;
+				letter-spacing: 0.24em;
+				color: var(--ink-3, inherit);
+			}
+			/* .sk-line 是行内元素，高度对行内元素不生效：这里补上块级；
+			   宽度不写死 —— .is-mid / .is-short 是 style.css 的排法，留给它。 */
+			#boot-skeleton .sk-line {
+				display: block;
+				align-self: stretch;
+			}
+		</style>
+		<!-- 触屏上的最小可点面积（结构兜底，配色与观感仍归 style.css）。
+		     手指没有 1px 的精度：手机上把「目 / 笔 / 案」按成「笔」是很常见的事，
+		     所以关键控件一律抬到 --tap-lg（48px），相邻目标之间留 8px。
+		     写在 style.css 之前，样式表里若有更细的写法，以它为准。 -->
+		<style>
+			@media (pointer: coarse) {
+				.beam-controls .btn,
+				.stage-bar .tab,
+				.composer .btn,
+				.picked-bar .btn,
+				.mat-actions .btn,
+				.rail-add,
+				.bible-tab,
+				dialog .btn,
+				.chapter-item,
+				#close-rail,
+				#close-bible,
+				#close-tools,
+				.toast-close {
+					min-height: var(--tap-lg, 48px);
+				}
+				/* 并排的按钮：贴在一起按错边，隔开 8px */
+				.beam-controls,
+				.composer-side,
+				.mat-actions,
+				.picked-bar,
+				.stage-bar .tabs {
+					gap: 8px;
+				}
+				/* 小圆点似的「✕」也要撑开，不然点不中 */
+				#close-rail,
+				#close-bible,
+				#close-tools,
+				.toast-close {
+					min-width: var(--tap-lg, 48px);
+				}
+			}
+
+			/* 浮层自己带一个看得见的「收起」：点外面能收，但手机上一眼看不出
+			   「点哪儿算外面」。桌面端这块整个不出现 —— 那时 .beam-tools 是
+			   display:contents，浮层根本没「框」，也就不需要这个头。 */
+			.beam-tools-head {
+				display: none;
+			}
+			@media (max-width: 640px) {
+				.beam-tools-head {
+					display: flex;
+					width: 100%;
+					align-items: center;
+					justify-content: space-between;
+					gap: 8px;
+					padding-bottom: 4px;
+					margin-bottom: 2px;
+				}
+				.beam-tools-title {
+					font-size: 11px;
+					letter-spacing: 0.16em;
+					opacity: 0.75;
+				}
+			}
+
+			/* 矮窗（手机横过来）：顶栏与操作条不许吃掉半屏。
+			   结构上只做两件事 —— 顶栏收紧、统计行让位；
+			   视觉细节（字号、间距）仍以 style.css 为准。
+			   只认 is-short（视口高 ≤480），不认 data-orient —— 桌面横屏也是
+			   landscape，拿它当条件会把电脑上的顶栏也压扁。 */
+			html.is-short .beam {
+				min-height: 0;
+				padding-block: 4px;
+			}
+			html.is-short .beam-mid,
+			html.is-short .stage-bar {
+				min-height: 0;
+			}
+			/* 矮窗里最先让位的是「进度数字」：它不是操作，看一眼就够 */
+			html.is-short #project-stats,
+			html.is-short .stage-bar .tab span {
+				display: none;
+			}
+			html.is-short .stage-bar {
+				padding-block: 4px;
+			}
+			/* 矮窗里的输入框别撑成半屏：它现在只要放得下一行字 */
+			html.is-short .composer textarea {
+				min-height: 2.4em;
+				max-height: 5.5em;
+			}
+
+			/* 提示条上的「✕」：整条可点也能关，但手机上不显眼的关闭口等于没有。
+			   只给位置与可点感，颜色与字号以 style.css 为准。 */
+			.toast-close {
+				margin-left: auto;
+				flex: none;
+				display: inline-flex;
+				align-items: center;
+				justify-content: center;
+				padding: 0 6px;
+				cursor: pointer;
+				opacity: 0.72;
+			}
+			.toast-close:hover { opacity: 1; }
+
+			/* 「输入中」的可见信号：没字的时候「呈上」淡下去，有字才亮。
+			   类名由 app.js 切（.is-typing），这里只给一个不带颜色的兜底 ——
+			   手机上一屏只剩这一条输入框，按钮亮没亮是「按下去有没有反应」的唯一线索。 */
+			.composer:not(.is-typing) button[type="submit"] {
+				opacity: 0.55;
+			}
+			.composer.is-typing button[type="submit"] {
+				opacity: 1;
+			}
+		</style>
 		<link rel="stylesheet" href="/style.css" />
 		<!-- 设置页的模型配置区（卡片、档位 chip、批量面板）样式单独成文件，排在 style.css 之后以覆盖它。 -->
 		<link rel="stylesheet" href="/settings.css" />
 	</head>
 	<body>
+		<!-- 首屏骨架：开机要先问过 bootstrap 与 library 两份数据才画得出界面，
+		     中间这段不能是一片白。app.js 启动一落定（成功也好失败也好）就摘掉它；
+		     万一脚本压根没跑起来，样式里那一份也会把它请走。 -->
+		<div id="boot-skeleton" aria-hidden="true">
+			<span class="stamp stamp--solid boot-seal">墨</span>
+			<p class="boot-word">研墨中…</p>
+			<span class="sk-line is-mid"></span>
+			<span class="sk-line"></span>
+			<span class="sk-line is-short"></span>
+		</div>
+
 		<div class="desk">
 			<!-- ── 顶栏 ───────────────────────────────────────────── -->
 			<header class="beam">
@@ -61,17 +231,23 @@
 						<span class="beam-search-glyph" aria-hidden="true">搜</span><span class="beam-search-label">检索</span><kbd class="beam-kbd">Ctrl K</kbd>
 					</button>
 					<!-- 手机上顶栏放不下两个下拉，收进这块浮层里；桌面端用 display:contents 把它们还原成顶栏的一行。 -->
-					<button id="toggle-rail" class="btn btn-quiet btn-sm only-phone" title="章目" aria-controls="chapter-list" aria-expanded="false">目</button>
+					<!-- data-cap：手机上按钮只剩一个单字，样式层可用 ::after 把全名缀在下面；
+					     aria-label 与 title 都在，读屏与长按都能看到全称。 -->
+					<button id="toggle-rail" class="btn btn-quiet btn-sm only-phone" data-cap="章目" title="章目：打开左栏的章目抽屉" aria-label="章目" aria-controls="chapter-list" aria-expanded="false">目</button>
 					<div class="beam-tools" id="beam-tools">
+						<div class="beam-tools-head">
+							<span class="beam-tools-title">笔墨</span>
+							<button type="button" id="close-tools" class="btn btn-quiet btn-sm icon-btn" aria-label="收起笔墨浮层" title="收起">×</button>
+						</div>
 						<span class="beam-tools-cap">模型</span>
 						<select id="model-select" title="模型"></select>
 						<span class="beam-tools-cap">档位</span>
 						<select id="thinking-select" title="推理档位"></select>
 					</div>
-					<button id="toggle-tools" class="btn btn-quiet btn-sm only-phone" title="模型与档位" aria-controls="beam-tools" aria-expanded="false">笔</button>
-					<button id="toggle-bible" class="btn btn-quiet btn-sm only-narrow" title="素材、大纲与待办" aria-controls="bible" aria-expanded="false">案</button>
-					<button id="open-shortcuts" class="btn btn-quiet theme-toggle" title="键盘快捷键" aria-label="键盘快捷键">?</button>
-					<button id="theme-toggle" class="btn btn-quiet theme-toggle" title="切换昼夜" aria-label="切换昼夜">
+					<button id="toggle-tools" class="btn btn-quiet btn-sm only-phone" data-cap="笔墨" title="笔墨：选模型与推理档位" aria-label="笔墨" aria-controls="beam-tools" aria-expanded="false">笔</button>
+					<button id="toggle-bible" class="btn btn-quiet btn-sm only-narrow" data-cap="右案" title="右案：素材、大纲与待办" aria-label="右案" aria-controls="bible" aria-expanded="false">案</button>
+					<button id="open-shortcuts" class="btn btn-quiet theme-toggle icon-btn" title="键盘快捷键" aria-label="键盘快捷键">?</button>
+					<button id="theme-toggle" class="btn btn-quiet theme-toggle icon-btn" title="切换昼夜" aria-label="切换昼夜">
 						<span class="theme-glyph" aria-hidden="true"></span>
 					</button>
 					<button id="open-settings" class="btn btn-quiet" title="模型与供应商">设置</button>
@@ -93,7 +269,7 @@
 				<section class="rail-block rail-grow">
 					<div class="rail-head">
 						<h2 class="rail-label"><i class="tick"></i>章目</h2>
-						<button id="close-rail" class="btn btn-quiet btn-sm only-phone rail-close" title="收起章目" aria-label="收起章目">×</button>
+						<button id="close-rail" class="btn btn-quiet btn-sm only-phone rail-close icon-btn" title="收起章目" aria-label="收起章目">×</button>
 					</div>
 					<button id="add-chapter" class="rail-add">＋ 立一章</button>
 					<input id="chapter-filter" class="rail-filter" type="search" placeholder="搜章目…" autocomplete="off" aria-label="搜章目" />
@@ -282,7 +458,7 @@
 			<aside class="desk-right" id="desk-right">
 				<div class="bible-head">
 					<input id="bible-search" class="bible-search" type="search" placeholder="搜素材…" autocomplete="off" aria-label="搜右案" />
-					<button id="close-bible" class="btn btn-quiet btn-sm only-narrow" title="收起右案" aria-label="收起右案">×</button>
+					<button id="close-bible" class="btn btn-quiet btn-sm only-narrow icon-btn" title="收起右案" aria-label="收起右案">×</button>
 				</div>
 				<nav class="bible-tabs" id="bible-tabs" role="tablist" aria-label="右案">
 					<button class="bible-tab is-on" data-tab="materials" role="tab" aria-selected="true">素材</button>
@@ -513,7 +689,7 @@
 			<footer class="form-foot">
 				<p id="snapshot-error" class="form-error"></p>
 				<div class="dialog-actions">
-					<button type="button" class="btn btn-quiet" onclick="document.getElementById('snapshot-dialog').close()">合上</button>
+					<button type="button" class="btn btn-quiet" id="snapshot-close">合上</button>
 				</div>
 			</footer>
 		</dialog>

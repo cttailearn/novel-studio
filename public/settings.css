@@ -1,72 +1,546 @@
 /* ══════════════════════════════════════════════════════════════
    墨耕 · 设置页专属样式
-   模型区：检索 + 卡片行 + 批量 + 思考档位 chip
-   全部依赖 style.css 已有的水墨变量，暗色主题自动跟随。
+
+   这一层只管设置页：题签、供应商列表、模型卡片、档位竹签、批量浮层。
+   全局令牌（纸、墨、朱砂、间距、字号）都由 style.css 定义，本文件只用
+   var() 取色取尺 —— 暗色主题因此无需另写一套。
+
+   var(--名字, 回退值) 里的回退值不是摆设：令牌由 style.css 提供，
+   万一某个令牌还没落地，设置页也得站得住，不能塌成一团。
    ══════════════════════════════════════════════════════════════ */
 
-/* ── 默认模型区（搜索 / 联动提示 / 成本粗估）────────────────── */
+/* ── 题签：对话框头 ─────────────────────────────────────────── */
 
-.settings-defaults {
-	flex-wrap: wrap;
-	row-gap: 4px;
+.settings-dialog .settings-head {
+	position: relative;
+	align-items: center;
+	gap: var(--sp-4, 16px);
+	padding: calc(var(--sp-4, 16px) + 2px) var(--sp-5, 24px) var(--sp-3, 12px);
+	border-bottom: 1px solid var(--rule-soft);
+	/* 一道自上而下的纸光，把题签从纸面上"托"起来一点 */
+	background: linear-gradient(180deg, var(--sheen), transparent 78%), var(--paper);
+}
+
+.settings-dialog .settings-head > div {
+	min-width: 0;
+}
+
+/* 朱砂小方印：阳文一个「墨」字，压在题目左首，像稿纸角上的闲章 */
+.settings-dialog .settings-head h3 {
+	display: flex;
+	align-items: center;
+	gap: var(--sp-2, 8px);
+	margin: 0;
+	font-family: var(--kai);
+	font-size: var(--fs-xl, 19px);
+	font-weight: 600;
+	letter-spacing: 0.22em;
+	color: var(--ink);
+}
+
+.settings-dialog .settings-head h3::before {
+	content: "墨";
+	display: grid;
+	place-items: center;
+	flex: none;
+	width: 22px;
+	height: 22px;
+	font-size: 13px;
+	line-height: 1;
+	letter-spacing: 0;
+	/* 印泥色底 + 内描一道浅边，像盖在纸上的印不是贴上去的图 */
+	background: var(--seal);
+	color: var(--on-cinnabar);
+	border-radius: 2px;
+	box-shadow: inset 0 0 0 1px var(--seal-edge), 0 1px 2px var(--seal-drop);
+	text-shadow: none;
+}
+
+/* 副标题做成淡墨小签：左侧一道朱砂短线，读者一眼知道这是"注"不是"正文" */
+.settings-dialog .settings-head p {
+	display: inline-block;
+	max-width: 52ch;
+	margin: var(--sp-2, 8px) 0 0;
+	padding: 2px 10px 2px 9px;
+	border-left: 2px solid var(--cinnabar-edge);
+	background: var(--cinnabar-tint);
+	color: var(--ink-3);
+	font-size: var(--fs-xs, 11.5px);
+	line-height: 1.75;
+	letter-spacing: 0.03em;
+}
+
+.settings-dialog .settings-head .btn {
+	flex: none;
+	min-height: 34px;
+}
+
+/* ── 常用之笔 / 惯用思深 ────────────────────────────────────── */
+
+.settings-dialog .settings-defaults {
+	gap: var(--sp-3, 12px) var(--sp-5, 24px);
+	padding: var(--sp-3, 12px) var(--sp-5, 24px);
+	border-bottom: 0;
+	background: var(--paper-lo);
+	/* 与下方列表之间只用一条淡线，不堆第二道实线 */
+	box-shadow: inset 0 -1px 0 var(--rule-soft);
+}
+
+.settings-dialog .settings-defaults label {
+	gap: var(--sp-2, 8px);
+	font-size: var(--fs-xs, 11.5px);
+	letter-spacing: 0.08em;
+	color: var(--ink-3);
+}
+
+.settings-dialog .settings-defaults select {
+	min-width: 220px;
+	max-width: min(340px, 46vw);
+	font-size: var(--fs-sm, 12.5px);
+	font-family: var(--serif);
+	background: var(--paper-hi);
+	border-color: var(--rule);
+}
+
+.settings-dialog .settings-defaults select:focus-visible {
+	border-color: var(--cinnabar);
 }
 
 .default-extra {
 	display: flex;
 	flex-direction: column;
-	gap: 4px;
-	min-width: 0;
-	flex: 1 1 260px;
+	gap: 3px;
+	flex: 1 1 240px;
 }
 
-.default-search {
-	display: flex;
-}
-
-.default-search-input {
-	width: 100%;
-	max-width: none;
-	font-size: 12.5px;
+.default-search-input,
+.provider-search,
+.model-search {
+	font-family: var(--sans);
+	font-size: var(--fs-sm, 12.5px);
 	padding: 6px 9px;
+	border: 1px solid var(--rule);
+	background: var(--paper-hi);
+	color: var(--ink);
+	transition: border-color var(--brush, 220ms cubic-bezier(0.22, 0.61, 0.36, 1)),
+		background var(--brush, 220ms cubic-bezier(0.22, 0.61, 0.36, 1));
 }
 
-.default-search-input::-webkit-search-cancel-button {
-	cursor: pointer;
+.default-search-input:focus,
+.provider-search:focus,
+.model-search:focus {
+	border-color: var(--cinnabar);
+	background: var(--focus-paper);
 }
 
-.default-hint {
-	margin: 0;
-	font-size: 11.5px;
+/* 提示与粗估：四级层级里最低的一级，仍要读得清 */
+.default-hint,
+.default-cost {
+	font-size: var(--fs-xs, 11.5px);
 	line-height: 1.7;
 	color: var(--ink-3);
 }
 
 .default-hint.is-warn {
 	color: var(--cinnabar);
+	font-weight: 500;
 }
 
+/* 没有话要说的时候别占着纸面：手机上一行提示就是半屏列表 */
+.default-hint:empty,
+.default-cost:empty,
+.default-search:empty {
+	display: none;
+}
+
+/* 数字等宽，单位飞白：一串钱数才对得齐 */
 .default-cost {
-	margin: 0;
-	font-size: 11.5px;
-	line-height: 1.7;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0 3px;
+	font-family: var(--serif);
+	color: var(--ink-3);
+}
+
+.default-cost .cost-num {
+	font-family: var(--mono);
+	font-size: 12px;
+	color: var(--ink-2);
+	font-variant-numeric: tabular-nums;
+}
+
+.default-cost .cost-unit {
+	font-size: var(--fs-xs, 11.5px);
 	color: var(--ink-4);
+	letter-spacing: 0.02em;
+}
+
+/* ── 供应商栏：一行一枚书签 ─────────────────────────────────── */
+
+.providers-rail {
+	border-right: 1px solid var(--rule-soft);
+	background: var(--paper);
+}
+
+.search-wrap {
+	padding: var(--sp-3, 12px) var(--sp-3, 12px) var(--sp-1, 4px);
+	background: transparent;
+}
+
+.provider-search {
+	width: 100%;
+	border-radius: var(--r-2, 6px);
+	background: var(--paper-hi);
+	box-shadow: inset 0 1px 2px var(--lift-2);
+}
+
+.settings-providers {
+	padding: var(--sp-1, 4px) var(--sp-2, 8px) var(--sp-3, 12px);
+	gap: 1px;
+	overscroll-behavior: contain;
+	scrollbar-gutter: stable;
+}
+
+.settings-providers .group-label {
+	padding: var(--sp-3, 12px) 10px var(--sp-1, 4px);
 	font-family: var(--kai);
+	font-size: var(--fs-xs, 11.5px);
+	letter-spacing: 0.18em;
+	color: var(--ink-4);
 }
 
-/* ── 模型区外壳 ──────────────────────────────────────────── */
-
-.model-zone {
-	margin-top: 18px;
-	padding-top: 14px;
-	border-top: 1px solid var(--rule);
+.settings-providers .group-label:empty {
+	padding: 0;
 }
 
-.model-zone-head {
+.provider-row {
+	position: relative;
+	gap: var(--sp-2, 8px);
+	padding: 9px 10px 9px 14px;
+	border-radius: var(--r-2, 6px);
+	border: 1px solid transparent;
+	transition: background var(--brush, 200ms ease), border-color var(--brush, 200ms ease);
+}
+
+/* 行首一道状态墨线：内置是茶褐，自定义是朱砂，停用了退成飞白 */
+.provider-row::before {
+	content: "";
+	position: absolute;
+	left: 0;
+	top: 7px;
+	bottom: 7px;
+	width: 3px;
+	border-radius: 0 2px 2px 0;
+	background: var(--ink-4);
+	opacity: 0.45;
+	transition: opacity var(--brush, 200ms ease), background var(--brush, 200ms ease);
+}
+
+.provider-row.kind-builtin::before {
+	background: var(--tea);
+	opacity: 0.65;
+}
+
+.provider-row.kind-custom::before {
+	background: var(--cinnabar);
+	opacity: 0.85;
+}
+
+.provider-row.is-off::before {
+	background: var(--ink-4);
+	opacity: 0.16;
+}
+
+.provider-row.is-off .name,
+.provider-row.is-off .badge {
+	color: var(--ink-4);
+}
+
+.provider-row:hover {
+	background: var(--hover);
+	border-color: var(--rule-soft);
+}
+
+.provider-row:hover::before {
+	opacity: 0.9;
+}
+
+/* 选中：纸面高光 + 朱砂细边，不拿一整块实心色把字压下去 */
+.provider-row.is-on {
+	background: linear-gradient(90deg, var(--paper-hi) 0%, var(--paper-hi) 62%, var(--cinnabar-glow) 100%);
+	border-color: var(--cinnabar-edge);
+	box-shadow: inset 0 1px 0 var(--paper-hi);
+}
+
+.provider-row.is-on::before {
+	opacity: 1;
+	box-shadow: 0 0 0 1px var(--cinnabar-faint);
+}
+
+.provider-row.is-on .name {
+	color: var(--ink);
+	font-weight: 600;
+}
+
+.provider-row .name {
+	font-family: var(--serif);
+	font-size: 13px;
+	letter-spacing: 0.01em;
+	color: var(--ink-2);
+}
+
+/* 状态点缩成一小粒墨，别再抢那道墨线 */
+.provider-row .dot {
+	width: 5px;
+	height: 5px;
+	background: var(--ink-4);
+}
+
+.provider-row .dot.on {
+	background: var(--moss);
+}
+
+.provider-row .badge {
+	font-size: var(--fs-xs, 11.5px);
+	font-weight: 400;
+	line-height: 1.5;
+	padding: 1px 6px;
+	border-radius: 2px;
+	background: var(--hover);
+	color: var(--ink-3);
+}
+
+.provider-row .badge.ok {
+	color: var(--moss);
+	background: var(--moss-wash);
+}
+
+.provider-row .badge.custom {
+	color: var(--cinnabar);
+	background: var(--cinnabar-wash);
+}
+
+.provider-row .badge.err-badge {
+	color: var(--cinnabar);
+	background: var(--cinnabar-faint);
+}
+
+.provider-row:focus-visible {
+	outline: 2px solid var(--cinnabar);
+	outline-offset: -1px;
+}
+
+.add-row {
+	margin-top: var(--sp-1, 4px);
+	border: 1px dashed var(--cinnabar-edge);
+}
+
+.add-row::before {
+	background: var(--cinnabar);
+	opacity: 0.5;
+}
+
+.add-row:hover {
+	background: var(--cinnabar-tint);
+	border-color: var(--cinnabar);
+}
+
+.add-row .name {
+	font-family: var(--kai);
+	color: var(--cinnabar);
+}
+
+.add-row .dot {
+	background: transparent;
+	border: 1px dashed var(--cinnabar);
+}
+
+/* ── 详情区：四层字号 ───────────────────────────────────────── */
+
+.settings-detail {
+	padding: var(--sp-5, 24px) var(--sp-5, 24px) var(--sp-6, 32px);
+	overscroll-behavior: contain;
+	scrollbar-gutter: stable;
+}
+
+/* 一级：供应商名 */
+.settings-detail h4 {
+	margin: 0 0 var(--sp-1, 4px);
+	font-family: var(--kai);
+	font-size: var(--fs-lg, 18px);
+	font-weight: 600;
+	letter-spacing: 0.08em;
+	color: var(--ink);
+	overflow-wrap: anywhere;
+}
+
+.settings-detail .sub {
+	margin: 0 0 var(--sp-5, 22px);
+	font-size: var(--fs-xs, 11.5px);
+	line-height: 1.75;
+	color: var(--ink-3);
+	overflow-wrap: anywhere;
+}
+
+/* 二级：分组标题（模型区、凭据区…），右侧拖一条淡线把版面分开 */
+.settings-detail h5.detail-h {
+	display: flex;
+	align-items: center;
+	gap: var(--sp-2, 10px);
+	margin: var(--sp-5, 26px) 0 var(--sp-2, 6px);
+	font-family: var(--kai);
+	/* 比字段标签大一号、比供应商名小一号：四级里它居中，靠字距认出来 */
+	font-size: var(--fs-sm, 12.5px);
+	font-weight: 600;
+	letter-spacing: 0.2em;
+	color: var(--ink-2);
+}
+
+.settings-detail h5.detail-h::after {
+	content: "";
+	flex: 1;
+	height: 1px;
+	background: var(--rule-soft);
+}
+
+/* 三级：字段标签 */
+.settings-detail .field > label,
+.model-field-label,
+.batch-title + * .field > label {
+	font-size: var(--fs-xs, 11.5px);
+	letter-spacing: 0.09em;
+	color: var(--ink-3);
+}
+
+.settings-detail .field {
+	margin-bottom: var(--sp-3, 14px);
+}
+
+.settings-detail .field input,
+.settings-detail .field select {
+	background: var(--paper-hi);
+	border: 1px solid var(--rule);
+	border-radius: var(--r-2, 4px);
+}
+
+.settings-detail .field input:focus,
+.settings-detail .field select:focus {
+	border-color: var(--cinnabar);
+	background: var(--focus-paper);
+}
+
+/* 四级：提示文字 */
+.settings-detail .hint,
+.settings-detail .form-hint {
+	font-size: var(--fs-xs, 11.5px);
+	line-height: 1.75;
+	color: var(--ink-3);
+}
+
+/* 字段里的提示还要再退一格：它属于某一行，不属于整段说明 */
+.settings-detail .field .hint,
+.model-note {
+	color: var(--ink-3);
+}
+
+.settings-detail .field-row {
+	gap: var(--sp-3, 14px);
+}
+
+.settings-detail .actions {
+	gap: var(--sp-2, 8px);
+	margin: var(--sp-4, 18px) 0 var(--sp-1, 4px);
+	padding-top: var(--sp-3, 12px);
+	border-top: 1px solid var(--rule-soft);
+}
+
+.settings-detail .switch {
+	font-size: var(--fs-sm, 12.5px);
+	color: var(--ink-2);
+}
+
+.empty-hint {
+	padding: var(--sp-6, 32px) var(--sp-4, 16px);
+	font-family: var(--kai);
+	font-size: var(--fs-sm, 13px);
+	line-height: 2;
+	color: var(--ink-4);
+}
+
+/* 窄屏详情页的「← 返回」，宽屏两栏并排时它没有意义 */
+.settings-back {
+	display: none;
+	align-items: center;
+	gap: 4px;
+	margin: -4px 0 var(--sp-3, 12px);
+	padding: 0 10px 0 6px;
+	min-height: 36px;
+	font-family: var(--kai);
+	letter-spacing: 0.04em;
+}
+
+/* ── 模型区的骨架 ────────────────────────────────────────────
+   模型卡片这一整套版式只有本文件在管（style.css 里没有模型区的规则），
+   所以「怎么摆」必须写全：只给 gap 不给 display，字段会全塌进一列，
+   工具条上的按钮也会各占一行。骨架放在前，配色描边在后，谁覆盖谁一目了然。 */
+
+.model-zone-head,
+.model-toolbar,
+.model-card-head,
+.model-card-title,
+.model-card-actions,
+.level-chips,
+.model-cost-row,
+.model-think-line,
+.model-pick,
+.model-pick-all,
+.model-reason-label {
 	display: flex;
 	flex-wrap: wrap;
 	align-items: center;
-	gap: 8px 14px;
-	margin-bottom: 10px;
+}
+
+/* 标题吃掉剩下的宽度，徽标才不会把模型名挤成两行 */
+.model-card-title {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+/* 一段四个字段：宽屏两列，窄了自动退回一列（窄屏规则见文末） */
+.model-card-body {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+
+.model-field {
+	display: flex;
+	flex-direction: column;
+}
+
+/* 输入框的固有宽度按 20 字符算，窄栏里会顶破格子 —— 让它随栏走 */
+.model-field input,
+.model-field select {
+	min-width: 0;
+	max-width: 100%;
+}
+
+.model-batch-form {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+/* —— 模型区外壳 —— */
+
+.model-zone {
+	margin-top: var(--sp-4, 18px);
+	padding-top: var(--sp-3, 14px);
+	border-top: 1px solid var(--rule-soft);
+}
+
+.model-zone-head {
+	gap: var(--sp-2, 8px) var(--sp-4, 14px);
+	margin-bottom: var(--sp-3, 12px);
 }
 
 .model-zone-head .detail-h {
@@ -77,95 +551,138 @@
 .model-search-wrap {
 	flex: 1 1 220px;
 	min-width: 0;
-	display: flex;
 }
 
 .model-search {
 	width: 100%;
-	max-width: none;
-	font-size: 12.5px;
-	padding: 6px 9px;
-}
-
-.model-search::-webkit-search-cancel-button {
-	cursor: pointer;
+	border-radius: var(--r-2, 6px);
 }
 
 .model-stats {
-	flex: none;
-	font-size: 11.5px;
+	font-size: var(--fs-xs, 11.5px);
 	color: var(--ink-3);
 	letter-spacing: 0.04em;
-	white-space: nowrap;
+	font-variant-numeric: tabular-nums;
 }
 
-/* 「待核对」是常驻说明，不是可点开的提示条。 */
 .model-note {
-	cursor: default;
-	font-size: 11.5px;
+	font-size: var(--fs-xs, 11.5px);
 	line-height: 1.8;
-	margin: 0 0 12px;
+	color: var(--ink-3);
+	margin: 0 0 var(--sp-3, 12px);
+	padding-left: 10px;
+	border-left: 2px solid var(--rule-soft);
 }
 
-/* ── 工具条与批量 ─────────────────────────────────────────── */
+/* ── 工具条 ────────────────────────────────────────────────── */
 
 .model-toolbar {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 8px 12px;
-	margin-bottom: 12px;
+	gap: var(--sp-2, 8px) var(--sp-3, 12px);
+	margin-bottom: var(--sp-3, 12px);
+	padding-bottom: var(--sp-2, 8px);
+	border-bottom: 1px solid var(--rule-soft);
 }
 
 .model-pick-all {
-	display: inline-flex;
-	align-items: center;
 	gap: 7px;
-	font-size: 12.5px;
+	font-size: var(--fs-sm, 12.5px);
 	color: var(--ink-2);
-	cursor: pointer;
-	user-select: none;
 }
 
 .model-pick-all input {
 	width: 16px;
 	height: 16px;
-	margin: 0;
 	accent-color: var(--cinnabar);
 }
 
 .model-selected-count {
-	font-size: 11.5px;
+	font-size: var(--fs-xs, 11.5px);
 	color: var(--ink-3);
-	min-width: 52px;
+	min-width: 56px;
+	font-variant-numeric: tabular-nums;
 }
 
-.model-batch-panel {
-	margin: 0 0 14px;
-	padding: 12px 14px;
-	border: 1px solid var(--rule);
-	border-radius: 6px;
-	background: var(--lift-2);
-}
+/* ── 批量：一张宣纸浮层 ────────────────────────────────────── */
 
-/* 批量面板收起时这个容器是空的，别占位。 */
 .model-batch-host:empty {
 	display: none;
 }
 
+.model-batch-panel {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	max-height: min(58vh, 520px);
+	margin: 0 0 var(--sp-4, 16px);
+	padding: 0;
+	overflow: hidden;
+	border: 1px solid var(--rule);
+	border-radius: var(--r-2, 6px);
+	background: linear-gradient(180deg, var(--paper-hi), var(--paper) 62%);
+	box-shadow: 0 10px 26px var(--lift), inset 0 1px 0 var(--paper-hi);
+}
+
+/* 四角界格：界栏纸的角线，只用八道极细的线拼出来 */
+.model-batch-panel::after {
+	content: "";
+	position: absolute;
+	inset: 4px;
+	pointer-events: none;
+	border-radius: var(--r-1, 3px);
+	background-image: linear-gradient(var(--rule-strong), var(--rule-strong)),
+		linear-gradient(var(--rule-strong), var(--rule-strong)),
+		linear-gradient(var(--rule-strong), var(--rule-strong)),
+		linear-gradient(var(--rule-strong), var(--rule-strong)),
+		linear-gradient(var(--rule-strong), var(--rule-strong)),
+		linear-gradient(var(--rule-strong), var(--rule-strong)),
+		linear-gradient(var(--rule-strong), var(--rule-strong)),
+		linear-gradient(var(--rule-strong), var(--rule-strong));
+	background-repeat: no-repeat;
+	background-size: 11px 1px, 1px 11px, 11px 1px, 1px 11px, 11px 1px, 1px 11px, 11px 1px, 1px 11px;
+	background-position: left top, left top, right top, right top, left bottom, left bottom, right bottom, right bottom;
+	opacity: 0.75;
+}
+
+/* 顶部一条题签，像给这叠纸写的签条 */
 .batch-title {
+	flex: none;
+	margin: 0;
+	padding: 9px var(--sp-4, 16px);
+	border-bottom: 1px solid var(--rule-soft);
+	background: var(--cinnabar-tint);
 	font-family: var(--kai);
-	font-size: 12.5px;
+	font-size: var(--fs-sm, 12.5px);
+	letter-spacing: 0.1em;
 	color: var(--ink-2);
-	letter-spacing: 0.06em;
-	margin-bottom: 10px;
+}
+
+.batch-title::before {
+	content: "签";
+	display: inline-grid;
+	place-items: center;
+	width: 15px;
+	height: 15px;
+	margin-right: 7px;
+	font-size: 10px;
+	line-height: 1;
+	letter-spacing: 0;
+	background: var(--seal);
+	color: var(--on-cinnabar);
+	border-radius: 1px;
+	vertical-align: 1px;
+}
+
+/* 只有这一段滚，按钮钉在浮层底边 */
+.batch-body {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	padding: var(--sp-3, 14px) var(--sp-4, 16px);
 }
 
 .model-batch-form {
-	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-	gap: 10px 14px;
-	align-items: start;
+	gap: var(--sp-3, 12px) var(--sp-4, 14px);
 }
 
 .model-batch-form .model-field-wide {
@@ -173,22 +690,32 @@
 }
 
 .model-batch-panel .actions {
-	margin: 12px 0 0;
+	flex: none;
+	margin: 0;
+	padding: var(--sp-2, 10px) var(--sp-4, 16px) calc(var(--sp-2, 10px) + 2px);
+	border-top: 1px solid var(--rule-soft);
+	background: var(--paper-lo);
 }
 
-/* ── 卡片行 ───────────────────────────────────────────────── */
+/* ── 卡片行 ────────────────────────────────────────────────── */
 
 .model-list {
 	display: flex;
 	flex-direction: column;
-	gap: 10px;
+	gap: var(--sp-2, 10px);
 }
 
 .model-card {
-	border: 1px solid var(--rule);
-	border-radius: 6px;
-	background: var(--paper-hi);
+	position: relative;
 	padding: 11px 13px 9px;
+	border: 1px solid var(--rule-soft);
+	border-radius: var(--r-2, 6px);
+	background: var(--paper-hi);
+	transition: border-color var(--brush, 200ms ease), box-shadow var(--brush, 200ms ease);
+}
+
+.model-card:hover {
+	border-color: var(--rule);
 }
 
 .model-card.is-default {
@@ -196,102 +723,96 @@
 	box-shadow: inset 3px 0 0 var(--cinnabar);
 }
 
+/* 勾选待批量的卡片：一道朱边，批量会改到谁一目了然 */
+.model-card.is-picked {
+	border-color: var(--cinnabar);
+	box-shadow: inset 0 0 0 1px var(--cinnabar-faint);
+}
+
 .model-card-head {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 6px 9px;
-	margin-bottom: 9px;
-}
-
-.model-pick {
-	display: inline-flex;
-	align-items: center;
-	cursor: pointer;
-}
-
-.model-check {
-	width: 16px;
-	height: 16px;
-	margin: 0;
-	accent-color: var(--cinnabar);
-	cursor: pointer;
+	gap: var(--sp-1, 6px) 9px;
+	margin-bottom: var(--sp-2, 9px);
 }
 
 .model-card-title {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: baseline;
-	gap: 8px;
-	min-width: 0;
-	flex: 1 1 auto;
+	gap: var(--sp-2, 8px);
 }
 
 .model-name {
 	font-family: var(--kai);
 	font-size: 14px;
 	font-weight: 600;
-	color: var(--ink);
 	letter-spacing: 0.04em;
-	word-break: break-word;
+	color: var(--ink);
+	overflow-wrap: anywhere;
 }
 
 .model-id {
 	font-family: var(--mono);
-	font-size: 11px;
-	color: var(--ink-4);
+	font-size: var(--fs-xs, 11.5px);
+	line-height: 1.6;
+	color: var(--ink-3);
 	background: var(--paper-sunk);
-	border-radius: 3px;
+	border-radius: 2px;
 	padding: 1px 6px;
-	word-break: break-all;
+	overflow-wrap: anywhere;
 }
 
+/* 待核对：一枚朱砂小印 */
 .model-badge {
-	font-size: 10.5px;
+	font-size: var(--fs-xs, 11px);
 	line-height: 1.6;
-	padding: 1px 7px;
-	border-radius: 999px;
+	padding: 1px 6px;
+	border-radius: 2px;
 	border: 1px solid var(--rule);
 	color: var(--ink-3);
-	white-space: nowrap;
+	font-weight: 400;
+	letter-spacing: 0.04em;
 }
 
 .model-badge.is-warn {
-	color: var(--cinnabar);
-	border-color: var(--cinnabar-edge);
-	background: var(--cinnabar-soft);
+	border-color: var(--seal);
+	background: var(--seal);
+	color: var(--on-cinnabar);
+	box-shadow: inset 0 0 0 1px var(--seal-edge);
+	letter-spacing: 0.08em;
 }
 
 .model-badge.is-ok {
 	color: var(--moss);
 	border-color: var(--moss-edge);
-	background: var(--moss-wash);
+	background: var(--moss-soft);
 }
 
 .model-badge.is-off {
 	color: var(--ink-4);
+	border-color: var(--rule);
 	border-style: dashed;
 }
 
 .model-card-body {
-	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-	gap: 10px 14px;
-	align-items: start;
-}
-
-.model-field {
-	margin-bottom: 0;
+	gap: var(--sp-2, 10px) var(--sp-4, 14px);
 	min-width: 0;
 }
 
-/* 成本那一栏没有单一控件可指，标签用 span，样式照抄 .field > label。 */
+.model-card-body > * {
+	min-width: 0;
+}
+
+.model-field {
+	min-width: 0;
+}
+
 .model-field-label {
-	display: block;
-	font-size: 11.5px;
-	color: var(--ink-3);
-	letter-spacing: 0.08em;
 	margin-bottom: 5px;
+}
+
+/* 标签里的单位：飞白小字，跟数字分开读 */
+.model-unit {
+	margin-left: 5px;
+	font-size: var(--fs-xs, 11.5px);
+	color: var(--ink-4);
+	letter-spacing: 0.02em;
 }
 
 .model-field-wide {
@@ -299,25 +820,34 @@
 }
 
 .model-value {
-	font-size: 12.5px;
+	font-size: var(--fs-sm, 12.5px);
 	color: var(--ink-2);
 	padding: 6px 0;
-	word-break: break-word;
+	overflow-wrap: anywhere;
 }
 
 .model-id-input {
 	font-family: var(--mono);
 	font-size: 12px;
+	border: 1px solid var(--rule);
+	background: var(--paper-sunk);
 }
 
 .model-num {
-	width: 100%;
-	max-width: none;
-	min-width: 0;
+	font-family: var(--mono);
+	font-size: var(--fs-sm, 12.5px);
 	font-variant-numeric: tabular-nums;
+	border: 1px solid var(--rule);
+	background: var(--paper-sunk);
+	color: var(--ink);
 }
 
-/* 仍是占位值的输入框：加一道虚线，提示需要人工核对。 */
+.model-num:focus,
+.model-id-input:focus {
+	border-color: var(--cinnabar);
+	background: var(--focus-paper);
+}
+
 .model-num.is-placeholder {
 	border-style: dashed;
 	color: var(--ink-3);
@@ -326,12 +856,12 @@
 
 .model-num.is-placeholder:focus {
 	border-style: solid;
+	color: var(--ink);
+	background: var(--focus-paper);
 }
 
 .model-cost-row {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 8px 10px;
+	gap: var(--sp-2, 8px) 10px;
 }
 
 .model-cost-num {
@@ -340,91 +870,142 @@
 }
 
 .model-think-line {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 8px 14px;
+	gap: var(--sp-2, 8px) var(--sp-4, 14px);
 }
 
 .model-reason-label {
-	display: inline-flex;
-	align-items: center;
 	gap: 7px;
-	font-size: 12.5px;
+	font-size: var(--fs-sm, 12.5px);
 	color: var(--ink-2);
-	cursor: pointer;
-	user-select: none;
 }
 
 .model-reason {
 	width: 16px;
 	height: 16px;
-	margin: 0;
 	accent-color: var(--cinnabar);
-	cursor: pointer;
 }
 
+/* 卡片里分组之间：淡线 + 留白，不再是一道实线压一道实线 */
 .model-card-actions {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 8px;
-	margin-top: 10px;
-	padding-top: 9px;
-	border-top: 1px dashed var(--rule-soft);
+	gap: var(--sp-2, 8px);
+	margin-top: var(--sp-3, 12px);
+	padding-top: var(--sp-2, 9px);
+	border-top: 1px solid var(--rule-soft);
 }
 
-/* ── 思考档位 chip ────────────────────────────────────────── */
+/* ── 思考档位：七枚竹签，由浅入深 ──────────────────────────── */
 
 .level-chips {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 6px;
-	align-items: center;
+	gap: 7px;
 }
 
 .level-chip {
+	--tick: 8px;
+	position: relative;
 	display: inline-flex;
 	align-items: center;
 	gap: 6px;
-	padding: 4px 9px;
+	padding: 4px 9px 4px 8px;
 	border: 1px solid var(--rule);
-	border-radius: 999px;
-	background: var(--paper);
-	font-size: 12px;
+	border-radius: var(--r-1, 3px);
+	background: linear-gradient(180deg, var(--paper-hi), var(--paper));
 	color: var(--ink-3);
-	cursor: pointer;
-	user-select: none;
-	transition: border-color var(--wash), background var(--wash), color var(--wash);
+	font-size: var(--fs-sm, 12px);
+	box-shadow: inset 0 1px 0 var(--paper-hi), 0 1px 0 var(--lift-2);
+	transition: border-color var(--brush, 200ms ease), background var(--brush, 200ms ease),
+		color var(--brush, 200ms ease);
+}
+
+/* 竹节刻痕：越往「尽思」越长，一眼看出递进 */
+.level-chip::before {
+	content: "";
+	flex: none;
+	width: 2px;
+	height: var(--tick);
+	border-radius: 1px;
+	background: var(--rule-strong);
+	opacity: 0.85;
+}
+
+/* 「关」只留一道极短的刻痕，让 4→14px 这一串从「几乎没有」开始长起来 */
+.level-chip[data-level="off"] {
+	--tick: 2px;
+}
+
+.level-chip[data-level="minimal"] {
+	--tick: 4px;
+}
+
+.level-chip[data-level="low"] {
+	--tick: 6px;
+}
+
+.level-chip[data-level="medium"] {
+	--tick: 8px;
+}
+
+.level-chip[data-level="high"] {
+	--tick: 10px;
+}
+
+.level-chip[data-level="xhigh"] {
+	--tick: 12px;
+}
+
+.level-chip[data-level="max"] {
+	--tick: 14px;
+}
+
+.level-chip[data-level="max"]::before,
+.level-chip[data-level="xhigh"]::before {
+	background: var(--cinnabar);
+	opacity: 0.6;
 }
 
 .level-chip:hover {
 	border-color: var(--rule-strong);
+	background: var(--paper-hi);
 	color: var(--ink-2);
+}
+
+.level-chip:focus-within {
+	border-color: var(--cinnabar);
 }
 
 .level-chip input {
 	width: 14px;
 	height: 14px;
-	margin: 0;
 	accent-color: var(--cinnabar);
-	cursor: pointer;
 }
 
 .level-chip .level-text {
 	font-family: var(--kai);
-	letter-spacing: 0.04em;
+	letter-spacing: 0.06em;
 }
 
 .level-chip .level-code {
 	font-family: var(--mono);
-	font-size: 10px;
+	font-size: var(--fs-xs, 11px);
 	color: var(--ink-4);
+	letter-spacing: 0;
 }
 
+/* 选中：朱砂描边 + 朱印底纹（斜纹像印泥吃进纸里） */
 .level-chip.is-on {
-	border-color: var(--cinnabar-edge);
-	background: var(--cinnabar-wash);
+	border-color: var(--cinnabar);
 	color: var(--ink);
+	background-image: repeating-linear-gradient(
+			45deg,
+			var(--cinnabar-tint) 0 3px,
+			transparent 3px 8px
+		),
+		linear-gradient(180deg, var(--paper-hi), var(--paper));
+	box-shadow: inset 0 0 0 1px var(--cinnabar-faint), inset 0 1px 0 var(--paper-hi);
+}
+
+.level-chip.is-on::before {
+	background: var(--cinnabar);
+	opacity: 1;
 }
 
 .level-chip.is-on .level-code {
@@ -432,32 +1013,78 @@
 }
 
 .level-chip.is-locked {
-	cursor: default;
 	border-style: dashed;
 	background: var(--paper-lo);
 	color: var(--ink-4);
+	box-shadow: none;
+}
+
+.level-chip.is-locked::before {
+	background: var(--ink-4);
+	opacity: 0.4;
+	height: 4px;
 }
 
 .level-chip.is-locked:hover {
 	border-color: var(--rule);
 	color: var(--ink-4);
+	background: var(--paper-lo);
 }
 
 .level-note {
-	font-size: 11px;
-	color: var(--ink-4);
+	font-size: var(--fs-xs, 11.5px);
+	color: var(--ink-3);
+	line-height: 1.7;
 }
 
-/* ── 窄屏：不许出现横向滚动条 ──────────────────────────────── */
+/* ── 提示条 ────────────────────────────────────────────────── */
+
+.notice {
+	padding: 9px 12px;
+	border: 1px solid var(--rule-soft);
+	border-left-width: 3px;
+	border-radius: 0 var(--r-2, 4px) var(--r-2, 4px) 0;
+	background: var(--lift-2);
+	color: var(--ink-2);
+	font-size: var(--fs-sm, 12px);
+	line-height: 1.75;
+}
+
+.notice.ok {
+	border-color: var(--moss-edge);
+	border-left-color: var(--moss);
+	background: var(--moss-soft);
+	color: var(--moss);
+}
+
+.notice.err {
+	border-color: var(--cinnabar-edge);
+	border-left-color: var(--cinnabar);
+	background: var(--cinnabar-soft);
+	color: var(--cinnabar);
+}
+
+/* ══════════════════════════════════════════════════════════════
+   窄屏：平板竖持（≤900px）
+   供应商栏不能整个藏掉 —— 藏了就换不了供应商，模型区也就走不到。
+   ══════════════════════════════════════════════════════════════ */
 
 @media (max-width: 900px) {
-	/* style.css 在窄屏把供应商栏整个藏了 —— 那样手机上换不了供应商，模型区也就走不到。
-	   这里只在设置对话框里把它放回来，限高可滚，不喧宾夺主。 */
+	.settings-body {
+		grid-template-columns: minmax(0, 1fr);
+		grid-template-rows: auto minmax(0, 1fr);
+		overflow: hidden;
+	}
+
 	.settings-body .providers-rail {
 		display: flex;
-		max-height: 148px;
+		max-height: 152px;
 		border-right: 0;
-		border-bottom: 1px solid var(--rule);
+		border-bottom: 1px solid var(--rule-soft);
+	}
+
+	.search-wrap {
+		padding: 10px 12px 2px;
 	}
 
 	.model-card-body,
@@ -468,21 +1095,26 @@
 	.model-zone-head {
 		align-items: stretch;
 		flex-direction: column;
-		gap: 8px;
+		gap: var(--sp-2, 8px);
 	}
 
 	.model-stats {
 		white-space: normal;
 	}
 
-	/* 窄屏上 26px 的内边距太奢侈，纸面本来就窄。 */
 	.settings-detail {
-		padding: 16px 14px;
+		padding: var(--sp-4, 16px) var(--sp-3, 14px) calc(var(--sp-6, 32px) + var(--safe-b, 0px));
 	}
 
 	.settings-defaults {
-		padding: 12px 14px;
-		gap: 12px 16px;
+		padding: var(--sp-3, 12px) var(--sp-4, 14px);
+		gap: var(--sp-2, 12px) var(--sp-4, 16px);
+	}
+
+	.settings-defaults select {
+		max-width: none;
+		min-width: 0;
+		flex: 1 1 auto;
 	}
 
 	.model-toolbar .btn,
@@ -490,28 +1122,193 @@
 		flex: 1 1 auto;
 	}
 
-	/* iOS 上字号小于 16px 的输入框会触发页面自动缩放，视线整个跑掉。 */
-	.model-num,
-	.model-id-input,
-	.default-search-input,
-	.model-search {
-		font-size: 16px;
+	.default-cost {
+		gap: 0 2px;
 	}
 }
 
-/* ── 触控：点得中的尺寸 ────────────────────────────────────── */
+/* ══════════════════════════════════════════════════════════════
+   手机（≤640px）：对话框全屏，列表与详情分作两页
+   ══════════════════════════════════════════════════════════════ */
 
-@media (pointer: coarse) {
+@media (max-width: 640px) {
+	.settings-dialog {
+		width: 100vw;
+		max-width: 100vw;
+		height: 100vh;
+		height: 100dvh;
+		max-height: 100vh;
+		max-height: 100dvh;
+		margin: 0;
+		padding: 0;
+		border: 0;
+		border-radius: 0;
+		background: var(--paper);
+	}
+
+	/* 题签避开刘海与状态栏 */
+	.settings-dialog .settings-head {
+		padding: calc(var(--safe-t, 0px) + 12px) var(--sp-4, 16px) var(--sp-2, 10px);
+		gap: var(--sp-2, 10px);
+	}
+
+	.settings-dialog .settings-head h3 {
+		font-size: var(--fs-lg, 18px);
+		letter-spacing: 0.16em;
+		gap: var(--sp-2, 8px);
+	}
+
+	.settings-dialog .settings-head h3::before {
+		width: 20px;
+		height: 20px;
+		font-size: 12px;
+	}
+
+	.settings-dialog .settings-head p {
+		max-width: none;
+		font-size: var(--fs-xs, 11.5px);
+		line-height: 1.65;
+	}
+
+	/* 关闭键要够大，拇指才点得准 */
+	.settings-dialog .settings-head .btn {
+		min-height: var(--tap-lg, 48px);
+		min-width: var(--tap-lg, 48px);
+		padding: 0 12px;
+	}
+
+	.settings-dialog .settings-defaults {
+		flex-direction: column;
+		align-items: stretch;
+		gap: var(--sp-2, 8px);
+		padding: var(--sp-2, 10px) var(--sp-4, 14px) var(--sp-3, 12px);
+	}
+
+	.settings-dialog .settings-defaults label {
+		flex-wrap: wrap;
+		gap: var(--sp-1, 6px);
+	}
+
+	.settings-dialog .settings-defaults select {
+		width: 100%;
+		min-width: 0;
+		font-size: 16px;
+		min-height: var(--tap-lg, 48px);
+	}
+
+	.default-search-input,
+	.provider-search,
+	.model-search,
+	.model-num,
+	.model-id-input {
+		/* 安卓/iOS 上小于 16px 的输入框一聚焦就放大整页，视线全跑掉 */
+		font-size: 16px;
+		min-height: var(--tap-lg, 48px);
+	}
+
+	.default-extra {
+		flex: 1 1 auto;
+	}
+
+	/* —— 两页 ——
+	   用 .settings-dialog 前缀压过 style.css 里 `.sheet-wide .settings-body`
+	   的 overflow-y:auto：整页滚会让「返回」跟着滚走，滚动必须交给列表/详情
+	   各自那一层。 */
+	.settings-dialog .settings-body {
+		grid-template-columns: minmax(0, 1fr);
+		grid-template-rows: minmax(0, 1fr);
+		overflow: hidden;
+		padding-bottom: var(--safe-b, 0px);
+	}
+
+	.settings-body .providers-rail {
+		display: flex;
+		height: 100%;
+		max-height: none;
+		border-bottom: 0;
+	}
+
+	.settings-body .settings-detail {
+		display: none;
+		height: 100%;
+		overflow-y: auto;
+		-webkit-overflow-scrolling: touch;
+	}
+
+	/* 点了某一家：列表让位，详情上场 */
+	.settings-dialog.is-pane-detail .settings-body .providers-rail {
+		display: none;
+	}
+
+	.settings-dialog.is-pane-detail .settings-body .settings-detail {
+		display: block;
+	}
+
+	/* 返回键钉在详情顶上，滚到哪儿都找得到 */
+	.settings-back {
+		display: inline-flex;
+		position: sticky;
+		top: calc(var(--sp-1, 4px) * -1);
+		z-index: 3;
+		margin-left: -4px;
+		background: var(--paper);
+		box-shadow: 0 4px 10px var(--lift-2);
+		min-height: var(--tap-lg, 48px);
+		padding-right: 14px;
+	}
+
+	.settings-providers {
+		padding: var(--sp-1, 4px) var(--sp-2, 8px) calc(var(--sp-4, 16px) + var(--safe-b, 0px));
+	}
+
+	/* 触控：行高、间距都按手指来 */
+	.provider-row {
+		min-height: var(--tap-lg, 48px);
+		padding: 10px 10px 10px 14px;
+	}
+
+	.settings-providers {
+		gap: var(--sp-1, 4px);
+	}
+
+	.settings-providers .group-label {
+		padding: var(--sp-3, 12px) 10px var(--sp-1, 4px);
+	}
+
+	.provider-row .badge {
+		font-size: var(--fs-xs, 11.5px);
+	}
+
+	.settings-detail h4 {
+		font-size: var(--fs-lg, 17px);
+	}
+
+	.settings-detail .actions {
+		gap: var(--sp-2, 8px);
+	}
+
+	.settings-detail .actions .btn {
+		min-height: var(--tap-lg, 48px);
+		padding: 0 14px;
+	}
+
 	.model-toolbar .btn,
 	.model-card-actions .btn,
 	.model-batch-panel .btn {
-		min-height: 40px;
-		padding: 8px 14px;
+		min-height: var(--tap-lg, 48px);
+		padding: 0 14px;
 	}
 
 	.level-chip {
-		min-height: 40px;
-		padding: 8px 12px;
+		min-height: var(--tap-lg, 48px);
+		padding: 0 12px 0 10px;
+		gap: 7px;
+		font-size: var(--fs-sm, 13px);
+	}
+
+	.level-chip input {
+		width: 18px;
+		height: 18px;
 	}
 
 	.model-check,
@@ -522,6 +1319,134 @@
 
 	.model-pick,
 	.model-reason-label {
-		min-height: 40px;
+		min-height: var(--tap-lg, 48px);
+	}
+
+	.model-batch-panel {
+		max-height: min(72vh, 620px);
+	}
+
+	.batch-title {
+		padding: 10px var(--sp-3, 14px);
+	}
+
+	.batch-body {
+		padding: var(--sp-3, 12px) var(--sp-3, 14px);
+	}
+
+	.model-batch-panel .actions {
+		padding: var(--sp-2, 10px) var(--sp-3, 14px) calc(var(--sp-2, 10px) + var(--safe-b, 0px));
+	}
+
+	/* 两页切换时不要横向晃 */
+	.settings-body,
+	.settings-detail,
+	.providers-rail {
+		max-width: 100%;
+		overflow-x: hidden;
+	}
+}
+
+/* ── 触控设备：宁可大一号 ──────────────────────────────────── */
+
+@media (pointer: coarse) and (min-width: 641px) {
+	.model-toolbar .btn,
+	.model-card-actions .btn,
+	.model-batch-panel .btn {
+		min-height: var(--tap-lg, 44px);
+		padding: 8px 14px;
+	}
+
+	.level-chip {
+		min-height: var(--tap-lg, 44px);
+		padding: 6px 12px;
+	}
+
+	.model-check,
+	.model-reason {
+		width: 20px;
+		height: 20px;
+	}
+
+	.model-pick,
+	.model-reason-label {
+		min-height: var(--tap-lg, 44px);
+	}
+
+	.provider-row {
+		min-height: 44px;
+	}
+}
+
+/* ── 滚动：列表很长，滚到底不要带着整页动 ───────────────────── */
+
+.settings-providers,
+.settings-detail,
+.batch-body {
+	scrollbar-width: thin;
+	scrollbar-color: var(--ink-4) transparent;
+	-webkit-overflow-scrolling: touch;
+}
+
+.settings-providers::-webkit-scrollbar,
+.settings-detail::-webkit-scrollbar,
+.batch-body::-webkit-scrollbar {
+	width: 8px;
+	height: 8px;
+}
+
+.settings-providers::-webkit-scrollbar-track,
+.settings-detail::-webkit-scrollbar-track,
+.batch-body::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+.settings-providers::-webkit-scrollbar-thumb,
+.settings-detail::-webkit-scrollbar-thumb,
+.batch-body::-webkit-scrollbar-thumb {
+	background: var(--rule-strong);
+	border-radius: 4px;
+	border: 2px solid transparent;
+	background-clip: content-box;
+}
+
+.settings-providers::-webkit-scrollbar-thumb:hover,
+.settings-detail::-webkit-scrollbar-thumb:hover,
+.batch-body::-webkit-scrollbar-thumb:hover {
+	background: var(--ink-4);
+	background-clip: content-box;
+}
+
+/* 键盘走到的每一处都得看得见 */
+.settings-dialog :focus-visible {
+	outline: 2px solid var(--cinnabar);
+	outline-offset: 2px;
+	border-radius: 3px;
+}
+
+.settings-dialog .level-chip:focus-visible {
+	outline: none;
+}
+
+/* ── 窄容器兜底：任何卡片都不许横向撑破 ───────────────────── */
+
+@media (max-width: 460px) {
+	.model-card-body,
+	.model-batch-form {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.model-card-head {
+		gap: 6px 7px;
+	}
+
+	.model-cost-row {
+		flex-direction: column;
+		align-items: stretch;
+	}
+
+	.settings-detail {
+		padding-left: var(--sp-3, 12px);
+		padding-right: var(--sp-3, 12px);
 	}
 }

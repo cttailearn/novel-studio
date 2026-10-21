@@ -946,6 +946,11 @@ try {
 		"--ms-font-size", "--ms-line-height", "--ms-measure",
 		// 移动端度量同理：安全区（刘海/Home Indicator）与最小触控目标由设备决定，与主题无关。
 		"--safe-t", "--safe-b", "--safe-l", "--safe-r", "--tap",
+		// 排版阶梯（间距/圆角/字号）与墨晕曲线是尺度，不是颜色：换昼夜不该改版心与节奏。
+		"--sp-1", "--sp-2", "--sp-3", "--sp-4", "--sp-5", "--sp-6",
+		"--r-1", "--r-2", "--r-3",
+		"--fs-xs", "--fs-sm", "--fs-md", "--fs-lg", "--fs-xl",
+		"--brush", "--tap-lg",
 	]);
 	const uncovered = [...lightNames].filter((n) => !darkNames.has(n) && !themeInvariant.has(n));
 	check("会变色的令牌暗色都有覆盖", uncovered.length === 0, uncovered.join(" "));

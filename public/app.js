@@ -222,19 +222,51 @@ async function api(path, options = {}) {
  *
  * 写作最怕两件事：字丢了不知道，和一个小失败弹出系统 alert 打断思路。
  * 这里统一收口：不阻塞、可点掉、几秒自散，一次最多四条。
+ *
+ * 印章上落一个字表明性质：成功「成」、失败「误」、提醒「嘱」、其余「记」。
+ * 手机上提示一闪而过，靠颜色认来不及（暗色里尤其难分），得有个字。
  */
+const TOAST_MARKS = {
+	ok: ["成", "成功"],
+	error: ["误", "失败"],
+	warn: ["嘱", "提醒"],
+	info: ["记", "提示"],
+};
+
 function toast(message, tone = "info", timeout = 3600) {
 	const stack = $("toast-stack");
 	if (!stack) return;
+	const [mark, word] = TOAST_MARKS[tone] ?? TOAST_MARKS.info;
 	const node = el("div", "toast toast-" + tone);
 	node.setAttribute("role", tone === "error" ? "alert" : "status");
+	node.setAttribute("aria-label", word + "：" + message);
 	node.tabIndex = 0;
-	node.append(el("span", "toast-mark", tone === "error" ? "!" : tone === "ok" ? "✓" : "·"));
+	node.append(el("span", "toast-mark", mark));
 	node.append(el("span", "toast-text", message));
 	const close = () => {
+		if (node.classList.contains("is-gone")) return;
 		node.classList.add("is-gone");
-		setTimeout(() => node.remove(), 220);
+		// 减少动态效果时不等过场：淡出那 220ms 在系统眼里也算动。
+		setTimeout(() => node.remove(), prefersReducedMotion() ? 0 : 220);
 	};
+	// 关闭口：整条可点（原有手感），另加一个看得见的叉。
+	// 手机上一条提示压住正文时，光靠「点整条」不显眼，人不知道能点。
+	const dismiss = el("span", "toast-close", "✕");
+	dismiss.setAttribute("role", "button");
+	dismiss.setAttribute("aria-label", "关闭提示");
+	dismiss.tabIndex = 0;
+	dismiss.addEventListener("click", (event) => {
+		event.stopPropagation();
+		close();
+	});
+	dismiss.addEventListener("keydown", (event) => {
+		if (event.key === "Enter" || event.key === " ") {
+			event.preventDefault();
+			event.stopPropagation();
+			close();
+		}
+	});
+	node.append(dismiss);
 	node.addEventListener("click", close);
 	node.addEventListener("keydown", (event) => {
 		if (event.key === "Enter" || event.key === " ") close();
@@ -280,22 +312,32 @@ function isPhoneLayout() {
 	return Boolean(phoneQuery?.matches);
 }
 
-function openRailDrawer() {
+/**
+ * 收起 / 张开章目抽屉（只管界面）。
+ * 与历史无关，所以单独一层：层管理那边关界面时调的也是它。
+ */
+function setRailDrawer(open) {
 	const desk = document.querySelector(".desk");
 	if (!desk) return;
-	// 两个抽屉不同时开：右案盖着，章目就进不去了。
-	closeBibleDrawer();
-	desk.classList.add("is-rail-open");
-	$("rail-backdrop")?.classList.remove("hidden");
-	$("toggle-rail")?.setAttribute("aria-expanded", "true");
+	desk.classList.toggle("is-rail-open", open);
+	$("rail-backdrop")?.classList.toggle("hidden", !open);
+	$("toggle-rail")?.setAttribute("aria-expanded", open ? "true" : "false");
 }
 
-function closeRailDrawer() {
-	const desk = document.querySelector(".desk");
-	if (!desk) return;
-	desk.classList.remove("is-rail-open");
-	$("rail-backdrop")?.classList.add("hidden");
-	$("toggle-rail")?.setAttribute("aria-expanded", "false");
+function openRailDrawer() {
+	if (findLayer("rail")) return;
+	// 两个抽屉不同时开：右案盖着，章目就进不去了。
+	// 交接时接管右案那条历史（keepHistory），返回键才只需按一次 —— 见 openLayer。
+	const inherited = closeBibleDrawer({ keepHistory: true });
+	setRailDrawer(true);
+	openLayer("rail", () => setRailDrawer(false), { replace: inherited });
+}
+
+/** 返回 true 表示「刚才确实有一层被关掉了」，给接手的那一方判断要不要 replace。 */
+function closeRailDrawer(options = {}) {
+	if (closeLayer("rail", options)) return true;
+	setRailDrawer(false);
+	return false;
 }
 
 function toggleRailDrawer() {
@@ -303,17 +345,31 @@ function toggleRailDrawer() {
 	else openRailDrawer();
 }
 
-/** 顶栏的模型与档位浮层。手机上点「笔」落下，点外面收起。 */
-function toggleToolsPanel(force) {
+/** 顶栏的模型与档位浮层（只管界面）。 */
+function setToolsPanel(open) {
 	const panel = $("beam-tools");
 	if (!panel) return;
-	const open = force === undefined ? !panel.classList.contains("is-open") : Boolean(force);
 	panel.classList.toggle("is-open", open);
 	$("toggle-tools")?.setAttribute("aria-expanded", open ? "true" : "false");
 }
 
+/** 手机上点「笔」落下，点外面收起。开着的时候也算一层，返回键要能关掉它。 */
+function toggleToolsPanel(force) {
+	const panel = $("beam-tools");
+	if (!panel) return;
+	const open = force === undefined ? !panel.classList.contains("is-open") : Boolean(force);
+	if (!open) {
+		closeToolsPanel();
+		return;
+	}
+	if (findLayer("tools")) return;
+	setToolsPanel(true);
+	openLayer("tools", () => setToolsPanel(false));
+}
+
 function closeToolsPanel() {
-	toggleToolsPanel(false);
+	if (closeLayer("tools")) return;
+	setToolsPanel(false);
 }
 
 /**
@@ -351,6 +407,304 @@ function bindSwipeOut(element, onSwipeOut) {
 		},
 		{ passive: true },
 	);
+}
+
+// ═══════════════════════════════════════════════════ 触控与视口
+
+const COARSE_QUERY = "(pointer: coarse)";
+const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
+const coarseQuery = typeof window.matchMedia === "function" ? window.matchMedia(COARSE_QUERY) : null;
+const motionQuery = typeof window.matchMedia === "function" ? window.matchMedia(REDUCED_MOTION_QUERY) : null;
+
+/** 手指点还是鼠标点。决定「点卡片算不算选中」与「要不要装拖拽」。 */
+function isCoarsePointer() {
+	return Boolean(coarseQuery?.matches);
+}
+
+/** 系统开了「减少动态效果」：能不动就不动，别抢人眼睛。 */
+function prefersReducedMotion() {
+	return Boolean(motionQuery?.matches);
+}
+
+/**
+ * 给 CSS 留的两个钩子。
+ *
+ * 手机横过来时视口只剩三百来像素高，顶栏加操作条能吃掉小半屏；
+ * 结构上给不出更多办法，至少要让人知道「现在是矮窗」，样式才好在矮窗里把两栏压成一行。
+ * pointer: coarse 在部分安卓 WebView 上不报，所以触屏这件事同时落成 data-touch。
+ */
+function syncViewportHooks() {
+	const root = document.documentElement;
+	root.classList.toggle("is-short", window.innerHeight <= 480);
+	root.dataset.orient = window.innerWidth > window.innerHeight ? "landscape" : "portrait";
+	root.dataset.touch = isCoarsePointer() ? "coarse" : "fine";
+}
+
+/**
+ * 软键盘避让。
+ *
+ * 安卓上键盘一弹，下半屏就没了，正在写的那个框如果正好落在那儿，人是在盲打。
+ * 只把「落在下半屏、且底边被遮住」的框带上来 —— 见框就滚，会让人还没开始打字屏幕先跳一下。
+ */
+function revealForKeyboard(node) {
+	if (!isCoarsePointer() || !(node instanceof HTMLElement) || !node.isConnected) return;
+	const viewport = window.visualViewport;
+	const height = viewport ? viewport.height : window.innerHeight;
+	const offset = viewport ? viewport.offsetTop : 0;
+	const box = node.getBoundingClientRect();
+	const covered = box.bottom > offset + height - 12;
+	const lowerHalf = box.top > offset + height * 0.5;
+	if (!covered || !lowerHalf) return;
+	node.scrollIntoView({ block: "nearest", behavior: prefersReducedMotion() ? "auto" : "smooth" });
+}
+
+document.addEventListener("focusin", (event) => {
+	const node = event.target;
+	if (!(node instanceof HTMLElement) || !node.matches("input, textarea")) return;
+	// 键盘是弹上来的：focus 那一刻可视区还没缩，得等它起完再量一次。
+	const timer = setTimeout(() => revealForKeyboard(node), 320);
+	const viewport = window.visualViewport;
+	if (!viewport) return;
+	const onResize = () => revealForKeyboard(node);
+	viewport.addEventListener("resize", onResize);
+	const stop = () => {
+		clearTimeout(timer);
+		viewport.removeEventListener("resize", onResize);
+		node.removeEventListener("blur", stop);
+	};
+	node.addEventListener("blur", stop);
+	// 键盘没弹起来（外接键盘、桌面、手指只是划过）：两秒后收摊，别把监听一直挂着。
+	setTimeout(stop, 2000);
+});
+
+// ═══════════════════════════════════════════════════ 层管理：安卓返回键
+
+/*
+ * 手机上最恼人的一件事：正开着对话框或抽屉，一按返回键，整个应用没了。
+ *
+ * 做法是给每个「层」配一条历史记录：
+ *   openLayer   压一条 { nsLayer: id } —— 返回键于是有东西可退
+ *   popstate    退到某层之前，就把比它晚开的都收掉（只收界面，不再 back）
+ *   closeLayer  从界面关闭时收界面，再 back() 吃掉自己压的那条
+ *
+ * 合起来：返回键一次只关一层；关到底再按，才轮到浏览器去退页或退出应用。
+ * 两个坑写在对应分支里：抽屉换边时的 push/back 竞态，和一按返回关两层。
+ */
+const layerStack = [];
+/** 我们自己发起的那次 back()。它回来时要认得出来，别顺手把新开的层也关掉。 */
+let selfBack = null;
+
+const findLayer = (id) => layerStack.find((layer) => layer.id === id) ?? null;
+
+/**
+ * 登记一层并压一条历史。
+ *
+ * replace 是给抽屉换边用的（章目 ↔ 右案）。那时不能「先 back 再 push」：
+ * back 是异步的，它会在 push 之后才落地，把刚压的那条顶掉，
+ * 于是返回键要按两次才关得掉新开的那一边。
+ */
+function openLayer(id, close, options = {}) {
+	if (!id || findLayer(id)) return null;
+	const layer = { id, close, hasHistory: false, closed: false };
+	layerStack.push(layer);
+	try {
+		// 只有当前这条历史确实是自己人压的，才敢 replaceState：
+		// 否则会把应用自己的那条顶掉，返回键一点就退出。
+		if (options.replace && typeof history.state?.nsLayer === "string") history.replaceState({ nsLayer: id }, "");
+		else history.pushState({ nsLayer: id }, "");
+		layer.hasHistory = true;
+	} catch {
+		// 个别内嵌浏览器禁 pushState：退化成「返回键不管用」，界面照常关得掉。
+	}
+	return layer;
+}
+
+/** 摘掉登记，并（可选地）把这一层压的历史吃掉。 */
+function dropLayer(layer, consumeHistory) {
+	const index = layerStack.indexOf(layer);
+	if (index >= 0) layerStack.splice(index, 1);
+	layer.closed = true;
+	// 只在「这条历史还挂在当前项上」时才 back。被返回键关掉的那些已经退过了，
+	// 再退一次就会把下面那层一起带走 —— 「Esc 一下关两层」就是这么来的。
+	if (consumeHistory && layer.hasHistory && history.state?.nsLayer === layer.id) {
+		layer.hasHistory = false;
+		selfBack = { id: layer.id, at: Date.now() };
+		history.back();
+	}
+}
+
+/**
+ * 从界面关掉一层：先收界面，再收历史。
+ *
+ * close 回调里若又转回 closeLayer（dialog.close() 会同步触发 close 事件），
+ * 由 closed 标记挡下第二次，不会递归。
+ * keepHistory：把这条历史留给接手的抽屉（见 openRailDrawer）。
+ */
+function closeLayer(id, options = {}) {
+	const layer = findLayer(id);
+	if (!layer) return false;
+	layer.close();
+	if (!layer.closed) dropLayer(layer, options.keepHistory !== true);
+	return true;
+}
+
+/** 返回键收层：历史已经由浏览器退过了，这里只管把界面收掉。 */
+function closeTopFromHistory() {
+	const layer = layerStack.pop();
+	if (!layer) return;
+	layer.closed = true;
+	layer.hasHistory = false;
+	layer.close();
+}
+
+/**
+ * 兜底：返回键已经落到「层之前」，却还有弹层开着 ——
+ * 那是别处直接 showModal 开的、我们没来得及认领的（设置对话框就是）。
+ * 关掉它，并补一条历史，免得这一按就直接退出应用。
+ */
+function adoptStrayDialog() {
+	const dialogs = [...document.querySelectorAll("dialog[open]")];
+	const dialog = dialogs[dialogs.length - 1];
+	if (!dialog) return;
+	dialog.close();
+	try {
+		history.pushState({ nsLayer: null }, "");
+	} catch {
+		// 压不进去就算了，至少这一层关上了。
+	}
+}
+
+window.addEventListener("popstate", (event) => {
+	const stateId = typeof event.state?.nsLayer === "string" ? event.state.nsLayer : null;
+	const index = stateId ? layerStack.findIndex((layer) => layer.id === stateId) : -1;
+	// 自己刚吃掉的那条回来了：认个账就走。
+	// 此时若还留着之后再开的层，说明那层的 push 落在本次 back 之前，
+	// 一并收掉会让「关一个」变成「关两个」。
+	if (selfBack && Date.now() - selfBack.at < 1000) {
+		selfBack = null;
+		if (index < 0) return;
+	}
+	// 退到某一层之前：这一层之上的都该收掉。一次只退一条历史，通常也就一层。
+	const keep = index < 0 ? 0 : index + 1;
+	while (layerStack.length > keep) closeTopFromHistory();
+	if (index < 0) adoptStrayDialog();
+});
+
+/** 弹层的唯一入口：登记层级、记住触发者、把焦点放对。 */
+function openDialog(dialog, options = {}) {
+	if (!dialog || dialog.open) return;
+	const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+	openLayer("dialog:" + dialog.id, () => {
+		if (dialog.open) dialog.close();
+		restoreFocus(trigger);
+	});
+	dialog.showModal();
+	focusFirstIn(dialog, options.focus);
+}
+
+/** 关掉一个弹层。没登记过的（settings.js 自己开的）也照样关得掉。 */
+function closeDialog(dialog) {
+	if (!dialog) return;
+	if (!closeLayer("dialog:" + dialog.id) && dialog.open) dialog.close();
+}
+
+/**
+ * 打开后把焦点放到该放的地方：调用方指定 → data-autofocus → 第一个可输入的 → 对话框本身。
+ *
+ * 原生 showModal 也会给个初始焦点，但它挑的常常是第一个可聚焦元素，
+ * 表单里那往往是「作罢」按钮 —— 手机上一开表单，键盘没弹，光标也不知道在哪。
+ */
+function focusFirstIn(dialog, focus) {
+	if (focus === "self") {
+		focusDialogItself(dialog);
+		return;
+	}
+	const direct = typeof focus === "string" ? dialog.querySelector(focus) : focus;
+	const target =
+		direct instanceof HTMLElement
+			? direct
+			: dialog.querySelector("[data-autofocus]") ??
+				dialog.querySelector("input:not([type=hidden]):not([disabled]), textarea:not([disabled]), select:not([disabled])");
+	if (target instanceof HTMLElement) {
+		target.focus();
+		return;
+	}
+	focusDialogItself(dialog);
+}
+
+/** 没有可输入的（只读面板、纯按钮清单）：焦点落在对话框上，读屏从头念一遍。 */
+function focusDialogItself(dialog) {
+	if (!dialog.hasAttribute("tabindex")) dialog.tabIndex = -1;
+	dialog.focus();
+}
+
+/** 关闭后把焦点还给当初把手放上去的那个元素。 */
+function restoreFocus(node) {
+	if (!(node instanceof HTMLElement) || !node.isConnected) return;
+	// 上面还盖着别的弹层时别抢焦点：焦点该留在最上层里。
+	const open = document.querySelector("dialog[open]");
+	if (open && !open.contains(node)) return;
+	try {
+		node.focus();
+	} catch {
+		// 元素已经不吃焦点了，算了。
+	}
+}
+
+/**
+ * 认领别的模块自己打开的弹层。
+ *
+ * 设置对话框由 settings.js 自己 showModal，我们插不进手，只好点完补登记一次 ——
+ * 没有这一条，安卓返回键会直接退出应用。
+ */
+function adoptOpenDialogs() {
+	for (const dialog of document.querySelectorAll("dialog[open]")) {
+		if (!dialog.id || findLayer("dialog:" + dialog.id)) continue;
+		openLayer("dialog:" + dialog.id, () => {
+			if (dialog.open) dialog.close();
+		});
+	}
+}
+
+/*
+ * 每个 dialog 挂两件事：
+ *   cancel —— Esc。拦掉原生「关掉最上层」的活，改由层管理器统一关，历史才收得干净。
+ *   close  —— 不论是按钮、Esc 还是别的模块自己 close() 的，都在这里补收历史。
+ */
+for (const dialog of document.querySelectorAll("dialog")) {
+	dialog.addEventListener("cancel", (event) => {
+		event.preventDefault();
+		closeDialog(dialog);
+	});
+	dialog.addEventListener("close", () => {
+		const layer = findLayer("dialog:" + dialog.id);
+		if (layer) dropLayer(layer, true);
+	});
+}
+
+// ═══════════════════════════════════════════════════ 首屏骨架
+
+let bootSkeletonGone = false;
+
+/**
+ * 摘掉首屏骨架。
+ *
+ * 它盖着的是整个应用，所以启动成不成都得摘：接口慢甚至挂了的时候，
+ * 留着它比让人看见一副空壳更糟 —— 空壳至少还能点开设置看一眼。
+ */
+function dismissBootSkeleton() {
+	if (bootSkeletonGone) return;
+	bootSkeletonGone = true;
+	const node = $("boot-skeleton");
+	if (!node) return;
+	node.classList.add("is-gone");
+	if (prefersReducedMotion()) {
+		node.remove();
+		return;
+	}
+	node.addEventListener("transitionend", () => node.remove(), { once: true });
+	// 样式里万一没写过场，也保证它真被摘掉：最多再等 240ms。
+	setTimeout(() => node.remove(), 240);
 }
 
 // ═══════════════════════════════════════════════════ 排版与专注
@@ -922,7 +1276,7 @@ function projectCard(project) {
 	actions.append(button("存照", "btn btn-quiet btn-xs", () => void openSnapshotDialog(project)));
 	const pending = state.pendingProjectDelete === project.id;
 	actions.append(
-		button(pending ? "再点一次确认删除" : "删", "btn btn-quiet btn-xs" + (pending ? " is-danger" : ""), () =>
+		button(pending ? "再点一次确认删除" : "删", "btn btn-quiet btn-xs" + (pending ? " is-danger btn-danger" : ""), () =>
 			void deleteProject(project),
 		),
 	);
@@ -941,7 +1295,8 @@ async function openSnapshotDialog(project) {
 	const error = $("snapshot-error");
 	error.textContent = "";
 	list.replaceChildren(el("div", "bench-empty", "正在取…"));
-	$("snapshot-dialog").showModal();
+	// 清单还没拿到时先开：焦点落在对话框上（里面暂时没有能输入的东西）。
+	openDialog($("snapshot-dialog"), { focus: "self" });
 	$("snapshot-title").textContent = "《" + project.title + "》";
 	try {
 		const info = await api("/api/projects/" + project.id + "/snapshots");
@@ -974,7 +1329,7 @@ function snapshotRow(project, snap) {
 	// 回滚是破坏性的，沿用别处"再点一次确认"的做法，而不是弹一个系统 confirm。
 	const confirming = state.pendingSnapshotRestore === snap.name;
 	row.append(
-		button(confirming ? "再点一次确认回滚" : "回滚到此", "btn btn-quiet btn-xs" + (confirming ? " is-danger" : ""), () =>
+		button(confirming ? "再点一次确认回滚" : "回滚到此", "btn btn-quiet btn-xs" + (confirming ? " is-danger btn-danger" : ""), () =>
 			void restoreSnapshot(project, snap.name),
 		),
 	);
@@ -1004,7 +1359,7 @@ async function restoreSnapshot(project, name) {
 		toast("回滚失败：" + error.message, "error");
 		return;
 	}
-	$("snapshot-dialog").close();
+	closeDialog($("snapshot-dialog"));
 	// 案上这部的稿子可能整本换了，必须重新拉一遍。
 	if (state.projectId === project.id) await selectProject(project.id);
 	await reloadProjects();
@@ -1107,7 +1462,7 @@ function libraryCard(entry) {
 	);
 	const pending = state.pendingLibraryDelete === entry.id;
 	actions.append(
-		button(pending ? "再点一次确认删除" : "删", "btn btn-quiet btn-xs" + (pending ? " is-danger" : ""), () =>
+		button(pending ? "再点一次确认删除" : "删", "btn btn-quiet btn-xs" + (pending ? " is-danger btn-danger" : ""), () =>
 			void deleteLibraryEntry(entry),
 		),
 	);
@@ -1159,7 +1514,7 @@ function openProjectDialog(project) {
 	}
 
 	renderLibraryPick();
-	$("project-dialog").showModal();
+	openDialog($("project-dialog"));
 }
 
 /** 新建作品时的库勾选列表。 */
@@ -1260,7 +1615,7 @@ function openPromoteDialog(material) {
 		$("promote-desc").textContent =
 			"这条素材会作为新的通用素材收进库里，之后新建作品时就能取用。";
 	}
-	$("promote-dialog").showModal();
+	openDialog($("promote-dialog"));
 }
 
 // ═══════════════════════════════════════════════════ 稿
@@ -1658,7 +2013,7 @@ function openExportDialog(chapterId) {
 		$("export-hint").textContent = chapter
 			? "当前：第" + toCn(index + 1) + "章《" + chapter.title + "》"
 			: "整本成册；未落笔的章节会被跳过。";
-		$("export-dialog").showModal();
+		openDialog($("export-dialog"));
 	})();
 }
 
@@ -1739,7 +2094,7 @@ function openHistoryDialog(chapterId) {
 		state.pendingRestore = null;
 		$("history-error").textContent = "";
 		renderHistoryList(chapterId);
-		$("history-dialog").showModal();
+		openDialog($("history-dialog"), { focus: "self" });
 	})();
 }
 
@@ -1794,7 +2149,7 @@ function renderHistoryList(chapterId) {
 
 		const confirming = state.pendingRestore === key;
 		row.append(
-			button(confirming ? "再点一次确认恢复" : "恢复此版", "btn btn-quiet btn-xs" + (confirming ? " is-danger" : ""), () =>
+			button(confirming ? "再点一次确认恢复" : "恢复此版", "btn btn-quiet btn-xs" + (confirming ? " is-danger btn-danger" : ""), () =>
 				void restoreRevision(chapterId, revision.revision),
 			),
 		);
@@ -1827,7 +2182,7 @@ async function restoreRevision(chapterId, revisionNumber) {
 		state.stats = data.stats;
 		state.editing = false;
 		clearEditorState();
-		$("history-dialog").close();
+		closeDialog($("history-dialog"));
 		renderAll();
 		toast("已恢复到第 " + revisionNumber + " 稿；恢复前的稿已存档。", "ok", 4200);
 	} catch (error) {
@@ -1965,15 +2320,34 @@ function makePeekable(card, material, actions, dropHint) {
 	card.classList.add("is-peek");
 	card.tabIndex = 0;
 	card.setAttribute("role", "button");
-	card.setAttribute("aria-label", "查看素材：" + material.title);
-	card.title = "点开看全文；" + dropHint;
+	const picked = state.pickedMaterials.has(material.id);
+	// 鼠标能拖，点一下留给「看全文」；手指拖不动（拖拽和滚动抢同一个手势），
+	// 于是触屏上把「点一下」改成选中，真正的动作交给下面「已选中」条上的按钮。
+	//
+	// 但「选中」只在素材工作台里有下文（那儿才有一条「已选中」栏）；
+	// 生文工作台的卡片上本就摆着「看全文 / 装入本章」，点一下该是看全文 ——
+	// 否则点完什么都不显，人只会以为没点中。
+	const coarse = isCoarsePointer();
+	const picksOnTap = coarse && state.view === "materials" && state.mode === "workspace";
+	if (picked) card.classList.add("is-picked");
+	// 只有「点一下算选中」时才报 aria-pressed；别的时候这个属性会让人以为按钮卡住了。
+	if (picksOnTap) card.setAttribute("aria-pressed", picked ? "true" : "false");
+	else card.removeAttribute("aria-pressed");
+	card.setAttribute("aria-label", (picksOnTap ? "选中素材：" : "查看素材：") + material.title);
+	card.title = picksOnTap
+		? "点一下选中／取消，再在下方「已选中」条上按「装进本章」"
+		: "点开看全文；" + dropHint;
 	const open = () => openMaterialView(material);
-	card.addEventListener("click", open);
+	const onTap = () => {
+		if (picksOnTap) toggleMaterialPick(material.id);
+		else open();
+	};
+	card.addEventListener("click", onTap);
 	card.addEventListener("keydown", (event) => {
 		if (event.target !== card) return;
 		if (event.key === "Enter" || event.key === " ") {
 			event.preventDefault();
-			open();
+			onTap();
 		}
 	});
 	makeDraggable(card, material);
@@ -2037,7 +2411,7 @@ function materialCard(material, options = {}) {
 	);
 	const pending = state.pendingDelete === material.id;
 	actions.append(
-		button(pending ? "再点一次确认删除" : "删", "btn btn-quiet btn-xs" + (pending ? " is-danger" : ""), () =>
+		button(pending ? "再点一次确认删除" : "删", "btn btn-quiet btn-xs" + (pending ? " is-danger btn-danger" : ""), () =>
 			void deleteMaterial(material),
 		),
 	);
@@ -2059,7 +2433,8 @@ function openMaterialView(material) {
 	$("material-view-usage").textContent = material.usage ? "用于：" + material.usage : "";
 	$("material-view-usage").classList.toggle("hidden", !material.usage);
 	$("material-view-body").textContent = material.content || "（此条尚无正文）";
-	$("material-view").showModal();
+	// 读稿用的面板，没有输入框：焦点落在面板上，读屏从头念一遍。
+	openDialog($("material-view"), { focus: "self" });
 }
 
 /**
@@ -2069,6 +2444,12 @@ function openMaterialView(material) {
  * 自定义类型 "text/x-material" 优先于 text/plain：拖到别的编辑器上别把内部 id 当文本贴出去。
  */
 function makeDraggable(card, material) {
+	// 触屏上根本不装拖拽：手指一拖是滚动，dragstart 抢不到，抢到了反而把页面钉住。
+	// 触屏那条路是「点卡片选中 → 已选中条上按按钮」，见 renderPickedMaterials。
+	if (isCoarsePointer()) {
+		card.draggable = false;
+		return;
+	}
 	card.draggable = true;
 	card.addEventListener("dragstart", (event) => {
 		event.dataTransfer.effectAllowed = "copy";
@@ -2140,12 +2521,63 @@ function renderPickedMaterials() {
 	bar.classList.remove("hidden");
 	bar.replaceChildren(el("span", "picked-label", "已选 " + picked.length + " 条，交代怎么改："));
 	for (const material of picked) bar.append(el("span", "picked-chip", "《" + material.title + "》"));
+	// 拖拽在触屏上不可用（见 makeDraggable），所以原来「拖进本章」「拖给执笔者」这两件事
+	// 在这里各落一个按钮：点一下即完成，桌面端也能用，不必记两条路。
+	bar.append(button("装进本章", "btn btn-ink btn-xs", () => void assemblePicked()));
+	bar.append(button("送执笔者", "btn btn-quiet btn-xs", () => void handPickedToWriting()));
 	bar.append(
 		button("清空", "btn btn-quiet btn-xs", () => {
 			state.pickedMaterials = new Set();
 			renderView();
 		}),
 	);
+}
+
+/**
+ * 把「已选中」的料装进当前这一章。
+ *
+ * 与把卡拖进装配栏是同一件事（都走 assemble），只是触屏上拖不出 drop，
+ * 于是给一个点得到的入口。已在章里的跳过，别重复提交。
+ */
+async function assemblePicked() {
+	const picked = [...state.pickedMaterials].map(materialById).filter(Boolean);
+	if (picked.length === 0) return;
+	const chapter = state.project?.outline.find((item) => item.id === state.chapterId);
+	if (!chapter) {
+		toast("先在左栏点开一章，再装料。", "warn", 4200);
+		return;
+	}
+	const add = picked.filter((material) => !chapter.materialIds.includes(material.id)).map((material) => material.id);
+	if (add.length === 0) {
+		toast("这几条都已在" + (chapterTitleOf(chapter.id) ?? "本章") + "里。", "info", 2800);
+		return;
+	}
+	state.pickedMaterials = new Set();
+	await assemble(add, []);
+	toast("已装进" + (chapterTitleOf(chapter.id) ?? "本章") + "。", "ok", 2600);
+}
+
+/**
+ * 把「已选中」的料交给执笔者：装进本章，再把书名号里的标题写进交代。
+ *
+ * 与拖到执笔者输入框同一条路（见 dropMaterialToComposer）——
+ * 执笔者只看得见本章装配的料，光写标题它读不到内容，两步缺一不可。
+ */
+async function handPickedToWriting() {
+	const picked = [...state.pickedMaterials].map(materialById).filter(Boolean);
+	if (picked.length === 0) return;
+	const chapter = state.project?.outline.find((item) => item.id === state.chapterId);
+	const add = chapter
+		? picked.filter((material) => !chapter.materialIds.includes(material.id)).map((material) => material.id)
+		: [];
+	state.pickedMaterials = new Set();
+	if (add.length > 0) await assemble(add, []);
+	const input = $("writing-input");
+	const reference = picked.map((material) => "《" + material.title + "》").join("");
+	input.value = input.value.trim() ? input.value.replace(/\s+$/, "") + "\n" + reference : reference;
+	switchView("writing");
+	input.focus();
+	toast(chapter ? "已装进本章，并把标题写进交代。" : "还没开章，只把标题写进交代。", "ok", 3200);
 }
 
 /**
@@ -2376,7 +2808,7 @@ function openMaterialDialog(options) {
 					? "整篇资料会成为这一条素材的内容。想按人物、场景拆成多条，改用「交墨客提炼」。"
 					: "";
 	}
-	$("material-dialog").showModal();
+	openDialog($("material-dialog"), { focus: '#material-form [name="title"]' });
 }
 
 $("material-form").addEventListener("submit", async (event) => {
@@ -2417,7 +2849,7 @@ $("material-form").addEventListener("submit", async (event) => {
 			const entry = state.uploads.find((item) => item.id === materialForm.uploadId);
 			if (entry) entry.status = "stored";
 		}
-		$("material-dialog").close();
+		closeDialog($("material-dialog"));
 		renderUploads();
 		// 库里改名会影响作品卡上的"已入素材库"标注，所以两边都刷。
 		if (state.projectId) await reloadProject();
@@ -2429,7 +2861,7 @@ $("material-form").addEventListener("submit", async (event) => {
 	}
 });
 
-$("material-form-cancel").addEventListener("click", () => $("material-dialog").close());
+$("material-form-cancel").addEventListener("click", () => closeDialog($("material-dialog")));
 
 // ═══════════════════════════════════════════════════ 文 · 生文工作台
 
@@ -2572,12 +3004,12 @@ function openChapterDialog() {
 	form.reset();
 	$("chapter-error").textContent = "";
 	form.elements.title.value = "第" + toCn((state.project?.outline.length ?? 0) + 1) + "章";
-	$("chapter-dialog").showModal();
+	openDialog($("chapter-dialog"));
 	form.elements.title.select();
 }
 
 $("add-chapter").addEventListener("click", () => openChapterDialog());
-$("chapter-cancel").addEventListener("click", () => $("chapter-dialog").close());
+$("chapter-cancel").addEventListener("click", () => closeDialog($("chapter-dialog")));
 $("chapter-form").addEventListener("submit", async (event) => {
 	event.preventDefault();
 	const form = event.currentTarget;
@@ -2600,7 +3032,7 @@ $("chapter-form").addEventListener("submit", async (event) => {
 				targetWords: values.targetWords ? Number(values.targetWords) : 0,
 			},
 		});
-		$("chapter-dialog").close();
+		closeDialog($("chapter-dialog"));
 		// 立完就选中它并切到生文工作台：立章的目的就是接着装料。
 		state.chapterId = data.chapter?.id ?? null;
 		state.writeMode = "create";
@@ -2890,7 +3322,7 @@ for (const node of document.querySelectorAll('[data-action="new-library"]')) {
 }
 
 
-$("project-form-cancel").addEventListener("click", () => $("project-dialog").close());
+$("project-form-cancel").addEventListener("click", () => closeDialog($("project-dialog")));
 
 $("project-form").addEventListener("submit", async (event) => {
 	event.preventDefault();
@@ -2911,7 +3343,7 @@ $("project-form").addEventListener("submit", async (event) => {
 		if (state.editingProjectId) {
 			const editing = state.editingProjectId;
 			await api("/api/projects/" + editing, { method: "PATCH", body });
-			$("project-dialog").close();
+			closeDialog($("project-dialog"));
 			await reloadProjects();
 			if (editing === state.projectId) await reloadProject();
 			renderView();
@@ -2922,7 +3354,7 @@ $("project-form").addEventListener("submit", async (event) => {
 				body: { ...body, libraryIds: [...state.libraryPick] },
 			});
 			state.libraryPick = new Set();
-			$("project-dialog").close();
+			closeDialog($("project-dialog"));
 			await reloadProjects();
 			await selectProject(result.project.id);
 			if (taken > 0) {
@@ -2936,7 +3368,7 @@ $("project-form").addEventListener("submit", async (event) => {
 	}
 });
 
-$("promote-cancel").addEventListener("click", () => $("promote-dialog").close());
+$("promote-cancel").addEventListener("click", () => closeDialog($("promote-dialog")));
 
 $("promote-form").addEventListener("submit", async (event) => {
 	event.preventDefault();
@@ -2957,7 +3389,7 @@ $("promote-form").addEventListener("submit", async (event) => {
 			"/api/projects/" + state.projectId + "/materials/" + encodeURIComponent(promoteTarget.id) + "/library",
 			{ method: "POST", body: { mode, title } },
 		);
-		$("promote-dialog").close();
+		closeDialog($("promote-dialog"));
 		promoteTarget = null;
 		await reloadLibrary();
 		await reloadProject();
@@ -3186,6 +3618,8 @@ function renderNewChatButtons() {
 		const confirming = state.pendingNewChat === btn.dataset.newchat;
 		btn.textContent = confirming ? "再点一次：弃掉这席" : "另起一席";
 		btn.classList.toggle("is-danger", confirming);
+		// 样式层统一认 .btn-danger：只切 is-danger 的话，别人改配色时这一处会掉队。
+		btn.classList.toggle("btn-danger", confirming);
 	}
 }
 
@@ -3427,25 +3861,34 @@ function syncTypeDialog() {
 
 function openTypeDialog() {
 	syncTypeDialog();
-	$("type-dialog").showModal();
+	// 一组单选钮，没有要打字的地方：焦点落在「字号」那组的第一枚上。
+	openDialog($("type-dialog"), { focus: "#type-size input" });
 }
 
 function openShortcutsDialog() {
-	$("shortcuts-dialog").showModal();
+	openDialog($("shortcuts-dialog"), { focus: "self" });
+}
+
+/** 收起 / 张开右案抽屉（只管界面）。 */
+function setBibleDrawer(open) {
+	document.querySelector(".desk")?.classList.toggle("is-bible-open", open);
+	$("bible-backdrop")?.classList.toggle("hidden", !open);
+	$("toggle-bible")?.setAttribute("aria-expanded", open ? "true" : "false");
 }
 
 function openBibleDrawer() {
-	document.querySelector(".desk")?.classList.add("is-bible-open");
-	$("bible-backdrop").classList.remove("hidden");
-	$("toggle-bible")?.setAttribute("aria-expanded", "true");
+	if (findLayer("bible")) return;
 	// 章目与右案不同时开：手机上两层盖在一起，谁也点不着。
-	closeRailDrawer();
+	// 与 openRailDrawer 对称：接管章目那条历史，返回键只按一次。
+	const inherited = closeRailDrawer({ keepHistory: true });
+	setBibleDrawer(true);
+	openLayer("bible", () => setBibleDrawer(false), { replace: inherited });
 }
 
-function closeBibleDrawer() {
-	document.querySelector(".desk")?.classList.remove("is-bible-open");
-	$("bible-backdrop").classList.add("hidden");
-	$("toggle-bible")?.setAttribute("aria-expanded", "false");
+function closeBibleDrawer(options = {}) {
+	if (closeLayer("bible", options)) return true;
+	setBibleDrawer(false);
+	return false;
 }
 
 // ═══════════════════════════════════════════════════ 检索面板
@@ -3558,7 +4001,7 @@ function renderPalette() {
 function runPaletteItem(index) {
 	const item = paletteItems[index];
 	if (!item) return;
-	$("palette-dialog").close();
+	closeDialog($("palette-dialog"));
 	// 关掉弹窗再执行：有些动作会自己开另一个 dialog。
 	setTimeout(() => item.run(), 0);
 }
@@ -3571,8 +4014,7 @@ function openPalette() {
 	$("palette-input").value = "";
 	paletteIndex = 0;
 	renderPalette();
-	dialog.showModal();
-	$("palette-input").focus();
+	openDialog(dialog, { focus: "#palette-input" });
 }
 
 // ═══════════════════════════════════════════════════ 键盘
@@ -3630,7 +4072,10 @@ document.addEventListener("keydown", (event) => {
 		event.preventDefault();
 		openShortcutsDialog();
 	}
-	if (event.key === "Escape" && !document.querySelector("dialog[open]")) {
+	if (event.key === "Escape") {
+		// 有弹层在，Esc 的活归 dialog 的 cancel 事件（见「层管理」）——
+		// 那里同样走一遍层管理器，历史才收得干净，也不会一次关两层。
+		if (document.querySelector("dialog[open]")) return;
 		if (document.querySelector(".desk.is-rail-open")) {
 			closeRailDrawer();
 			return;
@@ -3668,6 +4113,13 @@ for (const tab of document.querySelectorAll(".bible-tab")) {
 }
 for (const [pane, ids] of Object.entries(PANES)) {
 	const form = $(ids.input).closest("form");
+	// 「输入中」：有字才把「呈上」点亮（类名切换，样式在 style.css）。
+	// 手机上一屏只剩这一条输入框，按钮亮没亮是「按下去有没有反应」的唯一信号。
+	const syncComposer = () => {
+		form.classList.toggle("is-typing", $(ids.input).value.trim().length > 0);
+	};
+	$(ids.input).addEventListener("input", syncComposer);
+	syncComposer();
 	form.addEventListener("submit", (event) => {
 		event.preventDefault();
 		const text = $(ids.input).value.trim();
@@ -3675,6 +4127,7 @@ for (const [pane, ids] of Object.entries(PANES)) {
 		const needsProject = pane !== "library";
 		if (!text || state.streaming || (needsProject && !state.projectId)) return;
 		$(ids.input).value = "";
+		syncComposer();
 		void sendMessage(pane, text);
 	});
 	$(ids.input).addEventListener("keydown", (event) => {
@@ -3776,7 +4229,7 @@ window.addEventListener("settings-changed", async () => {
 	renderThinkingLevels(level);
 });
 
-$("material-view-close").addEventListener("click", () => $("material-view").close());
+$("material-view-close").addEventListener("click", () => closeDialog($("material-view")));
 
 /**
  * 设定官那一栏是拖放落区。
@@ -3898,13 +4351,15 @@ $("palette-input").addEventListener("keydown", (event) => {
 	}
 });
 $("palette-dialog").addEventListener("click", (event) => {
-	if (event.target === $("palette-dialog")) $("palette-dialog").close();
+	if (event.target === $("palette-dialog")) closeDialog($("palette-dialog"));
 });
 
 // ── 版本、导出、排版、快捷键
 
-$("history-close").addEventListener("click", () => $("history-dialog").close());
-$("export-cancel").addEventListener("click", () => $("export-dialog").close());
+$("history-close").addEventListener("click", () => closeDialog($("history-dialog")));
+// 快照面板的「合上」一直没人接：Esc 与返回键能关，但这个看得见的按钮点了没反应。
+$("snapshot-close")?.addEventListener("click", () => closeDialog($("snapshot-dialog")));
+$("export-cancel").addEventListener("click", () => closeDialog($("export-dialog")));
 $("export-form").addEventListener("submit", async (event) => {
 	event.preventDefault();
 	const form = event.currentTarget;
@@ -3915,7 +4370,7 @@ $("export-form").addEventListener("submit", async (event) => {
 	$("export-error").textContent = "";
 	submit.disabled = true;
 	try {
-		if (await exportProject(chapterId, format)) $("export-dialog").close();
+		if (await exportProject(chapterId, format)) closeDialog($("export-dialog"));
 	} finally {
 		submit.disabled = false;
 	}
@@ -3930,8 +4385,8 @@ $("type-reset").addEventListener("click", () => {
 	writeStored(TYPE_KEY, JSON.stringify(state.typography));
 	syncTypeDialog();
 });
-$("type-close").addEventListener("click", () => $("type-dialog").close());
-$("shortcuts-close").addEventListener("click", () => $("shortcuts-dialog").close());
+$("type-close").addEventListener("click", () => closeDialog($("type-dialog")));
+$("shortcuts-close").addEventListener("click", () => closeDialog($("shortcuts-dialog")));
 
 // ── 窄屏右案抽屉
 
@@ -3951,6 +4406,8 @@ $("toggle-rail")?.addEventListener("click", toggleRailDrawer);
 $("close-rail")?.addEventListener("click", closeRailDrawer);
 $("rail-backdrop")?.addEventListener("click", closeRailDrawer);
 $("toggle-tools")?.addEventListener("click", () => toggleToolsPanel());
+// 浮层里那个看得见的叉：点外面能收，但手机上一眼看不出「点哪儿算外面」。
+$("close-tools")?.addEventListener("click", () => closeToolsPanel());
 
 // 点浮层外面就收起 —— 手机上没有 hover，点别处就是「不看了」。
 document.addEventListener("click", (event) => {
@@ -3977,10 +4434,24 @@ if (phoneQuery) {
 		}
 		// 手机上正文不小于 16px，宽窄变了要重算一次。
 		applyTypography();
+		syncViewportHooks();
 	};
 	if (typeof phoneQuery.addEventListener === "function") phoneQuery.addEventListener("change", onWidthChange);
 	else phoneQuery.addListener(onWidthChange);
 }
+
+// ── 触屏与矮窗的钩子
+// 横竖屏、矮窗、是不是手指点：样式读 <html> 上的类与 data-*，JS 这边只管报数。
+syncViewportHooks();
+window.addEventListener("resize", syncViewportHooks, { passive: true });
+// 转屏之后 innerWidth/innerHeight 要等动画落地才准，晚一步再报一次。
+window.addEventListener("orientationchange", () => setTimeout(syncViewportHooks, 260));
+if (typeof coarseQuery?.addEventListener === "function") coarseQuery.addEventListener("change", syncViewportHooks);
+
+// 别处（设置、供应商表单）自己 showModal 开的弹层，点完补登记一次：
+// 没有这一条，安卓返回键会把它当成「退出应用」。
+// 用冒泡阶段：要等按钮自己的处理器把弹层打开之后才轮到这里。
+document.addEventListener("click", () => adoptOpenDialogs());
 
 // ── 文件拖放兜底
 // 文件落到聊天栏或页面空白处，浏览器会直接打开它，未存的稿子一起没。
@@ -4018,17 +4489,23 @@ bindSettings();
 loadTypography();
 const beamKbd = document.querySelector(".beam-kbd");
 if (beamKbd) beamKbd.textContent = PALETTE_MOD + " K";
-bootstrap().catch((error) => {
-	toast("起手不成：" + error.message, "error", 8000);
-	state.mode = "home";
-	applyMode();
-	const box = $("view-home");
-	box.classList.add("is-on");
-	const wrap = el("div", "void");
-	wrap.append(el("h3", "", "起手不成"));
-	wrap.append(el("p", "", error.message));
-	wrap.append(
-		button("重试", "btn btn-ink btn-sm", () => window.location.reload()),
-	);
-	box.replaceChildren(wrap);
-});
+bootstrap()
+	.catch((error) => {
+		toast("起手不成：" + error.message, "error", 8000);
+		state.mode = "home";
+		applyMode();
+		const box = $("view-home");
+		box.classList.add("is-on");
+		const wrap = el("div", "void");
+		wrap.append(el("h3", "", "起手不成"));
+		wrap.append(el("p", "", error.message));
+		wrap.append(
+			button("重试", "btn btn-ink btn-sm", () => window.location.reload()),
+		);
+		box.replaceChildren(wrap);
+	})
+	// 起手成不成都要把骨架摘掉：它盖着的是整个应用。
+	.finally(dismissBootSkeleton);
+
+// 接口既没回也没错（服务端卡住）时，别让骨架一直盖着 —— 空壳至少还能点开设置看一眼。
+setTimeout(dismissBootSkeleton, 12000);

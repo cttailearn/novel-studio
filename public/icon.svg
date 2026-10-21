@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="墨耕">
+	<title>墨耕</title>
+	<!-- 朱砂方章，白文「墨」。颜色与 style.css 的 cinnabar / paper 两枚令牌同源，
+	     改配色时这两处要一起改，否则主屏图标会跟界面脱开。
+	     注意：XML 注释里不能出现两个连字符，所以令牌名在这里不写成带前缀的形式。 -->
+	<rect width="512" height="512" rx="88" fill="#a8392b" />
+	<!-- 印边：留一圈纸色的细栏，缩到 48px 也还看得出是印章而不是一块红。 -->
+	<rect x="52" y="52" width="408" height="408" rx="52" fill="none" stroke="#efe8d9" stroke-width="10" opacity="0.62" />
+	<!-- 白文 = 阴刻：字取纸色，靠字形本身认。字体只给常见衬线族，
+	     取不到就退回系统 serif —— 字可能换脸，印章仍是印章。 -->
+	<text x="256" y="262" text-anchor="middle" dominant-baseline="central"
+		font-family="'Noto Serif CJK SC', 'Source Han Serif SC', 'Songti SC', 'STSong', 'SimSun', serif"
+		font-size="286" font-weight="600" fill="#f4ecda">墨</text>
+</svg>

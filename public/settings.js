@@ -82,6 +82,10 @@ const view = {
 	defaultSearch: "",
 	/** 当前模型区的上下文，供「只重画列表」用。 */
 	modelContext: null,
+	/** 窄屏的两页：list = 供应商列表，detail = 某一家的详情。宽屏两栏并排，这个字段不起作用。 */
+	pane: "list",
+	/** 上一次画出的供应商。换了一家就把详情滚回顶部，同一次刷新则保留滚动位置。 */
+	lastSelected: null,
 };
 
 function el(tag, className, text) {
@@ -114,8 +118,24 @@ function notifyChanged() {
 // ---------------------------------------------------------------- 打开 / 刷新
 
 export async function openSettings() {
+	// 手机上每次打开都从供应商列表起步：上次停在谁家是上一段的语境，
+	// 直接落进详情会让人一睁眼就在陌生的表单里。
+	view.pane = "list";
 	await refresh();
+	applyPane();
 	$("settings-dialog").showModal();
+}
+
+/**
+ * 窄屏「列表 / 详情」两页的开关。
+ *
+ * 只挂一个类名：宽屏上两栏并排，这个类名没有任何规则认领；
+ * 手机上由 CSS 决定哪一页露面。不碰 URL、不碰浏览器的返回键。
+ */
+function applyPane() {
+	const dialog = $("settings-dialog");
+	if (!dialog) return;
+	dialog.classList.toggle("is-pane-detail", view.pane === "detail");
 }
 
 async function refresh() {
@@ -141,6 +161,7 @@ function renderAll() {
 	renderDefaults();
 	renderProviderList();
 	renderDetail();
+	applyPane();
 }
 
 // ---------------------------------------------------------------- 默认笔与思深
@@ -354,7 +375,26 @@ function updateDefaultHints() {
 		hint.textContent = text;
 		hint.classList.toggle("is-warn", Boolean(text));
 	}
-	if (costBox) costBox.textContent = costEstimate(entry);
+	if (costBox) costBox.replaceChildren(costNodes(costEstimate(entry)));
+}
+
+/**
+ * 把粗估那句话拆成「数字」与「单位」两色。
+ *
+ * 数字换等宽（几位数一眼对齐），单位退成飞白 —— 整句同色时读的人得自己找钱数。
+ * 只切文本、不拼 HTML，所以不存在注入问题。
+ */
+function costNodes(text) {
+	const frag = document.createDocumentFragment();
+	const pattern = /\d+(?:[.,]\d+)?\s?[KM]?/g;
+	let last = 0;
+	for (const match of text.matchAll(pattern)) {
+		if (match.index > last) frag.append(el("span", "cost-unit", text.slice(last, match.index)));
+		frag.append(el("span", "cost-num", match[0]));
+		last = match.index + match[0].length;
+	}
+	if (last < text.length) frag.append(el("span", "cost-unit", text.slice(last)));
+	return frag;
 }
 
 /**
@@ -412,7 +452,7 @@ function renderProviderList() {
 	const addRow = el("li", "provider-row add-row");
 	addRow.append(el("span", "dot on"));
 	addRow.append(el("span", "name", "＋ 添加自定义供应商"));
-	addRow.addEventListener("click", () => openAddProvider());
+	pressable(addRow, () => openAddProvider());
 	list.append(addRow);
 
 	if (custom.length > 0) {
@@ -441,13 +481,31 @@ function renderProviderList() {
 	const addRowEnd = el("li", "provider-row add-row");
 	addRowEnd.append(el("span", "dot on"));
 	addRowEnd.append(el("span", "name", "＋ 添加自定义供应商"));
-	addRowEnd.addEventListener("click", () => openAddProvider());
+	pressable(addRowEnd, () => openAddProvider());
 	list.append(addRowEnd);
+}
+
+/** 让普通元素也能用键盘按下去：Tab 走得到，回车与空格都算按。 */
+function pressable(node, onPress) {
+	node.tabIndex = 0;
+	node.setAttribute("role", "button");
+	node.addEventListener("click", onPress);
+	node.addEventListener("keydown", (event) => {
+		if (event.key !== "Enter" && event.key !== " ") return;
+		event.preventDefault();
+		onPress();
+	});
+	return node;
 }
 
 function providerRow(provider) {
 	const status = statusOf(provider.id);
-	const row = el("li", `provider-row${provider.id === view.selected ? " is-on" : ""}${provider.enabled ? "" : " is-off"}`);
+	const kind = provider.kind === "custom" ? "kind-custom" : "kind-builtin";
+	const row = el(
+		"li",
+		`provider-row ${kind}${provider.id === view.selected ? " is-on" : ""}${provider.enabled ? "" : " is-off"}`,
+	);
+	if (provider.id === view.selected) row.setAttribute("aria-current", "true");
 	row.append(el("span", "dot" + (status?.authSource !== "none" ? " on" : "")));
 
 	const name = el("span", "name", provider.label);
@@ -461,7 +519,7 @@ function providerRow(provider) {
 	else if (status?.authSource === "env") row.append(el("span", "badge ok", "环境变量"));
 	else row.append(el("span", "badge", "未配置"));
 
-	row.addEventListener("click", () => {
+	pressable(row, () => {
 		if (view.selected !== provider.id) {
 			// 换供应商时，勾选与批量表单都是上一家的语境，留在原地会误伤。
 			view.picked.clear();
@@ -469,6 +527,8 @@ function providerRow(provider) {
 			view.batchOpen = false;
 		}
 		view.selected = provider.id;
+		// 窄屏上点一家就翻到详情页；宽屏两栏并排，翻页类名没有规则认领。
+		view.pane = "detail";
 		renderAll();
 	});
 	return row;
@@ -476,17 +536,38 @@ function providerRow(provider) {
 
 // ---------------------------------------------------------------- 详情区
 
+/**
+ * 窄屏详情页的退路。
+ *
+ * 手机上列表与详情是两页，没有这一步就只能在地址栏后退 —— 那会连对话框一起关掉。
+ * 宽屏两栏并排，这个按钮由 CSS 藏起来，留着不碍事。
+ */
+function backButton() {
+	const button = el("button", "btn btn-quiet btn-sm settings-back", "← 返回供应商列表");
+	button.id = "settings-back";
+	button.setAttribute("aria-label", "返回供应商列表");
+	button.addEventListener("click", () => {
+		view.pane = "list";
+		applyPane();
+	});
+	return button;
+}
+
 function renderDetail() {
 	const box = $("settings-detail");
 	if (!box) return;
 	// 重画会把滚动位置和焦点一并清掉：模型列表往往很长，存完一个值就跳回顶部很难受。
-	const scrollTop = box.scrollTop;
+	// 换了供应商是另一回事 —— 那时候正该回到新一家的顶上。
+	const changed = view.lastSelected !== view.selected;
+	const scrollTop = changed ? 0 : box.scrollTop;
 	const active = document.activeElement;
 	const keepFocus = active && active.id && box.contains(active) && (active.type === "search" || active.type === "text");
 	const focusId = keepFocus ? active.id : null;
 	const caret = keepFocus && typeof active.selectionStart === "number" ? active.selectionStart : null;
 
 	box.replaceChildren();
+	box.append(backButton());
+	view.lastSelected = view.selected;
 	const provider = view.data.providers.find((p) => p.id === view.selected);
 	if (!provider) {
 		box.append(el("div", "empty-hint", "从左侧选择一个供应商，或添加一个自定义供应商。"));
@@ -936,6 +1017,12 @@ function updatePickUi() {
 	ctx.allBox.checked = shown.length > 0 && picked === shown.length;
 	ctx.allBox.indeterminate = picked > 0 && picked < shown.length;
 	if (ctx.countEl) ctx.countEl.textContent = `已选 ${view.picked.size} 个`;
+	// 勾中的卡片描一道朱边，批量改谁就看得见了。
+	if (ctx.list) {
+		for (const card of ctx.list.querySelectorAll(".model-card")) {
+			card.classList.toggle("is-picked", view.picked.has(card.dataset.modelKey));
+		}
+	}
 }
 
 function togglePick(key, on) {
@@ -1060,7 +1147,11 @@ function modelCard(provider, entry, editable) {
 	// 成本
 	if (entry.cost) {
 		const costField = el("div", "model-field");
-		costField.append(el("span", "model-field-label", "成本（元 / 百万 token）"));
+		const costLabel = el("span", "model-field-label");
+		costLabel.append(document.createTextNode("成本"));
+		// 单位独立成小字：数字是数字，口径是口径，混在一行里读起来要停一下。
+		costLabel.append(el("span", "model-unit", "元 / 百万 token"));
+		costField.append(costLabel);
 		if (editable) {
 			const row = el("div", "model-cost-row");
 			row.append(costInput(provider, entry, "input", "输入"));
@@ -1131,12 +1222,15 @@ function levelChips(provider, entry) {
 
 	if (!entry.reasoning) {
 		const locked = el("span", "level-chip is-locked is-on");
+		locked.dataset.level = "off";
 		locked.append(el("span", "level-text", "不思"), el("span", "level-code", "off"));
 		wrap.append(locked);
 	}
 
 	for (const [value, label] of THINKING_CHIPS) {
 		const chip = el("label", "level-chip" + (entry.reasoning && entry.thinkingLevels.includes(value) ? " is-on" : ""));
+		// data-level 只给 CSS 认：七块竹签要按「微 → 尽」排出一道由浅入深的墨色。
+		chip.dataset.level = value;
 		const box = document.createElement("input");
 		box.type = "checkbox";
 		box.value = value;
@@ -1144,6 +1238,8 @@ function levelChips(provider, entry) {
 		box.disabled = !entry.reasoning;
 		box.setAttribute("aria-label", `${label}（${value}）`);
 		box.addEventListener("change", () => {
+			// 先改脸再去问后端：等一个来回才变色，手会以为没点中。
+			chip.classList.toggle("is-on", box.checked);
 			const next = new Set(entry.thinkingLevels.filter((level) => level !== "off"));
 			if (box.checked) next.add(value);
 			else next.delete(value);
@@ -1176,6 +1272,9 @@ function renderBatchPanel(ctx) {
 	panel.setAttribute("aria-label", "批量设置模型参数");
 	panel.append(el("div", "batch-title", "批量设置：填好数值，再选一个去处"));
 
+	// 表单与按钮分开两层：手机上档位一多，按钮不该被推出纸面之外 ——
+	// 只有表单那层滚，去处始终钉在浮层底部。
+	const sheetBody = el("div", "batch-body");
 	const form = el("div", "model-batch-form");
 
 	const ctxInput = document.createElement("input");
@@ -1219,6 +1318,7 @@ function renderBatchPanel(ctx) {
 	const chosen = new Set();
 	for (const [value, label] of THINKING_CHIPS) {
 		const chip = el("label", "level-chip");
+		chip.dataset.level = value;
 		const box = document.createElement("input");
 		box.type = "checkbox";
 		box.value = value;
@@ -1233,9 +1333,10 @@ function renderBatchPanel(ctx) {
 	levelField.append(chips);
 	levelField.append(el("div", "hint", "勾了档位就按「开启思考」处理；一个都不勾 = 思考能力保持原样。"));
 	form.append(levelField);
-	panel.append(form);
+	sheetBody.append(form);
+	panel.append(sheetBody);
 
-	const actions = el("div", "actions");
+	const actions = el("div", "actions batch-actions");
 	const readForm = () => ({
 		contextWindow: Number(ctxInput.value) > 0 ? Math.floor(Number(ctxInput.value)) : 0,
 		maxTokens: Number(maxInputBox.value) > 0 ? Math.floor(Number(maxInputBox.value)) : 0,
@@ -1540,6 +1641,8 @@ export function bindProviderForm() {
 			});
 			view.selected = result.provider.id;
 			view.query = "";
+			// 刚录入的这一家是用户此刻唯一关心的事，窄屏直接翻到它的详情。
+			view.pane = "detail";
 			dialog.close();
 			await refresh();
 			notifyChanged();

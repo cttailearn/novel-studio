@@ -76,6 +76,71 @@
 	--safe-r: env(safe-area-inset-right, 0px);
 	/* 触屏上最小的点击目标 */
 	--tap: 44px;
+
+	/* ── 冻结的度量阶梯 ───────────────────────────────────────
+	   间距 / 圆角 / 字号 / 动效曲线 / 触控尺寸。这几组与昼夜无关，
+	   所以只写在亮色块里，由测试的 themeInvariant 白名单放行。
+	   新写的规则一律从这里取值：散落的 px 一多，古风的「匀」就散了。 */
+	--sp-1: 4px;
+	--sp-2: 8px;
+	--sp-3: 12px;
+	--sp-4: 16px;
+	--sp-5: 24px;
+	--sp-6: 32px;
+	--r-1: 3px;
+	--r-2: 6px;
+	--r-3: 10px;
+	--fs-xs: 11.5px;
+	--fs-sm: 12.5px;
+	--fs-md: 14px;
+	--fs-lg: 16px;
+	--fs-xl: 19px;
+	/* 一笔刷下去的时长与曲线：所有新动效共用，快而收得住。
+	   不要用弹性曲线 —— 纸上不会弹。 */
+	--brush: 320ms cubic-bezier(0.2, 0.7, 0.3, 1);
+	/* 安卓上舒服的最小触控高度（Material 的 48dp 口径） */
+	--tap-lg: 48px;
+
+	/* ── 裱纸：面板的双线框与厚度 ─────────────────────────────
+	   外一条强线（走既有 border 或 inset 强线），内一条弱线，顶边再一道高光。
+	   三层都靠 box-shadow 叠，绝不加 border：面板每宽 1px，
+	≥900px 的两栏 / 三栏都会跟着挪位。 */
+	--panel-hi:   rgba(255, 253, 247, 0.62);   /* 顶边那道高光 */
+	--panel-ring: rgba(42, 38, 32, 0.075);     /* 内描线：裱纸的第二道框 */
+	--panel-drop: rgba(42, 38, 32, 0.055);     /* 面板浮起的一线投影 */
+	--panel-face: linear-gradient(180deg, var(--paper-hi) 0%, var(--paper) 44%, var(--paper) 100%);
+
+	/* ── 赭金与茶褐：角花、界格、回纹用的低饱和暖色 ─────────── */
+	--gold-line:  rgba(184, 134, 47, 0.5);
+	--gold-wash:  rgba(184, 134, 47, 0.07);
+	--gold-edge:  rgba(184, 134, 47, 0.28);
+	--tea:        #7a5b3e;
+	--tea-wash:   rgba(122, 91, 62, 0.075);
+	--tea-edge:   rgba(122, 91, 62, 0.26);
+	/* 回纹带：一排竖短齿压一条收口的横线，6px 高。
+	   真正的回纹要画 SVG，那就得把颜色写进 data-uri —— 违反令牌约束，
+	   也会在暗色下变成一坨硬色。宁可抽象成「齿线」。 */
+	--fret:
+		repeating-linear-gradient(90deg, var(--gold-line) 0 1px, transparent 1px 7px),
+		linear-gradient(90deg, transparent, var(--gold-edge) 14%, var(--gold-edge) 86%, transparent);
+
+	/* 远山：空状态背后极淡的山影与云气，压到几乎看不见才算「淡墨」 */
+	--mountains:
+		radial-gradient(ellipse 58% 40% at 14% 92%, rgba(42, 38, 32, 0.055), transparent 72%),
+		radial-gradient(ellipse 44% 28% at 54% 100%, rgba(42, 38, 32, 0.045), transparent 74%),
+		radial-gradient(ellipse 66% 24% at 88% 84%, rgba(59, 76, 102, 0.045), transparent 76%);
+
+	/* 墨晕 / 朱晕：悬停与按下时从底边洇上来的一层色 */
+	--ink-bleed:      radial-gradient(ellipse 120% 78% at 50% 118%, rgba(42, 38, 32, 0.16), transparent 72%);
+	--cinnabar-bleed: radial-gradient(ellipse 120% 78% at 50% 118%, rgba(168, 57, 43, 0.14), transparent 72%);
+
+	/* 骨架屏：纸色底 + 一道掠过的光。光要窄，宽了就成旋转的银条了 */
+	--skeleton:       rgba(42, 38, 32, 0.07);
+	--skeleton-hi:    rgba(255, 253, 247, 0.55);
+	--skeleton-sheen: linear-gradient(100deg, transparent 0%, transparent 38%, var(--skeleton-hi) 50%, transparent 62%, transparent 100%);
+
+	/* 稿面正文：单独一个令牌，夜里才能只提亮正文而不动全局墨色 */
+	--ms-ink: #2a2620;
 }
 
 /* ── 夜窗：同一套宣纸/墨/朱砂，换在夜里读 ─────────────────────
@@ -133,6 +198,39 @@
 	--backdrop:     rgba(0, 0, 0, 0.66);
 	--scrim:        rgba(0, 0, 0, 0.4);
 	--seal-drop: rgba(0, 0, 0, 0.5);
+
+	/* ── 夜窗里的裱纸：纸压成暖黑之后，高光只能给极少一点 ─────── */
+	--panel-hi:   rgba(236, 229, 212, 0.06);
+	--panel-ring: rgba(236, 229, 212, 0.06);
+	--panel-drop: rgba(0, 0, 0, 0.42);
+	--panel-face: linear-gradient(180deg, var(--paper-hi) 0%, var(--paper) 44%, var(--paper) 100%);
+
+	/* 赭金与茶褐在黑底上都要提亮，否则角花彻底看不见 */
+	--gold-line:  rgba(217, 164, 69, 0.46);
+	--gold-wash:  rgba(217, 164, 69, 0.1);
+	--gold-edge:  rgba(217, 164, 69, 0.26);
+	--tea:        #c2a17c;
+	--tea-wash:   rgba(194, 161, 124, 0.1);
+	--tea-edge:   rgba(194, 161, 124, 0.3);
+	--fret:
+		repeating-linear-gradient(90deg, var(--gold-line) 0 1px, transparent 1px 7px),
+		linear-gradient(90deg, transparent, var(--gold-edge) 14%, var(--gold-edge) 86%, transparent);
+
+	/* 夜里的远山：换成月白，山影才浮得出来 */
+	--mountains:
+		radial-gradient(ellipse 58% 40% at 14% 92%, rgba(236, 229, 212, 0.05), transparent 72%),
+		radial-gradient(ellipse 44% 28% at 54% 100%, rgba(236, 229, 212, 0.04), transparent 74%),
+		radial-gradient(ellipse 66% 24% at 88% 84%, rgba(143, 166, 196, 0.05), transparent 76%);
+
+	--ink-bleed:      radial-gradient(ellipse 120% 78% at 50% 118%, rgba(236, 229, 212, 0.13), transparent 72%);
+	--cinnabar-bleed: radial-gradient(ellipse 120% 78% at 50% 118%, rgba(209, 89, 74, 0.2), transparent 72%);
+
+	--skeleton:       rgba(236, 229, 212, 0.08);
+	--skeleton-hi:    rgba(236, 229, 212, 0.11);
+	--skeleton-sheen: linear-gradient(100deg, transparent 0%, transparent 38%, var(--skeleton-hi) 50%, transparent 62%, transparent 100%);
+
+	/* 夜里读长章全靠正文那一档对比度：只把正文提亮，别把整页墨都推上去 */
+	--ms-ink: #f2ecdd;
 }
 
 * { box-sizing: border-box; }
@@ -145,7 +243,7 @@ body {
 	background: var(--paper);
 	color: var(--ink);
 	font-family: var(--sans);
-	font-size: 14px;
+	font-size: var(--fs-md);
 	overflow: hidden;
 	overflow-x: hidden;
 	/* 页面本身不滚，橡皮筋就留给内部的滚动容器 */
@@ -167,18 +265,21 @@ body::before {
 
 ::selection { background: var(--cinnabar-wash); }
 
-:focus-visible { outline: 2px solid var(--cinnabar); outline-offset: 2px; }
+/* 焦点环：一枚朱砂细圈。键盘走到哪就得看得见，这条不能为了「素」而让掉 */
+:focus-visible { outline: 3px solid var(--cinnabar); outline-offset: 2px; }
 
-* { scrollbar-width: thin; scrollbar-color: var(--ink-4) transparent; }
-*::-webkit-scrollbar { width: 9px; height: 9px; }
+/* 滚动条：细、圆、轨道全透明 —— 页面是纸，不该挂一根金属条 */
+* { scrollbar-width: thin; scrollbar-color: var(--rule-strong) transparent; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
 *::-webkit-scrollbar-track { background: transparent; }
 *::-webkit-scrollbar-thumb {
-	background: var(--ink-4);
-	border-radius: 9px;
-	border: 3px solid transparent;
+	background: var(--rule-strong);
+	border-radius: var(--sp-2);
+	border: 2px solid transparent;
 	background-clip: content-box;
 }
-*::-webkit-scrollbar-thumb:hover { background: var(--ink-3); background-clip: content-box; }
+*::-webkit-scrollbar-thumb:hover { background: var(--ink-4); background-clip: content-box; }
+*::-webkit-scrollbar-corner { background: transparent; }
 
 /* ── 骨架 ────────────────────────────────────────────────── */
 
@@ -324,17 +425,42 @@ body::before {
 	align-items: center;
 	gap: 8px;
 	margin: 0 0 10px 4px;
-	font-size: 11px;
+	font-family: var(--kai);
+	font-size: var(--fs-sm);
 	font-weight: 600;
-	letter-spacing: 0.18em;
+	letter-spacing: 0.14em;
 	color: var(--ink-2);
 }
 .tick { width: 5px; height: 5px; background: var(--cinnabar); transform: rotate(45deg); flex: none; }
-.rail-label::after { content: ""; flex: 1; height: 1px; background: var(--rule); }
-
-.rail-note { margin: 6px; font-size: 12px; line-height: 1.9; color: var(--ink-4); font-family: var(--serif); }
+/* 题签外的线从朱砂/赭金起笔，向右淡出 —— 一条实线会把标题切断 */
+.rail-label::after {
+	content: "";
+	flex: 1;
+	height: 1px;
+	background: linear-gradient(90deg, var(--gold-edge), transparent);
+}
+.rail-note {
+	margin: 6px;
+	padding-bottom: var(--sp-5);
+	font-size: var(--fs-sm);
+	line-height: 1.9;
+	color: var(--ink-4);
+	font-family: var(--serif);
+	/* 空卷底下一痕远山：写不写得出字还不知道，先给个开门见山 */
+	background-image: var(--mountains);
+	background-repeat: no-repeat;
+	background-position: center bottom;
+}
 
 .project-list, .chapter-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; min-height: 0; }
+
+/* 章目是一页目录：序号列右侧压一条朱丝栏，整卷的条目都排在它右边。
+   线画在列表上而不是每个条目上 —— 条目一换行或 hover，竖线不能断。
+   34px = 10px 内边距 + 序号列 1.7em + 半个 gap，见下面的 .chapter-item。 */
+.chapter-list {
+	background-image: linear-gradient(90deg, transparent 33px, var(--rule-soft) 33px, var(--rule-soft) 34px, transparent 34px);
+	background-repeat: no-repeat;
+}
 
 .project-item {
 	position: relative;
@@ -365,12 +491,37 @@ body::before {
 	align-items: baseline;
 	gap: 9px;
 	padding: 7px 10px;
-	border-radius: 4px;
+	border-radius: var(--r-1);
 	cursor: pointer;
-	transition: background var(--wash);
+	transition: background var(--brush), box-shadow var(--brush);
+	/* 书页行线：用 inset 阴影画，加 border 会让每一行高 1px，
+	   一屏十几行就是一整段位移 —— 章目滚动位置会跟着抖。 */
+	box-shadow: inset 0 -1px 0 var(--rule-soft);
 }
+/* 书口记号：已落笔的章用一枚墨点，未落笔的用淡点（配合末尾的空心印）。
+   点落在行首内边距里，所以不占位、也不影响序号对齐。 */
+.chapter-item::after {
+	content: "";
+	position: absolute;
+	left: 3px;
+	top: 50%;
+	width: 3px;
+	height: 3px;
+	margin-top: -1.5px;
+	border-radius: 50%;
+	background: var(--ink-4);
+	opacity: 0.85;
+	pointer-events: none;
+}
+/* 未落笔：只有 .dotmark 这一个 DOM 差别，用 :has 认它 */
+.chapter-item:has(.dotmark)::after { background: var(--rule-strong); opacity: 1; }
 .chapter-item:hover { background: var(--lift); }
-.chapter-item.is-on { background: var(--ink-wash); }
+.chapter-item.is-on {
+	background: var(--ink-wash);
+	/* 当前章：朱砂细线 + 纸面高光，像在目录上夹了一枚书签 */
+	box-shadow: inset 0 -1px 0 var(--rule-soft), inset 0 0 0 1px var(--cinnabar-faint), inset 0 1px 0 var(--panel-hi);
+}
+.chapter-item.is-on::after { display: none; }
 .chapter-item.is-on::before {
 	content: "";
 	position: absolute;
@@ -384,23 +535,27 @@ body::before {
 .chapter-item .ord {
 	flex: none;
 	width: 1.7em;
-	font-family: var(--serif);
-	font-size: 12px;
+	/* 楷体的「一二三」才有书口题号的味道，宋体的数字偏印刷体 */
+	font-family: var(--kai);
+	font-size: var(--fs-sm);
 	color: var(--ink-4);
 	font-variant-numeric: tabular-nums;
+	letter-spacing: 0.02em;
 }
 .chapter-item.is-on .ord { color: var(--cinnabar); }
 .chapter-item .ct { flex: 1; min-width: 0; font-family: var(--serif); font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chapter-item .cw { flex: none; font-size: 10.5px; color: var(--ink-4); font-variant-numeric: tabular-nums; }
+/* 未落笔的记号从实心朱点改成空心小印：空的那一格也得像个记号，不能像杂质 */
 .chapter-item .dotmark {
 	flex: none;
 	align-self: center;
 	margin-left: 2px;
-	width: 5px;
-	height: 5px;
+	width: 6px;
+	height: 6px;
 	border-radius: 50%;
-	background: var(--cinnabar);
-	opacity: 0.45;
+	background: transparent;
+	border: 1px solid var(--cinnabar-edge);
+	opacity: 1;
 }
 
 /* ── 稿台 ────────────────────────────────────────────────── */
@@ -427,6 +582,20 @@ body::before {
 	padding: 9px 26px;
 	border-bottom: 1px solid var(--rule-soft);
 	flex: none;
+	position: relative;
+}
+/* 台口的一道朱丝线：两端淡出，只在中间实。
+   绝对定位压在既有的 1px border 上，不占高度 —— 顶栏不会因此高 1px。 */
+.stage-bar::after {
+	content: "";
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: -1px;
+	height: 1px;
+	background: linear-gradient(90deg, transparent, var(--gold-line) 16%, var(--gold-line) 84%, transparent);
+	opacity: 0.6;
+	pointer-events: none;
 }
 
 .tabs { display: flex; gap: 3px; }
@@ -488,17 +657,33 @@ body::before {
 	letter-spacing: 0.1em;
 	line-height: 1.4;
 }
-.ms-rule { width: 46px; height: 1px; margin: 20px auto 14px; background: var(--rule-strong); }
+/* 题下的界格：一条 6px 的回纹带，替掉原来那根实线 —— 书页的天头地脚 */
+.ms-rule {
+	width: 46px;
+	height: 6px;
+	margin: 20px auto 14px;
+	background-image: var(--fret);
+	background-repeat: repeat-x, no-repeat;
+	background-size: 7px 5px, 100% 1px;
+	background-position: 0 0, 0 100%;
+	opacity: 0.8;
+}
 .ms-meta { margin: 0; font-size: 11.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
 
-/* 朱丝栏：稿纸的竖向界线，低到不干扰阅读 */
+/* 朱丝栏：稿纸的竖向界线，低到不干扰阅读。
+   正文用 --ms-ink 而不是 --ink：夜里只提亮稿面，侧栏与表单的墨色不动，
+   一页长章的对比度够读，整屏又不至于发白。 */
 .ms-text {
 	position: relative;
 	font-family: var(--serif);
 	font-size: var(--ms-font-size, 17px);
 	line-height: var(--ms-line-height, 2.05);
 	letter-spacing: 0.02em;
-	color: var(--ink);
+	color: var(--ms-ink);
+	/* 中文两端对齐：字距交给浏览器按字（inter-ideograph）匀，末行不拉。
+	   不加这条，右侧永远参差，书页感就没了。 */
+	text-align: justify;
+	text-justify: inter-ideograph;
 	/* 正文里偶尔会有不带空格的长串（网址、生造词），默认会把稿台顶出横向滚动条 */
 	overflow-wrap: break-word;
 }
@@ -859,30 +1044,58 @@ body::before {
 
 /* ── 按钮 ────────────────────────────────────────────────── */
 
+/* 纸面按钮：描边 + 顶边高光 + 底边内阴影 = 一枚压平的纸片。
+   四条语义各归其位：.btn 是纸、.btn-ink 是墨、.btn-quiet 无框、.btn-danger 是朱砂。
+   过渡一律走 --brush：快而收得住，点了要有落手的感觉。 */
 .btn {
 	border: 1px solid var(--rule);
-	border-radius: 4px;
+	border-radius: var(--r-2);
 	background: var(--paper-hi);
+	box-shadow: inset 0 1px 0 var(--panel-hi), inset 0 -1px 0 var(--panel-ring);
 	color: var(--ink-2);
 	padding: 7px 15px;
 	font-family: inherit;
-	font-size: 13px;
+	font-size: var(--fs-sm);
 	letter-spacing: 0.06em;
 	cursor: pointer;
-	transition: background var(--wash), border-color var(--wash), color var(--wash);
+	transition:
+		background-color var(--brush),
+		border-color var(--brush),
+		color var(--brush),
+		box-shadow var(--brush),
+		transform var(--brush);
 	white-space: nowrap;
+	/* 安卓上点一下就闪一块灰蓝，纸上不能有这种颜色 */
+	-webkit-tap-highlight-color: transparent;
 }
-.btn:hover:not(:disabled) { border-color: var(--ink-4); color: var(--ink); }
-.btn-ink { background: var(--ink); border-color: var(--ink); color: var(--paper-hi); }
-.btn-ink:hover:not(:disabled) { background: var(--ink-lift); border-color: var(--ink-lift); color: var(--on-paper); }
-.btn-quiet { background: transparent; border-color: transparent; color: var(--ink-3); }
-.btn-quiet:hover:not(:disabled) { background: var(--hover); border-color: transparent; }
-.btn-seal { background: var(--cinnabar); border-color: var(--cinnabar); color: var(--on-cinnabar); }
-.btn-seal:hover:not(:disabled) { background: var(--cinnabar-lt); border-color: var(--cinnabar-lt); color: var(--on-cinnabar); }
-.btn-sm { padding: 4px 11px; font-size: 12px; }
+.btn:hover:not(:disabled) {
+	border-color: var(--ink-4);
+	color: var(--ink);
+	/* 从底边洇上来的一层薄墨：不用伪元素压字，阴影本身能插值 */
+	box-shadow: inset 0 -7px 10px -7px var(--panel-hi), inset 0 1px 0 var(--panel-hi), inset 0 -1px 0 var(--panel-ring);
+}
+/* 按下：下沉 1px 并收掉高光。位移只有 1px —— 纸上按印，不是弹簧 */
+.btn:active:not(:disabled) {
+	transform: translateY(1px);
+	box-shadow: inset 0 1px 3px var(--panel-ring);
+}
+.btn-ink { background: var(--ink); border-color: var(--ink); color: var(--paper-hi); box-shadow: inset 0 1px 0 var(--panel-hi); }
+.btn-ink:hover:not(:disabled) {
+	background: var(--ink-lift);
+	border-color: var(--ink-lift);
+	color: var(--on-paper);
+	box-shadow: inset 0 -8px 12px -8px var(--panel-hi), inset 0 1px 0 var(--panel-hi);
+}
+.btn-quiet { background: transparent; border-color: transparent; color: var(--ink-3); box-shadow: none; }
+.btn-quiet:hover:not(:disabled) { background: var(--hover); border-color: transparent; box-shadow: none; }
+.btn-quiet:active:not(:disabled) { background: var(--hover); box-shadow: none; }
+.btn-seal { background: var(--cinnabar); border-color: var(--cinnabar); color: var(--on-cinnabar); box-shadow: inset 0 1px 0 var(--seal-edge); }
+.btn-seal:hover:not(:disabled) { background: var(--cinnabar-lt); border-color: var(--cinnabar-lt); color: var(--on-cinnabar); box-shadow: inset 0 -8px 12px -8px var(--seal-edge), inset 0 1px 0 var(--seal-edge); }
+.btn-sm { padding: 4px 11px; font-size: var(--fs-xs); }
 .btn:disabled { opacity: 0.4; cursor: not-allowed; }
-.btn-danger { color: var(--cinnabar); border-color: var(--cinnabar-edge); background: transparent; }
-.btn-danger:hover:not(:disabled) { background: var(--cinnabar-wash); border-color: var(--cinnabar); }
+/* 危险动作：朱砂描边的空印，不填色 —— 填了就成了主按钮，权重会压过「保存」 */
+.btn-danger { color: var(--cinnabar); border-color: var(--cinnabar-edge); background: transparent; box-shadow: none; }
+.btn-danger:hover:not(:disabled) { background: var(--cinnabar-wash); border-color: var(--cinnabar); color: var(--cinnabar); box-shadow: inset 0 -7px 10px -7px var(--cinnabar-faint); }
 
 .ink-btn {
 	width: 100%;
@@ -1201,16 +1414,90 @@ select { max-width: 230px; cursor: pointer; }
 	z-index: 2;
 	background: linear-gradient(180deg, var(--paper) 76%, transparent);
 }
+/* 角花：两道 L 形赭金细线压在面板头的空白处，像装裱的界格。
+   没有 ::after 可用（那是标题右边那条渐隐线），所以两个角用同一个伪元素
+   的四层背景拼出来：横 9px、竖 9px，各两份，左上与右下。
+   绝对定位 + pointer-events:none，不参与布局，也不挡点。 */
+.pane-head::before {
+	content: "";
+	position: absolute;
+	left: 0;
+	right: 0;
+	top: 6px;
+	bottom: 2px;
+	pointer-events: none;
+	background-image:
+		linear-gradient(var(--gold-line), var(--gold-line)),
+		linear-gradient(var(--gold-line), var(--gold-line)),
+		linear-gradient(var(--gold-line), var(--gold-line)),
+		linear-gradient(var(--gold-line), var(--gold-line));
+	background-size: 9px 1px, 1px 9px, 9px 1px, 1px 9px;
+	background-position: left top, left top, right bottom, right bottom;
+	background-repeat: no-repeat;
+	opacity: 0.55;
+}
+/* 题签：楷体 + 字距，左首一枚朱砂小印。字号与原来一致，只换气质 */
 .pane-head h3 {
 	margin: 0;
+	padding-left: 11px;
+	position: relative;
 	font-family: var(--kai);
-	font-size: 14px;
+	font-size: var(--fs-md);
 	font-weight: 600;
-	letter-spacing: 0.12em;
+	letter-spacing: 0.1em;
 	color: var(--ink);
+	/* 多出的 11px 会让长标题在窄栏里折行、把栏头撑高 —— 宁可让右边那条线缩没 */
+	white-space: nowrap;
 }
-.pane-head::after { content: ""; flex: 1; height: 1px; background: var(--rule-soft); }
-.pane-count, .pane-note { flex: none; font-size: 11px; color: var(--ink-4); }
+.pane-head h3::before {
+	content: "";
+	position: absolute;
+	left: 1px;
+	top: 0.42em;
+	width: 3px;
+	height: 3px;
+	background: var(--cinnabar);
+	/* 3px 的方印在 14px 字旁几乎看不见，补一圈同色淡晕把它坐住 */
+	box-shadow: 0 0 0 1px var(--cinnabar-faint);
+}
+/* 从题签向右淡出的那条线：实线会把标题和工具条切成两半 */
+.pane-head::after {
+	content: "";
+	flex: 1;
+	height: 1px;
+	align-self: center;
+	background: linear-gradient(90deg, var(--rule) 0%, var(--rule-soft) 46%, transparent 100%);
+}
+/* 数量徽标当小方印：朱砂描边 + 楷体数字，空的时候整枚不出现 */
+.pane-count {
+	flex: none;
+	font-family: var(--kai);
+	font-size: var(--fs-xs);
+	color: var(--cinnabar);
+	padding: 1px 5px;
+	border: 1px solid var(--cinnabar-edge);
+	border-radius: 2px;
+	background: var(--cinnabar-soft);
+	line-height: 1.5;
+	font-variant-numeric: tabular-nums;
+	letter-spacing: 0.02em;
+}
+/* 栏头的小签：淡茶褐，比徽标轻，只做说明 */
+.pane-note {
+	flex: 0 1 auto;
+	min-width: 0;
+	font-size: var(--fs-xs);
+	color: var(--tea);
+	padding: 1px 6px;
+	border-radius: 2px;
+	background: var(--tea-wash);
+	box-shadow: inset 0 0 0 1px var(--tea-edge);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+/* 空元素不能留下一枚空印或一块空签 */
+.pane-count:empty, .pane-note:empty { display: none; }
 .pane-tools { flex: none; align-self: center; }
 
 .bench-talk .pane-head {
@@ -1842,10 +2129,11 @@ select { max-width: 230px; cursor: pointer; }
 .theme-toggle:focus-visible,
 .tab:focus-visible,
 .chip:focus-visible,
-.rail-add:focus-visible {
-	outline: 2px solid var(--cinnabar);
+.rail-add:focus-visible,
+.chapter-item:focus-visible {
+	outline: 3px solid var(--cinnabar);
 	outline-offset: 2px;
-	border-radius: 3px;
+	border-radius: var(--r-1);
 }
 
 /* 正文与小字在暗底上略微提亮：夜里读长文全靠它 */
@@ -1855,7 +2143,9 @@ select { max-width: 230px; cursor: pointer; }
 
 /* 纸纤维跟着主题换叠色（见 :root 的 --fiber-blend），强度已调低 */
 
-/* 尊重系统的「减少动态效果」：动画一律收到最小 */
+/* 尊重系统的「减少动态效果」：动画一律收到最小。
+   新加的墨晕、骨架流光、稿纸淡入也一并收掉 —— 这条兜底是给所有人的，
+   不只是给那几个老动画的。 */
 @media (prefers-reduced-motion: reduce) {
 	*,
 	*::before,
@@ -1866,6 +2156,19 @@ select { max-width: 230px; cursor: pointer; }
 		scroll-behavior: auto !important;
 	}
 	.desk { animation: none; }
+	.skeleton,
+	.sk-line,
+	.ms-page,
+	.front-matter,
+	.toast {
+		animation: none !important;
+	}
+	/* 静态的骨架不带流光也只留底噪，但不能再有「光」定在某处不动 */
+	.skeleton,
+	.sk-line {
+		background-image: none !important;
+	}
+	.btn:active:not(:disabled) { transform: none; }
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -1970,16 +2273,43 @@ kbd {
 .toast-ok { border-left-color: var(--moss); }
 .toast-warn { border-left-color: var(--amber); }
 .toast.is-gone { opacity: 0; transform: translateY(6px); transition: opacity 200ms ease, transform 200ms ease; }
+/* 提示上的印章字：一个字的方印，不是色点。
+   手机上提示一闪而过，靠颜色分不出「成」与「误」—— 字得看得见。
+   边框跟着 currentColor 走，四档语气只改颜色，不必各写一条边。 */
 .toast-mark {
 	flex: none;
-	font-family: var(--mono);
-	font-size: 11px;
-	color: var(--ink-4);
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 1.45em;
+	height: 1.45em;
 	margin-top: 1px;
+	padding: 0 1px;
+	border: 1px solid currentColor;
+	border-radius: 2px;
+	font-family: var(--kai);
+	font-size: 11px;
+	line-height: 1;
+	color: var(--ink-3);
 }
 .toast-error .toast-mark { color: var(--cinnabar); }
 .toast-ok .toast-mark { color: var(--moss); }
 .toast-warn .toast-mark { color: var(--amber); }
+/* 关闭口：整条可点也能关，但手机上一眼看不出「点哪儿算关」，
+   所以另给一个看得见的叉。桌面端它也在，只是更淡。 */
+.toast-close {
+	flex: none;
+	align-self: flex-start;
+	margin-left: auto;
+	padding: 0 3px;
+	border-radius: var(--r-1);
+	font-size: 12px;
+	line-height: 1.5;
+	color: var(--ink-4);
+	cursor: pointer;
+}
+.toast-close:hover { color: var(--cinnabar); background: var(--cinnabar-wash); }
+.toast-close:focus-visible { outline: 2px solid var(--cinnabar); outline-offset: 1px; }
 .toast-text { min-width: 0; }
 @keyframes toast-in {
 	from { opacity: 0; transform: translateY(8px); }
@@ -2261,6 +2591,153 @@ body.focus-mode { background: var(--paper); }
 .btn-primary:hover:not(:disabled) { background: var(--ink-lift); border-color: var(--ink-lift); color: var(--on-paper); }
 .btn-ghost { background: transparent; border-color: var(--rule); color: var(--ink-3); }
 .btn-ghost:hover:not(:disabled) { border-color: var(--ink-4); color: var(--ink); }
+
+/* ══════════════════════════════════════════════════════════════
+   书斋层：裱纸、界格、题签、印章、回纹、远山、骨架
+   三条规矩：
+   1. 只叠层次，不改盒子 —— 面板的 border 宽度一个都没动，「厚」全靠
+      box-shadow 与伪元素做出来，≥900px 的两栏 / 三栏不会因此挪位；
+   2. 颜色只来自令牌，这一整段里不出现任何字面色值；
+   3. 动效一律 var(--brush)，位移不超过 4px，不做弹性。
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── 裱纸：面板的双线框 ──────────────────────────────────────
+   外一条强线（既有 border），内一条弱线，顶边一道高光，底边一线投影。
+   缺了那道高光，双线框就只是「画了个框」，没有纸的厚度。 */
+.bench-pane,
+.rail,
+.desk-right,
+.record-list,
+.material-list,
+.assembly-list,
+.pool-list {
+	box-shadow:
+		inset 0 0 0 1px var(--panel-ring),
+		inset 0 1px 0 var(--panel-hi),
+		inset 0 -1px 0 var(--panel-drop);
+}
+/* 典籍栏已经嵌在右案的双线框里，再加一圈会糊成三道线，只留顶边高光 */
+.bible { box-shadow: inset 0 1px 0 var(--panel-hi); }
+
+/* 对话框与提示是「浮起来的那张纸」：既有投影必须留着，内线补在最前。
+   --panel-face 让纸面从顶边亮起，--ink-bleed 在底边压一道墨影。 */
+.sheet {
+	background-image: var(--ink-bleed), var(--panel-face);
+	box-shadow:
+		0 18px 50px var(--shadow),
+		inset 0 0 0 1px var(--panel-ring),
+		inset 0 1px 0 var(--panel-hi);
+}
+.palette {
+	background-image: var(--panel-face);
+	box-shadow:
+		0 24px 70px var(--shadow),
+		inset 0 0 0 1px var(--panel-ring),
+		inset 0 1px 0 var(--panel-hi);
+}
+.toast {
+	box-shadow: 0 8px 26px var(--shadow), inset 0 1px 0 var(--panel-hi);
+}
+
+/* ── 印章式状态 ─────────────────────────────────────────────
+   <span class="stamp">已存</span>，加 --moss / --tea 换色，--solid 填朱。
+   方形、细描边、楷体字 —— 它是一枚记号，不是一个彩色标签，
+   所以不留圆角、不加粗、不填满。 */
+.stamp {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex: none;
+	gap: var(--sp-1);
+	padding: 1px 6px;
+	border: 1px solid var(--cinnabar-edge);
+	border-radius: 2px;
+	background: var(--cinnabar-soft);
+	color: var(--cinnabar);
+	font-family: var(--kai);
+	font-size: var(--fs-xs);
+	line-height: 1.5;
+	letter-spacing: 0.08em;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+	vertical-align: middle;
+}
+/* 空印章不能留一个空框 */
+.stamp:empty { display: none; }
+.stamp--moss { border-color: var(--moss-edge); background: var(--moss-wash); color: var(--moss); }
+.stamp--tea { border-color: var(--tea-edge); background: var(--tea-wash); color: var(--tea); }
+.stamp--solid { border-color: var(--cinnabar); background: var(--cinnabar); color: var(--on-cinnabar); }
+
+/* ── 回纹：一条 6px 的横向界格带 ─────────────────────────────
+   放在 .pane-head 之后、或是两块内容之间。它是纹样，不是分割线，
+   所以透明度压到 0.5 以下 —— 看得清纹路，看不清边界。 */
+.fret {
+	height: 6px;
+	flex: none;
+	background-image: var(--fret);
+	background-repeat: repeat-x, no-repeat;
+	background-size: 7px 5px, 100% 1px;
+	background-position: 0 0, 0 100%;
+	opacity: 0.5;
+	pointer-events: none;
+}
+.fret--wide { height: 8px; opacity: 0.4; }
+
+/* ── 空状态：一痕远山 ────────────────────────────────────────
+   空的地方最容易显得「坏了」。压一层几乎看不见的山影与云气，
+   文字往下挪一点站到山前，空也就成了留白。 */
+.rail-note,
+.bench-hint,
+.bench-empty,
+.bible-empty,
+.empty-hint,
+.palette-empty,
+.chapter-search-empty,
+.history-empty {
+	background-image: var(--mountains);
+	background-repeat: no-repeat;
+	background-position: center bottom;
+	background-size: 100% 88%;
+}
+.bench-empty,
+.bible-empty,
+.empty-hint,
+.palette-empty {
+	padding-top: calc(var(--sp-4) + var(--sp-1));
+	padding-bottom: calc(var(--sp-5) + var(--sp-1));
+}
+
+/* 拖入文件时整块面板从底边洇上朱砂：
+   比一条描边更能说清「可以放在这儿」，也还是墨晕的路子 */
+.bench-pane.is-over { background-image: var(--cinnabar-bleed); }
+
+/* ── 骨架屏 ─────────────────────────────────────────────────
+   一块纸色占位，一道窄光从左掠到右。光只占 12%（38%→62%），
+   宽了就成了进度条；底色比纸深一档，才看得出「这里还没东西」。 */
+@keyframes sk-sweep {
+	from { background-position: -140% 0; }
+	to { background-position: 240% 0; }
+}
+.skeleton,
+.sk-line {
+	background-color: var(--skeleton);
+	background-image: var(--skeleton-sheen);
+	background-repeat: no-repeat;
+	background-size: 220% 100%;
+	border-radius: var(--r-2);
+	animation: sk-sweep 1.6s linear infinite;
+}
+.sk-line { height: 0.82em; margin: 0 0 var(--sp-2); border-radius: var(--r-1); }
+.sk-line:last-child { margin-bottom: 0; }
+.sk-line.is-short { width: 52%; }
+.sk-line.is-mid { width: 76%; }
+
+/* 稿纸淡入。.ms-page / .front-matter 早就写着 animation: fade，
+   但一直没定义过这个名字 —— 补上，翻章时纸才是「落」下来的。 */
+@keyframes fade {
+	from { opacity: 0; }
+	to { opacity: 1; }
+}
 
 /* ══════════════════════════════════════════════════════════════
    移动端：手机与平板的落纸处
@@ -2548,3 +3025,100 @@ body.focus-mode { background: var(--paper); }
 	/* 焦点环在触屏上更要看得清 */
 	:focus-visible { outline-width: 3px; }
 }
+
+/* ══════════════════════════════════════════════════════════════
+   触屏细部：书斋层在手指下的尺寸
+   桌面（>900px）的尺寸一个没动；这里只收窄屏上的边角与记号。
+   ══════════════════════════════════════════════════════════════ */
+@media (max-width: 900px) {
+	/* 章目行有 44px 的触控高度，书口记号得跟着大一号才看得见 */
+	.chapter-item::after { width: 4px; height: 4px; margin-top: -2px; }
+	/* 角花在窄栏里离标题太近，收小一号；位置不动，免得跟题签撞 */
+	.pane-head::before { background-size: 7px 1px, 1px 7px, 7px 1px, 1px 7px; }
+	/* 面板的内描线在窄屏上离内容太近，减到只有顶边高光 */
+	.record-list, .material-list { box-shadow: inset 0 1px 0 var(--panel-hi); }
+}
+
+@media (max-width: 640px) {
+	/* 手机上栏头就是抽屉的标题行，两个角花会挤到字，收掉 */
+	.pane-head::before { display: none; }
+	/* 印章与签要能被拇指看见，但不抢戏 */
+	.stamp, .pane-count, .pane-note { min-height: 20px; }
+	/* 天头地脚在手机上收一点，别占掉小半屏 */
+	.ms-rule { margin: 16px auto 12px; }
+	.rail-note { padding-bottom: var(--sp-4); }
+	/* 骨架条在窄栏里按比例缩，别撑破卡片 */
+	.sk-line { height: 0.9em; }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   接线的细部：给结构侧新增的钩子补上「书斋里的样子」
+
+   index.html 与 app.js 这轮加了一批钩子（.icon-btn、data-cap、
+   .beam-tools-head、.is-typing、.toast-close、#boot-skeleton）。
+   结构侧只给了「能用」的兜底，颜色与字体在这里落定 —— 令牌全在
+   本文件，别让兜底里的字面量成为事实上的终稿。
+   ══════════════════════════════════════════════════════════════ */
+
+/* 方形图标钮：「?」「☾」「×」这类没有字义的钮，宽高得一样，
+   否则一排看过去像参差不齐的书签。 */
+.icon-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 30px;
+	height: 30px;
+	padding: 0;
+	line-height: 1;
+	letter-spacing: 0;
+}
+.icon-btn.btn-sm { font-size: var(--fs-sm); }
+
+/* 顶栏「笔墨」浮层的头：手机上它自己带一个可见的收起口。
+   桌面端这块由结构侧的 display:none 收着（浮层是横向展开的，不需要头）。 */
+.beam-tools-title {
+	font-family: var(--kai);
+	font-size: var(--fs-md);
+	letter-spacing: 0.18em;
+	color: var(--ink-2);
+}
+.beam-tools-head {
+	border-bottom: 1px solid var(--rule-soft);
+}
+
+/* 手机顶栏只剩一个单字：「目 / 笔 / 案」。
+   单字靠字形认，所以用楷体写；靠字号按得准，所以撑到触控尺寸。
+   全名留在 aria-label 与 title 里，读屏与长按都拿得到。 */
+@media (max-width: 640px) {
+	.beam-controls .btn[data-cap] {
+		font-family: var(--kai);
+		font-size: 15px;
+		letter-spacing: 0;
+		padding: 0;
+		min-width: var(--tap-lg);
+		height: var(--tap-lg);
+	}
+}
+
+/* 「呈上」有没有字可呈：没字时淡下去，有字才亮。
+   手机上这一条输入框就是整块屏，按钮亮没亮是「按下去有没有反应」的唯一线索。 */
+.composer button[type="submit"] {
+	transition: opacity var(--brush), color var(--brush), border-color var(--brush), background var(--brush);
+}
+.composer.is-typing button[type="submit"] {
+	color: var(--cinnabar);
+	border-color: var(--cinnabar-edge);
+}
+
+/* 触屏上图标钮也要撑到 48px：它没有文字，小了就只剩一个点 */
+@media (pointer: coarse) {
+	.icon-btn,
+	.icon-btn.btn-sm {
+		min-width: var(--tap-lg);
+		min-height: var(--tap-lg);
+	}
+	/* 印章字在手指底下大一号，才认得出是哪个字 */
+	.toast-mark { font-size: 12px; min-width: 1.6em; height: 1.6em; }
+	.toast-close { font-size: 14px; padding: 0 8px; }
+}
+
