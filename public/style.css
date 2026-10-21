@@ -68,6 +68,14 @@
 	--shadow:       rgba(42, 38, 32, 0.22);
 	--backdrop:     rgba(42, 38, 32, 0.42);
 	--scrim:        rgba(228, 219, 199, 0.42);
+
+	/* 安全区：横屏刘海、底部 Home Indicator。env() 在没有安全区的设备上回退成 0。 */
+	--safe-t: env(safe-area-inset-top, 0px);
+	--safe-b: env(safe-area-inset-bottom, 0px);
+	--safe-l: env(safe-area-inset-left, 0px);
+	--safe-r: env(safe-area-inset-right, 0px);
+	/* 触屏上最小的点击目标 */
+	--tap: 44px;
 }
 
 /* ── 夜窗：同一套宣纸/墨/朱砂，换在夜里读 ─────────────────────
@@ -129,6 +137,8 @@
 
 * { box-sizing: border-box; }
 html, body { height: 100%; }
+/* 文字放大要听用户的，别被浏览器自己按屏幕宽度缩一遍 */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 
 body {
 	margin: 0;
@@ -137,6 +147,9 @@ body {
 	font-family: var(--sans);
 	font-size: 14px;
 	overflow: hidden;
+	overflow-x: hidden;
+	/* 页面本身不滚，橡皮筋就留给内部的滚动容器 */
+	overscroll-behavior-y: none;
 	-webkit-font-smoothing: antialiased;
 }
 
@@ -174,13 +187,16 @@ body::before {
 	z-index: 2;
 	display: grid;
 	grid-template-columns: 264px minmax(0, 1fr) 322px;
-	/* alert 行平时是 0 高（横幅 display:none），出现时才占位。 */
-	grid-template-rows: 58px auto minmax(0, 1fr);
+	/* alert 行平时是 0 高（横幅 display:none），出现时才占位。
+	   顶栏那行要留出刘海的高度，安全区之外的墨才该是纸。 */
+	grid-template-rows: calc(58px + var(--safe-t)) auto minmax(0, 1fr);
 	grid-template-areas:
 		"beam   beam  beam"
 		"alert  alert alert"
 		"rail   stage  desk";
 	height: 100vh;
+	/* dvh 跟着地址栏收缩走，vh 会留一条永远够不着的空白 */
+	height: 100dvh;
 	animation: settle 900ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
 }
 
@@ -223,10 +239,12 @@ body::before {
 
 .beam {
 	grid-area: beam;
+	position: relative;
 	display: flex;
 	align-items: center;
 	gap: 20px;
-	padding: 0 20px;
+	/* 顶栏要避开刘海与横向缺口 */
+	padding: var(--safe-t) calc(20px + var(--safe-r)) 0 calc(20px + var(--safe-l));
 	background: linear-gradient(180deg, var(--paper-hi), var(--paper));
 	border-bottom: 1px solid var(--rule);
 }
@@ -2243,3 +2261,290 @@ body.focus-mode { background: var(--paper); }
 .btn-primary:hover:not(:disabled) { background: var(--ink-lift); border-color: var(--ink-lift); color: var(--on-paper); }
 .btn-ghost { background: transparent; border-color: var(--rule); color: var(--ink-3); }
 .btn-ghost:hover:not(:disabled) { border-color: var(--ink-4); color: var(--ink); }
+
+/* ══════════════════════════════════════════════════════════════
+   移动端：手机与平板的落纸处
+   桌面（≥900px）的样貌与行为一概不动；这一段只从窄处开始改写。
+   分三档：≤900px 触屏与窄窗、≤640px 手机、再往下是键盘与安全区。
+   ══════════════════════════════════════════════════════════════ */
+
+/* 只在手机上露面的控件：章目抽屉的开关、模型与档位的浮层。 */
+.only-phone { display: none; }
+
+/* 顶栏里的模型与档位：桌面端用 display:contents 还原成顶栏的一行，
+   手机上收进一块浮层 —— 两个下拉放在 360px 宽的顶栏里必然溢出。 */
+.beam-tools { display: contents; }
+.beam-tools-cap { display: none; }
+
+/* 章目抽屉的标题行：章目二字 + 收起 */
+.rail-head { display: flex; align-items: center; gap: 8px; }
+.rail-head .rail-label { flex: 1; min-width: 0; }
+.rail-close { flex: none; }
+
+/* 章目抽屉的遮罩：平时不在页面里，只有手机断点用得上 */
+.rail-backdrop { display: none; }
+
+/* 浮出来的提示要躲开 Home Indicator */
+.toast-stack { bottom: calc(24px + var(--safe-b)); }
+
+/* 内部滚动容器：手机上要惯性滚动，滚到头也不带动整页 */
+.project-list,
+.chapter-list,
+.stream,
+.bible,
+.bench-pane,
+.material-list,
+.form-body,
+.palette-results,
+#view-manuscript {
+	-webkit-overflow-scrolling: touch;
+	overscroll-behavior: contain;
+}
+
+/* ── ≤1240px：右案已经成了抽屉，顶上那截要避开刘海 ───────────── */
+@media (max-width: 1240px) {
+	.desk-right { padding-top: var(--safe-t); }
+}
+
+/* ── ≤900px：触屏与窄窗的通例 ──────────────────────────────── */
+@media (max-width: 900px) {
+	/* 点得中：主要动作至少 44px 高 */
+	.btn,
+	.btn-sm,
+	.btn-xs,
+	.tab,
+	.chip,
+	.rail-add,
+	.bible-tab,
+	.ink-btn,
+	.theme-toggle,
+	.palette-row {
+		min-height: var(--tap);
+	}
+	.theme-toggle { width: var(--tap); height: var(--tap); }
+	.chapter-item { min-height: var(--tap); }
+	.toc-item { min-height: var(--tap); }
+	/* 底部的输入区要避开 Home Indicator */
+	.composer { padding-bottom: calc(20px + var(--safe-b)); }
+	.bench-talk .composer { padding-bottom: calc(18px + var(--safe-b)); }
+	/* 稿台的操作条在窄屏上常常放不下，允许换行，别把稿子挤走 */
+	.stage-bar { flex-wrap: wrap; row-gap: 6px; padding: 8px 16px; }
+	.stage-actions { flex-wrap: wrap; row-gap: 6px; }
+}
+
+/* ── ≤640px：手机 ────────────────────────────────────────── */
+@media (max-width: 640px) {
+	/* 骨架：单列。章目不再占一行，收进抽屉，首屏全给稿子。 */
+	.desk,
+	.desk.is-bench,
+	.desk.is-home,
+	.desk.is-focus {
+		grid-template-columns: minmax(0, 1fr);
+		grid-template-rows: auto auto minmax(0, 1fr);
+		grid-template-areas:
+			"beam"
+			"alert"
+			"stage";
+	}
+	.desk { height: 100vh; height: 100dvh; }
+
+	/* 顶栏：允许换行，按钮不再挤出屏幕 */
+	.beam {
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 6px 10px;
+		min-height: calc(58px + var(--safe-t));
+		padding: var(--safe-t) calc(10px + var(--safe-r)) 6px calc(10px + var(--safe-l));
+	}
+	.brand-text p { display: none; }
+	.brand-text h1 { font-size: 15px; }
+	.beam-mid { flex: 1 1 auto; min-width: 0; }
+	.beam-controls {
+		flex: 1 0 100%;
+		width: 100%;
+		flex-wrap: wrap;
+		justify-content: space-between;
+		gap: 4px;
+	}
+	.only-phone { display: inline-flex !important; }
+	/* 快捷键是桌面的东西，屏幕上按不出来 */
+	#open-shortcuts { display: none; }
+	/* 案头没有章目，料与文两页的章目在 ≤1180 已经收起了 */
+	.desk.is-home #toggle-rail,
+	.desk.is-bench #toggle-rail { display: none !important; }
+
+	/* 模型与档位：收进一块浮层，点「笔」落下 */
+	.beam-tools {
+		display: none;
+		position: absolute;
+		top: calc(100% + 6px);
+		right: calc(10px + var(--safe-r));
+		z-index: 70;
+		flex-direction: column;
+		align-items: stretch;
+		gap: 6px;
+		min-width: 230px;
+		padding: 12px;
+		background: var(--paper-hi);
+		border: 1px solid var(--rule-strong);
+		border-radius: 6px;
+		box-shadow: 0 16px 40px var(--shadow);
+	}
+	.beam-tools.is-open { display: flex; }
+	.beam-tools-cap {
+		display: block;
+		font-size: 11px;
+		letter-spacing: 0.16em;
+		color: var(--ink-3);
+	}
+	.beam-tools select { width: 100%; max-width: none; }
+
+	/* 章目抽屉：从左边滑进来，盖在稿子上 */
+	.rail {
+		position: fixed;
+		top: 0;
+		left: 0;
+		bottom: 0;
+		z-index: 60;
+		grid-area: auto;
+		flex-direction: column;
+		width: min(300px, 84vw);
+		max-height: none;
+		padding-top: var(--safe-t);
+		padding-bottom: var(--safe-b);
+		border-right: 1px solid var(--rule);
+		border-bottom: 0;
+		box-shadow: 12px 0 36px var(--shadow);
+		transform: translateX(-102%);
+		visibility: hidden;
+		transition: transform var(--wash), visibility var(--wash);
+	}
+	.desk.is-rail-open .rail { transform: none; visibility: visible; }
+	.rail-backdrop {
+		display: block;
+		position: fixed;
+		inset: 0;
+		z-index: 59;
+		border: 0;
+		padding: 0;
+		background: var(--backdrop);
+	}
+
+	/* 右案抽屉：不宽过一屏，可横向滑走 */
+	.desk-right {
+		width: min(100vw, 420px);
+		padding-bottom: var(--safe-b);
+		overscroll-behavior: contain;
+	}
+
+	/* 稿面：留白收紧，正文照旧可读 */
+	#view-manuscript {
+		--ms-pad-t: 18px;
+		--ms-pad-x: 16px;
+		--ms-pad-b: 88px;
+	}
+	.desk.is-focus #view-manuscript {
+		--ms-pad-t: 18px;
+		--ms-pad-x: 16px;
+		--ms-pad-b: 88px;
+	}
+	.ms-title { font-size: 23px; }
+	/* 朱丝栏的负边距不能超出留白，否则稿面会横向滚动 */
+	.ms-text::before { inset: -10px -12px; }
+	/* 操作条在手机上横向拖，不换行堆成一堵墙 */
+	#view-manuscript .actions-center {
+		justify-content: flex-start;
+		flex-wrap: nowrap;
+		overflow-x: auto;
+		-webkit-overflow-scrolling: touch;
+		scrollbar-width: none;
+	}
+	#view-manuscript .actions-center::-webkit-scrollbar { display: none; }
+
+	/* 弹层：手机上全屏，里头自己滚 */
+	.sheet {
+		width: 100vw;
+		max-width: 100vw;
+		max-height: 100vh;
+		max-height: 100dvh;
+		margin: 0;
+		border-radius: 0;
+		padding: 18px 16px calc(18px + var(--safe-b));
+	}
+	.sheet-wide,
+	.sheet-form,
+	.sheet-read,
+	.sheet-form.promote {
+		width: 100vw;
+		max-width: 100vw;
+		height: 100vh;
+		height: 100dvh;
+		max-height: 100vh;
+		max-height: 100dvh;
+		margin: 0;
+		border: 0;
+		border-radius: 0;
+		padding: 0;
+	}
+	.sheet-wide .settings-body { overflow-y: auto; }
+	.form-body { padding: 16px 14px 12px; }
+	.form-foot { padding-bottom: calc(14px + var(--safe-b)); }
+	.palette {
+		inset: 0;
+		width: 100vw;
+		max-width: 100vw;
+		height: 100vh;
+		height: 100dvh;
+		max-height: 100dvh;
+		margin: 0;
+		border-radius: 0;
+	}
+
+	/* 触摸：输入框不小于 16px，iOS 聚焦时才不会把整页放大。
+	   改稿框例外 —— 它跟着排版偏好走，手机上不低于 16px（见 app.js）。 */
+	input:not(.ms-edit),
+	textarea:not(.ms-edit),
+	select {
+		font-size: 16px !important;
+	}
+	.stream { padding: 20px 14px 10px; }
+	.bench-pane:not(.bench-talk) { padding: 0 14px 32px; }
+	.composer { padding: 12px 12px calc(12px + var(--safe-b)); }
+	.composer textarea { font-size: 16px; }
+	.bench-talk .composer { padding: 10px 12px calc(10px + var(--safe-b)); }
+	.bench-talk .composer textarea { font-size: 16px; }
+	.bench-talk .stream { padding: 16px 14px 8px; }
+
+	/* 提示：躲开 Home Indicator，左右也留出边 */
+	.toast-stack {
+		left: calc(10px + var(--safe-l));
+		right: calc(10px + var(--safe-r));
+		bottom: calc(12px + var(--safe-b));
+		transform: none;
+		align-items: stretch;
+	}
+	.toast { max-width: 100%; }
+}
+
+/* ── 触屏：hover 永不到达，动作要常显，动效要收 ─────────────── */
+@media (hover: none) {
+	/* 卡片不再浮起 —— 触屏上 :hover 会粘住，浮着的卡片看着像没点中 */
+	.card.mat.is-peek:hover,
+	.card.record:hover,
+	.card.mat:hover {
+		transform: none;
+		box-shadow: none;
+	}
+	/* 鼠标扫过的缓动在触屏上是白耗的电 */
+	.project-item,
+	.chapter-item,
+	.tab,
+	.btn,
+	.chip,
+	.card.mat,
+	.card.mat .mat-actions {
+		transition: none;
+	}
+	/* 焦点环在触屏上更要看得清 */
+	:focus-visible { outline-width: 3px; }
+}

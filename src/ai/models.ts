@@ -44,6 +44,7 @@ import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
 import type { FileCredentialStore } from "../config/credential-store.ts";
 import type { SettingsStore } from "../config/settings-store.ts";
 import type { ModelThinkingLevel, ProviderConfig, Settings } from "../config/settings.ts";
+import { isPlaceholderModel, type CostRates } from "../config/settings.ts";
 import { buildCustomProvider } from "./custom-provider.ts";
 
 export interface BuiltinProviderSpec {
@@ -225,6 +226,10 @@ export interface ModelSummary {
 	maxTokens: number;
 	reasoning: boolean;
 	thinkingLevels: ModelThinkingLevel[];
+	/** 上下文窗口与输出上限还是占位值，说明这个模型未经人工核对。 */
+	placeholder: boolean;
+	/** 每百万 token 的价格，缺失时为 0。 */
+	cost?: CostRates;
 }
 
 function summarize(model: Model<Api>, settings: Settings): ModelSummary {
@@ -241,6 +246,13 @@ function summarize(model: Model<Api>, settings: Settings): ModelSummary {
 		maxTokens: model.maxTokens,
 		reasoning: model.reasoning,
 		thinkingLevels: model.reasoning ? getSupportedThinkingLevels(model) : ["off"],
+		placeholder: isPlaceholderModel(model),
+		cost: {
+			input: model.cost?.input ?? 0,
+			output: model.cost?.output ?? 0,
+			cacheRead: model.cost?.cacheRead ?? 0,
+			cacheWrite: model.cost?.cacheWrite ?? 0,
+		},
 	};
 }
 

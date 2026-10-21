@@ -1,5 +1,11 @@
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
-import { emptyModel, type ApiFormat, type ModelConfig } from "../config/settings.ts";
+import {
+	emptyModel,
+	isPlaceholderContextWindow,
+	isPlaceholderMaxTokens,
+	type ApiFormat,
+	type ModelConfig,
+} from "../config/settings.ts";
 
 export interface FetchedModel {
 	id: string;
@@ -8,6 +14,14 @@ export interface FetchedModel {
 	contextWindow?: number;
 	maxTokens?: number;
 	reasoning?: boolean;
+}
+
+/** 从上游模型描述里挖出来的限制。 */
+export interface ModelLimits {
+	/** 输入上下文窗口（token）。 */
+	contextWindow?: number;
+	/** 单次回复的输出上限（token）。 */
+	maxTokens?: number;
 }
 
 export class ModelFetchError extends Error {
@@ -106,7 +120,96 @@ export async function fetchUpstreamModels(input: {
 	return models;
 }
 
-function parseModels(body: object, api: ApiFormat): FetchedModel[] {
+/**
+ * 上游限制字段的归一化名 → 归属。
+ *
+ * 键名先去掉下划线并转小写，所以 "max_input_tokens"、"maxInputTokens"、
+ * "Max-Input-Tokens" 都能落到同一个条目上。
+ */
+const LIMIT_KEYS: Record<string, keyof ModelLimits> = {
+	// 上下文窗口
+	inputtokenlimit: "contextWindow",
+	contextlength: "contextWindow",
+	maxinputtokens: "contextWindow",
+	contextwindow: "contextWindow",
+	maxcontextlength: "contextWindow",
+	contextwindowsize: "contextWindow",
+	// 输出上限
+	outputtokenlimit: "maxTokens",
+	maxoutputtokens: "maxTokens",
+	maxtokens: "maxTokens",
+	maxcompletiontokens: "maxTokens",
+	outputtokens: "maxTokens",
+};
+
+/** 有些厂商把限制包在这些子对象里。 */
+const NESTED_LIMIT_KEYS = ["limits", "capabilities", "model_info", "modelInfo", "details"];
+
+/** 归一化键名：去下划线 / 连字符并转小写。 */
+function normalizeLimitKey(key: string): string {
+	return key.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+/**
+ * 只接受正整数。
+ *
+ * 上游偶尔把数字写成字符串（"1048576"），这种照样收；
+ * 0、负数、小数与非数一律当作"没有报限制"，不猜。
+ */
+function toPositiveInt(value: unknown): number | undefined {
+	if (typeof value === "number") {
+		return Number.isInteger(value) && value > 0 ? value : undefined;
+	}
+	if (typeof value === "string") {
+		const trimmed = value.trim();
+		if (!/^\d+$/.test(trimmed)) return undefined;
+		const parsed = Number(trimmed);
+		return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+	}
+	return undefined;
+}
+
+/**
+ * 从上游返回的单个模型描述里尽力挖出上下文窗口与输出上限。
+ *
+ * 各家厂商的字段名不统一：Google 用 inputTokenLimit / outputTokenLimit，
+ * OpenRouter 用 context_length，有些自建服务用 max_input_tokens / max_output_tokens，
+ * 还有些把限制塞进 limits 之类的子对象。这里把常见键名都认一遍，
+ * 认不出来就留空 —— 留空时模型维持占位值，等用户人工核对。
+ */
+export function extractLimits(raw: unknown, api: ApiFormat): ModelLimits {
+	const limits: ModelLimits = {};
+	if (!raw || typeof raw !== "object") return limits;
+	const item = raw as Record<string, unknown>;
+
+	const scan = (source: Record<string, unknown>): void => {
+		for (const [key, value] of Object.entries(source)) {
+			const field = LIMIT_KEYS[normalizeLimitKey(key)];
+			if (!field || limits[field] !== undefined) continue;
+			const parsed = toPositiveInt(value);
+			if (parsed === undefined) continue;
+			limits[field] = parsed;
+		}
+	};
+
+	// Google 的字段名最权威，先读它，免得被别的通用键名抢走。
+	if (api === "google-generative-ai") {
+		const input = toPositiveInt(item.inputTokenLimit);
+		if (input !== undefined) limits.contextWindow = input;
+		const output = toPositiveInt(item.outputTokenLimit);
+		if (output !== undefined) limits.maxTokens = output;
+	}
+
+	scan(item);
+	for (const key of NESTED_LIMIT_KEYS) {
+		const nested = item[key];
+		if (nested && typeof nested === "object") scan(nested as Record<string, unknown>);
+	}
+	return limits;
+}
+
+/** 把上游描述转成候选模型。 */
+export function parseModels(body: object, api: ApiFormat): FetchedModel[] {
 	// Google: { models: [{ name: "models/x", displayName, inputTokenLimit, outputTokenLimit, supportedGenerationMethods }] }
 	if (api === "google-generative-ai") {
 		const list = (body as { models?: unknown[] }).models;
@@ -116,40 +219,68 @@ function parseModels(body: object, api: ApiFormat): FetchedModel[] {
 			const item = raw as Record<string, unknown>;
 			const id = String(item.name ?? "").replace(/^models\//, "");
 			if (!id) continue;
+			const limits = extractLimits(item, api);
 			const model: FetchedModel = { id, name: String(item.displayName ?? id) };
-			if (typeof item.inputTokenLimit === "number") model.contextWindow = item.inputTokenLimit;
-			if (typeof item.outputTokenLimit === "number") model.maxTokens = item.outputTokenLimit;
+			if (limits.contextWindow !== undefined) model.contextWindow = limits.contextWindow;
+			if (limits.maxTokens !== undefined) model.maxTokens = limits.maxTokens;
 			models.push(model);
 		}
 		return models;
 	}
 
-	// OpenAI 兼容与 Anthropic 都是 { data: [{ id, display_name? }] }
-	const list = (body as { data?: unknown[] }).data;
-	if (!Array.isArray(list)) return [];
+	// OpenAI 兼容与 Anthropic 都是 { data: [{ id, display_name? }] }，
+	// 但也有自建服务直接回 { models: [...] }，两种都认。
+	const list = (body as { data?: unknown[]; models?: unknown[] }).data;
+	const rows = Array.isArray(list) ? list : (body as { models?: unknown[] }).models;
+	if (!Array.isArray(rows)) return [];
 	const models: FetchedModel[] = [];
-	for (const raw of list) {
+	for (const raw of rows) {
 		const item = raw as Record<string, unknown>;
 		const id = String(item.id ?? "");
 		if (!id) continue;
-		models.push({ id, name: String(item.display_name ?? item.name ?? id) });
+		const limits = extractLimits(item, api);
+		const model: FetchedModel = { id, name: String(item.display_name ?? item.name ?? id) };
+		if (limits.contextWindow !== undefined) model.contextWindow = limits.contextWindow;
+		if (limits.maxTokens !== undefined) model.maxTokens = limits.maxTokens;
+		models.push(model);
 	}
 	return models;
 }
 
-/** 保留已有配置，新模型补默认值，已不在上游列表的保留但标记。 */
+/**
+ * 合并上游拉到的模型与本地配置。
+ *
+ * - 新模型：按上游给的限制建档，没有就留占位值（前端标「待核对」）。
+ * - 已有模型：原样保留；若某一项还是占位值，而这次上游报了该项的限制，就回填它。
+ *   用户手工填过的值绝不覆盖 —— 那是他们核对后的数字，比上游的更可信。
+ */
 export function mergeFetched(existing: ModelConfig[], fetched: FetchedModel[]): {
 	models: ModelConfig[];
 	added: string[];
+	backfilled: string[];
 } {
 	const byId = new Map(existing.map((model) => [model.id, model]));
 	const added: string[] = [];
+	const backfilled: string[] = [];
 	const models: ModelConfig[] = [];
 
 	for (const item of fetched) {
 		const previous = byId.get(item.id);
 		if (previous) {
-			models.push(previous);
+			// 逐项回填：只动仍是占位的那一项。
+			const patch: Partial<ModelConfig> = {};
+			if (item.contextWindow !== undefined && isPlaceholderContextWindow(previous.contextWindow)) {
+				patch.contextWindow = item.contextWindow;
+			}
+			if (item.maxTokens !== undefined && isPlaceholderMaxTokens(previous.maxTokens)) {
+				patch.maxTokens = item.maxTokens;
+			}
+			if (patch.contextWindow !== undefined || patch.maxTokens !== undefined) {
+				models.push({ ...previous, ...patch });
+				backfilled.push(item.id);
+			} else {
+				models.push(previous);
+			}
 			byId.delete(item.id);
 			continue;
 		}
@@ -165,7 +296,7 @@ export function mergeFetched(existing: ModelConfig[], fetched: FetchedModel[]): 
 	// 上游已删除的模型保留配置，避免意外丢失用户手填的上下文限制。
 	models.push(...byId.values());
 
-	return { models, added };
+	return { models, added, backfilled };
 }
 
 /** 一个模型是否声称支持思考。 */

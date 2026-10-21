@@ -1,0 +1,527 @@
+/* ══════════════════════════════════════════════════════════════
+   墨耕 · 设置页专属样式
+   模型区：检索 + 卡片行 + 批量 + 思考档位 chip
+   全部依赖 style.css 已有的水墨变量，暗色主题自动跟随。
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── 默认模型区（搜索 / 联动提示 / 成本粗估）────────────────── */
+
+.settings-defaults {
+	flex-wrap: wrap;
+	row-gap: 4px;
+}
+
+.default-extra {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	min-width: 0;
+	flex: 1 1 260px;
+}
+
+.default-search {
+	display: flex;
+}
+
+.default-search-input {
+	width: 100%;
+	max-width: none;
+	font-size: 12.5px;
+	padding: 6px 9px;
+}
+
+.default-search-input::-webkit-search-cancel-button {
+	cursor: pointer;
+}
+
+.default-hint {
+	margin: 0;
+	font-size: 11.5px;
+	line-height: 1.7;
+	color: var(--ink-3);
+}
+
+.default-hint.is-warn {
+	color: var(--cinnabar);
+}
+
+.default-cost {
+	margin: 0;
+	font-size: 11.5px;
+	line-height: 1.7;
+	color: var(--ink-4);
+	font-family: var(--kai);
+}
+
+/* ── 模型区外壳 ──────────────────────────────────────────── */
+
+.model-zone {
+	margin-top: 18px;
+	padding-top: 14px;
+	border-top: 1px solid var(--rule);
+}
+
+.model-zone-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px 14px;
+	margin-bottom: 10px;
+}
+
+.model-zone-head .detail-h {
+	margin: 0;
+	flex: none;
+}
+
+.model-search-wrap {
+	flex: 1 1 220px;
+	min-width: 0;
+	display: flex;
+}
+
+.model-search {
+	width: 100%;
+	max-width: none;
+	font-size: 12.5px;
+	padding: 6px 9px;
+}
+
+.model-search::-webkit-search-cancel-button {
+	cursor: pointer;
+}
+
+.model-stats {
+	flex: none;
+	font-size: 11.5px;
+	color: var(--ink-3);
+	letter-spacing: 0.04em;
+	white-space: nowrap;
+}
+
+/* 「待核对」是常驻说明，不是可点开的提示条。 */
+.model-note {
+	cursor: default;
+	font-size: 11.5px;
+	line-height: 1.8;
+	margin: 0 0 12px;
+}
+
+/* ── 工具条与批量 ─────────────────────────────────────────── */
+
+.model-toolbar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px 12px;
+	margin-bottom: 12px;
+}
+
+.model-pick-all {
+	display: inline-flex;
+	align-items: center;
+	gap: 7px;
+	font-size: 12.5px;
+	color: var(--ink-2);
+	cursor: pointer;
+	user-select: none;
+}
+
+.model-pick-all input {
+	width: 16px;
+	height: 16px;
+	margin: 0;
+	accent-color: var(--cinnabar);
+}
+
+.model-selected-count {
+	font-size: 11.5px;
+	color: var(--ink-3);
+	min-width: 52px;
+}
+
+.model-batch-panel {
+	margin: 0 0 14px;
+	padding: 12px 14px;
+	border: 1px solid var(--rule);
+	border-radius: 6px;
+	background: var(--lift-2);
+}
+
+/* 批量面板收起时这个容器是空的，别占位。 */
+.model-batch-host:empty {
+	display: none;
+}
+
+.batch-title {
+	font-family: var(--kai);
+	font-size: 12.5px;
+	color: var(--ink-2);
+	letter-spacing: 0.06em;
+	margin-bottom: 10px;
+}
+
+.model-batch-form {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+	gap: 10px 14px;
+	align-items: start;
+}
+
+.model-batch-form .model-field-wide {
+	grid-column: 1 / -1;
+}
+
+.model-batch-panel .actions {
+	margin: 12px 0 0;
+}
+
+/* ── 卡片行 ───────────────────────────────────────────────── */
+
+.model-list {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+.model-card {
+	border: 1px solid var(--rule);
+	border-radius: 6px;
+	background: var(--paper-hi);
+	padding: 11px 13px 9px;
+}
+
+.model-card.is-default {
+	border-color: var(--cinnabar-edge);
+	box-shadow: inset 3px 0 0 var(--cinnabar);
+}
+
+.model-card-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px 9px;
+	margin-bottom: 9px;
+}
+
+.model-pick {
+	display: inline-flex;
+	align-items: center;
+	cursor: pointer;
+}
+
+.model-check {
+	width: 16px;
+	height: 16px;
+	margin: 0;
+	accent-color: var(--cinnabar);
+	cursor: pointer;
+}
+
+.model-card-title {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 8px;
+	min-width: 0;
+	flex: 1 1 auto;
+}
+
+.model-name {
+	font-family: var(--kai);
+	font-size: 14px;
+	font-weight: 600;
+	color: var(--ink);
+	letter-spacing: 0.04em;
+	word-break: break-word;
+}
+
+.model-id {
+	font-family: var(--mono);
+	font-size: 11px;
+	color: var(--ink-4);
+	background: var(--paper-sunk);
+	border-radius: 3px;
+	padding: 1px 6px;
+	word-break: break-all;
+}
+
+.model-badge {
+	font-size: 10.5px;
+	line-height: 1.6;
+	padding: 1px 7px;
+	border-radius: 999px;
+	border: 1px solid var(--rule);
+	color: var(--ink-3);
+	white-space: nowrap;
+}
+
+.model-badge.is-warn {
+	color: var(--cinnabar);
+	border-color: var(--cinnabar-edge);
+	background: var(--cinnabar-soft);
+}
+
+.model-badge.is-ok {
+	color: var(--moss);
+	border-color: var(--moss-edge);
+	background: var(--moss-wash);
+}
+
+.model-badge.is-off {
+	color: var(--ink-4);
+	border-style: dashed;
+}
+
+.model-card-body {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+	gap: 10px 14px;
+	align-items: start;
+}
+
+.model-field {
+	margin-bottom: 0;
+	min-width: 0;
+}
+
+/* 成本那一栏没有单一控件可指，标签用 span，样式照抄 .field > label。 */
+.model-field-label {
+	display: block;
+	font-size: 11.5px;
+	color: var(--ink-3);
+	letter-spacing: 0.08em;
+	margin-bottom: 5px;
+}
+
+.model-field-wide {
+	grid-column: 1 / -1;
+}
+
+.model-value {
+	font-size: 12.5px;
+	color: var(--ink-2);
+	padding: 6px 0;
+	word-break: break-word;
+}
+
+.model-id-input {
+	font-family: var(--mono);
+	font-size: 12px;
+}
+
+.model-num {
+	width: 100%;
+	max-width: none;
+	min-width: 0;
+	font-variant-numeric: tabular-nums;
+}
+
+/* 仍是占位值的输入框：加一道虚线，提示需要人工核对。 */
+.model-num.is-placeholder {
+	border-style: dashed;
+	color: var(--ink-3);
+	background: transparent;
+}
+
+.model-num.is-placeholder:focus {
+	border-style: solid;
+}
+
+.model-cost-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px 10px;
+}
+
+.model-cost-num {
+	flex: 1 1 90px;
+	width: auto;
+}
+
+.model-think-line {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px 14px;
+}
+
+.model-reason-label {
+	display: inline-flex;
+	align-items: center;
+	gap: 7px;
+	font-size: 12.5px;
+	color: var(--ink-2);
+	cursor: pointer;
+	user-select: none;
+}
+
+.model-reason {
+	width: 16px;
+	height: 16px;
+	margin: 0;
+	accent-color: var(--cinnabar);
+	cursor: pointer;
+}
+
+.model-card-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: 10px;
+	padding-top: 9px;
+	border-top: 1px dashed var(--rule-soft);
+}
+
+/* ── 思考档位 chip ────────────────────────────────────────── */
+
+.level-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	align-items: center;
+}
+
+.level-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 4px 9px;
+	border: 1px solid var(--rule);
+	border-radius: 999px;
+	background: var(--paper);
+	font-size: 12px;
+	color: var(--ink-3);
+	cursor: pointer;
+	user-select: none;
+	transition: border-color var(--wash), background var(--wash), color var(--wash);
+}
+
+.level-chip:hover {
+	border-color: var(--rule-strong);
+	color: var(--ink-2);
+}
+
+.level-chip input {
+	width: 14px;
+	height: 14px;
+	margin: 0;
+	accent-color: var(--cinnabar);
+	cursor: pointer;
+}
+
+.level-chip .level-text {
+	font-family: var(--kai);
+	letter-spacing: 0.04em;
+}
+
+.level-chip .level-code {
+	font-family: var(--mono);
+	font-size: 10px;
+	color: var(--ink-4);
+}
+
+.level-chip.is-on {
+	border-color: var(--cinnabar-edge);
+	background: var(--cinnabar-wash);
+	color: var(--ink);
+}
+
+.level-chip.is-on .level-code {
+	color: var(--cinnabar);
+}
+
+.level-chip.is-locked {
+	cursor: default;
+	border-style: dashed;
+	background: var(--paper-lo);
+	color: var(--ink-4);
+}
+
+.level-chip.is-locked:hover {
+	border-color: var(--rule);
+	color: var(--ink-4);
+}
+
+.level-note {
+	font-size: 11px;
+	color: var(--ink-4);
+}
+
+/* ── 窄屏：不许出现横向滚动条 ──────────────────────────────── */
+
+@media (max-width: 900px) {
+	/* style.css 在窄屏把供应商栏整个藏了 —— 那样手机上换不了供应商，模型区也就走不到。
+	   这里只在设置对话框里把它放回来，限高可滚，不喧宾夺主。 */
+	.settings-body .providers-rail {
+		display: flex;
+		max-height: 148px;
+		border-right: 0;
+		border-bottom: 1px solid var(--rule);
+	}
+
+	.model-card-body,
+	.model-batch-form {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.model-zone-head {
+		align-items: stretch;
+		flex-direction: column;
+		gap: 8px;
+	}
+
+	.model-stats {
+		white-space: normal;
+	}
+
+	/* 窄屏上 26px 的内边距太奢侈，纸面本来就窄。 */
+	.settings-detail {
+		padding: 16px 14px;
+	}
+
+	.settings-defaults {
+		padding: 12px 14px;
+		gap: 12px 16px;
+	}
+
+	.model-toolbar .btn,
+	.model-card-actions .btn {
+		flex: 1 1 auto;
+	}
+
+	/* iOS 上字号小于 16px 的输入框会触发页面自动缩放，视线整个跑掉。 */
+	.model-num,
+	.model-id-input,
+	.default-search-input,
+	.model-search {
+		font-size: 16px;
+	}
+}
+
+/* ── 触控：点得中的尺寸 ────────────────────────────────────── */
+
+@media (pointer: coarse) {
+	.model-toolbar .btn,
+	.model-card-actions .btn,
+	.model-batch-panel .btn {
+		min-height: 40px;
+		padding: 8px 14px;
+	}
+
+	.level-chip {
+		min-height: 40px;
+		padding: 8px 12px;
+	}
+
+	.model-check,
+	.model-reason {
+		width: 20px;
+		height: 20px;
+	}
+
+	.model-pick,
+	.model-reason-label {
+		min-height: 40px;
+	}
+}

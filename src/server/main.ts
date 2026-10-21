@@ -37,10 +37,12 @@ import {
 	DEFAULT_CONTEXT_WINDOW,
 	DEFAULT_MAX_TOKENS,
 	emptyModel,
+	isPlaceholderModel,
 	normalizeSettings,
 	THINKING_LEVELS,
 	type ApiFormat,
 	type ModelConfig,
+	type ModelThinkingLevel,
 	type ProviderConfig,
 	type Settings,
 } from "../config/settings.ts";
@@ -427,6 +429,22 @@ function slugify(label: string): string {
 	return slug || `custom-${Date.now().toString(36)}`;
 }
 
+/** token 上限必须是正整数：0、负数、小数与非数都不接受。 */
+function isPositiveInt(value: unknown): value is number {
+	return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
+/** 两个模型的可调参数是否一致（用于判断这次批量更新有没有真的改到东西）。 */
+function sameModelParams(a: ModelConfig, b: ModelConfig): boolean {
+	return (
+		a.contextWindow === b.contextWindow &&
+		a.maxTokens === b.maxTokens &&
+		a.reasoning === b.reasoning &&
+		a.thinkingLevels.length === b.thinkingLevels.length &&
+		a.thinkingLevels.every((level, index) => level === b.thinkingLevels[index])
+	);
+}
+
 /**
  * 把作品铺成可以带走的纯文本。
  *
@@ -481,13 +499,26 @@ async function statusOf(id: string) {
 function resolveDefaultModel(requested?: string): string {
 	return requested?.trim() || settingsStore.get().defaultModel.trim() || config.defaultModel;
 }
+/**
+ * 供应商视图：给每个模型补上 placeholder 标记。
+ *
+ * 上下文窗口与输出上限还停在占位值上，说明这个模型没被人核对过。
+ * 设置页据此打「待核对」徽标；这是只读视图，落盘的配置本身不带这个字段。
+ */
+function providerView(provider: ProviderConfig) {
+	return {
+		...provider,
+		models: provider.models.map((model) => ({ ...model, placeholder: isPlaceholderModel(model) })),
+	};
+}
+
 /** 设置页需要的完整视图：配置、运行时状态、内置厂商目录。 */
 async function settingsView() {
 	const settings = settingsStore.get();
 	return {
 		defaultModel: settings.defaultModel,
 		defaultThinkingLevel: settings.defaultThinkingLevel,
-		providers: settings.providers,
+		providers: settings.providers.map((provider) => providerView(provider)),
 		statuses: await listProviderStatus(),
 		defaults: { contextWindow: DEFAULT_CONTEXT_WINDOW, maxTokens: DEFAULT_MAX_TOKENS },
 		builtinCatalog: BUILTIN_PROVIDERS.map((spec) => ({
@@ -1284,7 +1315,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		});
 		if (body.apiKey?.trim()) await credentialStore.setKey(id, body.apiKey);
 		rebuildModels();
-		return json(res, 201, { provider: created, status: await statusOf(created.id) });
+		return json(res, 201, { provider: providerView(created), status: await statusOf(created.id) });
 	}
 
 	const providerMatch = pathname.match(/^\/api\/providers\/([\w-]+)$/);
@@ -1308,7 +1339,10 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		});
 		if (typeof body.apiKey === "string") await credentialStore.setKey(provider.id, body.apiKey);
 		rebuildModels();
-		return json(res, 200, { provider: settingsStore.getProvider(provider.id), status: await statusOf(provider.id) });
+		return json(res, 200, {
+			provider: providerView(settingsStore.getProvider(provider.id)!),
+			status: await statusOf(provider.id),
+		});
 	}
 
 	// 清除已保存的 key
@@ -1338,14 +1372,16 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 			apiKey,
 			noAuthRequired: provider.noAuthRequired === true,
 		});
-			const { models, added } = mergeFetched(provider.models, fetched);
+			const { models, added, backfilled } = mergeFetched(provider.models, fetched);
 			settingsStore.upsertProvider({ ...provider, models });
 			rebuildModels();
 			return json(res, 200, {
-				provider: settingsStore.getProvider(provider.id),
+				provider: providerView(settingsStore.getProvider(provider.id)!),
 				fetched: fetched.length,
 				added: added.length,
 				addedIds: added,
+				// 这次从上游回填了限制的模型（原先还是占位值的那几项）。
+				backfilled,
 			});
 		} catch (error) {
 			const status = (error as { status?: number }).status;
@@ -1361,14 +1397,107 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		const body = await readJsonBody<Partial<ModelConfig> & { id?: string }>(req);
 		const id = body.id?.trim();
 		if (!id) return json(res, 400, { error: "缺少模型 id" });
-		const normalized = normalizeSettings({ providers: [{ ...provider, models: [{ ...emptyModel(id), ...body } as ModelConfig] }] })
-			.providers[0]!.models[0]!;
+		// 覆盖已有模型时以原配置打底：只改请求里出现的字段，
+		// 剩下的（cost、thinkingLevels 等）不能因为这次只提交了一个字段就被抹成默认值。
+		const existing = provider.models.find((model) => model.id === id);
+		const base = existing ?? emptyModel(id);
+		const normalized = normalizeSettings({
+			providers: [{ ...provider, models: [{ ...base, ...body, id } as ModelConfig] }],
+		}).providers[0]!.models[0]!;
 		const models = provider.models.some((model) => model.id === id)
 			? provider.models.map((model) => (model.id === id ? normalized : model))
 			: [...provider.models, normalized];
 		settingsStore.upsertProvider({ ...provider, models });
 		rebuildModels();
-		return json(res, 200, { provider: settingsStore.getProvider(provider.id) });
+		return json(res, 200, { provider: providerView(settingsStore.getProvider(provider.id)!) });
+	}
+
+	// 批量更新模型参数：设置页的"统一改上下文窗口 / 输出上限 / 思考档位"。
+	const patchModelsMatch = pathname.match(/^\/api\/providers\/([\w-]+)\/models$/);
+	if (patchModelsMatch && req.method === "PATCH") {
+		const provider = settingsStore.getProvider(patchModelsMatch[1]!);
+		if (!provider) return json(res, 404, { error: "供应商不存在" });
+		const body = await readJsonBody<{
+			ids?: unknown;
+			contextWindow?: unknown;
+			maxTokens?: unknown;
+			reasoning?: unknown;
+			thinkingLevels?: unknown;
+		}>(req);
+
+		// ids 缺省或为空数组 = 该供应商的全部模型。
+		if (body.ids !== undefined && !Array.isArray(body.ids)) {
+			return json(res, 400, { error: "ids 必须是字符串数组" });
+		}
+		const ids = Array.isArray(body.ids)
+			? body.ids
+					.filter((id): id is string => typeof id === "string")
+					.map((id) => id.trim())
+					.filter((id) => id !== "")
+			: [];
+
+		if (body.contextWindow !== undefined && !isPositiveInt(body.contextWindow)) {
+			return json(res, 400, { error: "contextWindow 必须是正整数" });
+		}
+		if (body.maxTokens !== undefined && !isPositiveInt(body.maxTokens)) {
+			return json(res, 400, { error: "maxTokens 必须是正整数" });
+		}
+		if (body.reasoning !== undefined && typeof body.reasoning !== "boolean") {
+			return json(res, 400, { error: "reasoning 必须是布尔值" });
+		}
+		let levels: ModelThinkingLevel[] | undefined;
+		if (body.thinkingLevels !== undefined) {
+			if (
+				!Array.isArray(body.thinkingLevels) ||
+				body.thinkingLevels.some((level) => !THINKING_LEVELS.includes(level as ModelThinkingLevel))
+			) {
+				return json(res, 400, { error: "thinkingLevels 含有非法档位" });
+			}
+			levels = body.thinkingLevels as ModelThinkingLevel[];
+		}
+		if (body.contextWindow === undefined && body.maxTokens === undefined && body.reasoning === undefined && !levels) {
+			return json(res, 400, { error: "没有需要更新的字段" });
+		}
+
+		// 开思考时若档位全是 "off"，退回该模型原有的非 off 档位；再没有就用全部非 off 档位。
+		const allNonOffLevels = THINKING_LEVELS.filter((level) => level !== "off");
+		const updated: string[] = [];
+		const models = provider.models.map((model) => {
+			if (ids.length > 0 && !ids.includes(model.id)) return model;
+			const next: ModelConfig = { ...model, cost: { ...model.cost }, thinkingLevels: [...model.thinkingLevels] };
+			if (body.contextWindow !== undefined) next.contextWindow = body.contextWindow as number;
+			if (body.maxTokens !== undefined) next.maxTokens = body.maxTokens as number;
+			if (typeof body.reasoning === "boolean") {
+				next.reasoning = body.reasoning;
+				if (!body.reasoning) {
+					// 关思考就不该留档位：模型会照着 thinkingLevelMap 发 effort。
+					next.thinkingLevels = ["off"];
+				} else if (levels) {
+					const nonOff = levels.filter((level) => level !== "off");
+					if (nonOff.length > 0) {
+						next.thinkingLevels = [...levels];
+					} else {
+						const own = model.thinkingLevels.filter((level) => level !== "off");
+						next.thinkingLevels = own.length > 0 ? own : [...allNonOffLevels];
+					}
+				}
+			} else if (levels) {
+				next.thinkingLevels = [...levels];
+			}
+			if (sameModelParams(model, next)) return model;
+			updated.push(model.id);
+			return next;
+		});
+
+		// 走与单个模型保存相同的落盘路径：settings store 持久化 + 重建模型运行时。
+		// 再过一遍 normalizeSettings，保证 cost 四个字段、thinkingLevels 档位等不变量照旧成立。
+		const normalizedModels = normalizeSettings({ providers: [{ ...provider, models }] }).providers[0]!.models;
+		settingsStore.upsertProvider({ ...provider, models: normalizedModels });
+		rebuildModels();
+		return json(res, 200, {
+			updated,
+			provider: providerView(settingsStore.getProvider(provider.id)!),
+		});
 	}
 
 	const modelItemMatch = pathname.match(/^\/api\/providers\/([\w-]+)\/models\/([^/]+)$/);
@@ -1378,7 +1507,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		const modelId = decodeURIComponent(modelItemMatch[2]!);
 		settingsStore.upsertProvider({ ...provider, models: provider.models.filter((model) => model.id !== modelId) });
 		rebuildModels();
-		return json(res, 200, { provider: settingsStore.getProvider(provider.id) });
+		return json(res, 200, { provider: providerView(settingsStore.getProvider(provider.id)!) });
 	}
 
 	// 落盘健康状况：前端据此提示"这一稿可能没存上"，而不是让用户以为存成功了。

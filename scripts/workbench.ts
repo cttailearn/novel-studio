@@ -944,6 +944,8 @@ try {
 		"--serif", "--kai", "--sans", "--mono", "--song", "--noise", "--wash",
 		// 排版三件套（字号/行距/版心）是全局设置，不随昼夜变化，故不要求在暗色块里重复。
 		"--ms-font-size", "--ms-line-height", "--ms-measure",
+		// 移动端度量同理：安全区（刘海/Home Indicator）与最小触控目标由设备决定，与主题无关。
+		"--safe-t", "--safe-b", "--safe-l", "--safe-r", "--tap",
 	]);
 	const uncovered = [...lightNames].filter((n) => !darkNames.has(n) && !themeInvariant.has(n));
 	check("会变色的令牌暗色都有覆盖", uncovered.length === 0, uncovered.join(" "));

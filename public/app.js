@@ -265,6 +265,94 @@ function statsLine() {
 	);
 }
 
+// ═══════════════════════════════════════════════════ 窄屏：章目抽屉与顶栏浮层
+
+/*
+ * 手机上顶栏放不下一排控件，章目也占掉半屏首屏。
+ * 这里给窄屏补两样东西：顶栏的「笔」浮层（模型与档位）与左边的「章目」抽屉。
+ * 桌面端（>640px）这两样都不出现，行为与从前完全一样。
+ */
+const PHONE_QUERY = "(max-width: 640px)";
+const phoneQuery = typeof window.matchMedia === "function" ? window.matchMedia(PHONE_QUERY) : null;
+
+/** 现在是不是手机宽度。宽高都不问，只问宽 —— 竖屏手机的瓶颈是宽。 */
+function isPhoneLayout() {
+	return Boolean(phoneQuery?.matches);
+}
+
+function openRailDrawer() {
+	const desk = document.querySelector(".desk");
+	if (!desk) return;
+	// 两个抽屉不同时开：右案盖着，章目就进不去了。
+	closeBibleDrawer();
+	desk.classList.add("is-rail-open");
+	$("rail-backdrop")?.classList.remove("hidden");
+	$("toggle-rail")?.setAttribute("aria-expanded", "true");
+}
+
+function closeRailDrawer() {
+	const desk = document.querySelector(".desk");
+	if (!desk) return;
+	desk.classList.remove("is-rail-open");
+	$("rail-backdrop")?.classList.add("hidden");
+	$("toggle-rail")?.setAttribute("aria-expanded", "false");
+}
+
+function toggleRailDrawer() {
+	if (document.querySelector(".desk")?.classList.contains("is-rail-open")) closeRailDrawer();
+	else openRailDrawer();
+}
+
+/** 顶栏的模型与档位浮层。手机上点「笔」落下，点外面收起。 */
+function toggleToolsPanel(force) {
+	const panel = $("beam-tools");
+	if (!panel) return;
+	const open = force === undefined ? !panel.classList.contains("is-open") : Boolean(force);
+	panel.classList.toggle("is-open", open);
+	$("toggle-tools")?.setAttribute("aria-expanded", open ? "true" : "false");
+}
+
+function closeToolsPanel() {
+	toggleToolsPanel(false);
+}
+
+/**
+ * 横向一划就收起抽屉。
+ * 竖着划是滚动，斜着划是乱划，只有几乎纯横向的一划才当作「走开」。
+ */
+function bindSwipeOut(element, onSwipeOut) {
+	if (!element) return;
+	let startX = 0;
+	let startY = 0;
+	let tracking = false;
+	element.addEventListener(
+		"touchstart",
+		(event) => {
+			if (event.touches.length !== 1) {
+				tracking = false;
+				return;
+			}
+			startX = event.touches[0].clientX;
+			startY = event.touches[0].clientY;
+			tracking = true;
+		},
+		{ passive: true },
+	);
+	element.addEventListener(
+		"touchend",
+		(event) => {
+			if (!tracking) return;
+			tracking = false;
+			const touch = event.changedTouches[0];
+			if (!touch) return;
+			const dx = touch.clientX - startX;
+			const dy = touch.clientY - startY;
+			if (Math.abs(dx) > 64 && Math.abs(dx) > Math.abs(dy) * 1.6) onSwipeOut(dx);
+		},
+		{ passive: true },
+	);
+}
+
 // ═══════════════════════════════════════════════════ 排版与专注
 
 const TYPE_KEY = "novel-studio/typography";
@@ -290,7 +378,9 @@ function loadTypography() {
 
 function applyTypography() {
 	const style = document.documentElement.style;
-	style.setProperty("--ms-font-size", state.typography.size + "px");
+	// 手机上正文不小于 16px：再小，iOS 一点就自己放大，视线整个跑掉。
+	const size = isPhoneLayout() ? Math.max(16, state.typography.size) : state.typography.size;
+	style.setProperty("--ms-font-size", size + "px");
 	style.setProperty("--ms-line-height", String(state.typography.line));
 	style.setProperty("--ms-measure", state.typography.measure + "em");
 }
@@ -367,6 +457,9 @@ function currentTheme() {
 
 function applyTheme(theme) {
 	document.documentElement.dataset.theme = theme;
+	// 手机地址栏那条色也跟着昼夜走：暗色里留一条白边，太扎眼。
+	const meta = document.querySelector('meta[name="theme-color"]:not([media])');
+	if (meta) meta.setAttribute("content", theme === "dark" ? "#17150f" : "#efe8d9");
 	// 换主题时整块重绘：渐变、混入模式与合成层都要按新底色重来。
 	document.body.style.transition = "none";
 	void document.body.offsetHeight; // 强制回流，丢掉过渡的起点状态
@@ -723,6 +816,11 @@ function openChapterNow(chapterId) {
 	switchViewNow("manuscript");
 	renderChapters();
 	$("view-manuscript").scrollTop = 0;
+	// 手机上章目与右案都是盖在稿子上的浮层，选完就该收起来。
+	if (isPhoneLayout()) {
+		closeRailDrawer();
+		closeBibleDrawer();
+	}
 }
 
 // ═══════════════════════════════════════════════════ 案 · 卷宗与素材库
@@ -3340,6 +3438,8 @@ function openBibleDrawer() {
 	document.querySelector(".desk")?.classList.add("is-bible-open");
 	$("bible-backdrop").classList.remove("hidden");
 	$("toggle-bible")?.setAttribute("aria-expanded", "true");
+	// 章目与右案不同时开：手机上两层盖在一起，谁也点不着。
+	closeRailDrawer();
 }
 
 function closeBibleDrawer() {
@@ -3531,8 +3631,16 @@ document.addEventListener("keydown", (event) => {
 		openShortcutsDialog();
 	}
 	if (event.key === "Escape" && !document.querySelector("dialog[open]")) {
+		if (document.querySelector(".desk.is-rail-open")) {
+			closeRailDrawer();
+			return;
+		}
 		if (document.querySelector(".desk.is-bible-open")) {
 			closeBibleDrawer();
+			return;
+		}
+		if ($("beam-tools")?.classList.contains("is-open")) {
+			closeToolsPanel();
 			return;
 		}
 		if (state.focusMode) setFocusMode(false);
@@ -3645,6 +3753,8 @@ libraryPane.addEventListener("drop", (event) => {
 $("model-select").addEventListener("change", () => {
 	// 换笔即换档位范围：先按新模型收窄，再把收窄后的值发给会话。
 	renderThinkingLevels();
+	// 手机上这块在浮层里，选完就收，别挡住稿子。
+	closeToolsPanel();
 	for (const sessionId of state.sessions.values()) {
 		fetch("/api/sessions/" + sessionId + "/model", {
 			method: "POST",
@@ -3834,6 +3944,43 @@ $("toggle-bible").addEventListener("click", () => {
 });
 $("close-bible").addEventListener("click", () => closeBibleDrawer());
 $("bible-backdrop").addEventListener("click", () => closeBibleDrawer());
+
+// ── 窄屏：章目抽屉与顶栏浮层
+
+$("toggle-rail")?.addEventListener("click", toggleRailDrawer);
+$("close-rail")?.addEventListener("click", closeRailDrawer);
+$("rail-backdrop")?.addEventListener("click", closeRailDrawer);
+$("toggle-tools")?.addEventListener("click", () => toggleToolsPanel());
+
+// 点浮层外面就收起 —— 手机上没有 hover，点别处就是「不看了」。
+document.addEventListener("click", (event) => {
+	const panel = $("beam-tools");
+	if (!panel || !panel.classList.contains("is-open")) return;
+	if (event.target instanceof Element && event.target.closest("#beam-tools, #toggle-tools")) return;
+	closeToolsPanel();
+});
+
+// 一划就走：右案往右划，章目往左划。
+bindSwipeOut($("desk-right"), (dx) => {
+	if (dx > 0) closeBibleDrawer();
+});
+bindSwipeOut($("rail"), (dx) => {
+	if (dx < 0) closeRailDrawer();
+});
+
+// 宽窄一变，手机上那套浮层就该收起来：桌面端没有抽屉，敞着会留一层遮罩。
+if (phoneQuery) {
+	const onWidthChange = () => {
+		if (!isPhoneLayout()) {
+			closeRailDrawer();
+			closeToolsPanel();
+		}
+		// 手机上正文不小于 16px，宽窄变了要重算一次。
+		applyTypography();
+	};
+	if (typeof phoneQuery.addEventListener === "function") phoneQuery.addEventListener("change", onWidthChange);
+	else phoneQuery.addListener(onWidthChange);
+}
 
 // ── 文件拖放兜底
 // 文件落到聊天栏或页面空白处，浏览器会直接打开它，未存的稿子一起没。

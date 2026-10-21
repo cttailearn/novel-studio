@@ -2,6 +2,10 @@
 //
 // 职责边界：这里只负责配置的读写与呈现，不直接操作 pi-ai。
 // 任何改动都会让服务端重建 Models 注册表，然后广播 settings-changed 让主界面刷新。
+//
+// 模型区不再是一张宽表格：三十个模型的供应商在窄屏上根本读不完，
+// 一行六个思考档位复选框更是把表格撑到要横向滚动。
+// 现在改成「检索 + 卡片行 + 批量」，占位值（待核对）能一次处理掉。
 
 const $ = (id) => document.getElementById(id);
 
@@ -51,11 +55,33 @@ function levelLabel(value) {
 	return THINKING_LEVELS.find((level) => level[0] === value)?.[1] ?? value;
 }
 
+/** 可勾选的思考档位（不含「不思」）。「不思」是关闭思考时的状态，不是可选项。 */
+const THINKING_CHIPS = THINKING_LEVELS.filter(([value]) => value !== "off");
+
+/** 后端没给 defaults 时的占位兜底，与服务端 DEFAULT_CONTEXT_WINDOW / DEFAULT_MAX_TOKENS 一致。 */
+const FALLBACK_DEFAULTS = { contextWindow: 1_048_576, maxTokens: 131_072 };
+
+/** 成本估算的粗略口径：中文 1 字 ≈ 0.7 token，一章按 3000 字算。 */
+const CHAPTER_CHARS = 3000;
+const CHARS_PER_TOKEN = 0.7;
+
 const view = {
 	data: null,
 	models: [],
+	/** 当前选中的供应商 id。 */
 	selected: null,
+	/** 供应商搜索词。 */
 	query: "",
+	/** 模型搜索词。 */
+	modelQuery: "",
+	/** 批量选择：模型键 "providerId/modelId"。 */
+	picked: new Set(),
+	/** 批量设置小表单是否展开。 */
+	batchOpen: false,
+	/** 默认模型下拉的搜索词。 */
+	defaultSearch: "",
+	/** 当前模型区的上下文，供「只重画列表」用。 */
+	modelContext: null,
 };
 
 function el(tag, className, text) {
@@ -72,7 +98,12 @@ async function api(path, options = {}) {
 		body: options.body ? JSON.stringify(options.body) : undefined,
 	});
 	const data = await res.json().catch(() => ({}));
-	if (!res.ok) throw new Error(data.error || `请求失败 (${res.status})`);
+	if (!res.ok) {
+		const error = new Error(data.error || `请求失败 (${res.status})`);
+		// 带上状态码：批量接口没上线时（404 / 405）要能退回到逐个设置。
+		error.status = res.status;
+		throw error;
+	}
 	return data;
 }
 
@@ -90,7 +121,7 @@ export async function openSettings() {
 async function refresh() {
 	const [settings, models] = await Promise.all([api("/api/settings"), api("/api/models")]);
 	view.data = settings;
-	view.models = models.models;
+	view.models = Array.isArray(models?.models) ? models.models : [];
 	if (!view.selected || !settings.providers.some((p) => p.id === view.selected)) {
 		view.selected = settings.providers[0]?.id ?? null;
 	}
@@ -101,51 +132,261 @@ function statusOf(id) {
 	return view.data.statuses.find((status) => status.id === id);
 }
 
+/** 占位默认值：后端没给就用兜底。 */
+function defaultLimits() {
+	return view.data?.defaults ?? FALLBACK_DEFAULTS;
+}
+
 function renderAll() {
 	renderDefaults();
 	renderProviderList();
 	renderDetail();
 }
 
+// ---------------------------------------------------------------- 默认笔与思深
+
+/**
+ * 默认模型的可选项。
+ *
+ * 两头都要：
+ *  - view.models 里「当前可用」的模型（后端只列注册成功、鉴权齐备的）；
+ *  - 配置里存着、此刻却用不了的模型（供应商停用 / 没配 Key / 已从上游消失）。
+ * 后者若直接不列，用户会以为模型凭空消失了 —— 标出来更诚实。
+ */
+function defaultCandidates() {
+	const out = [];
+	const seen = new Set();
+	for (const model of view.models) {
+		if (seen.has(model.id)) continue;
+		seen.add(model.id);
+		const config = configModelOf(model.provider, model.modelId);
+		const provider = view.data.providers.find((p) => p.id === model.provider) ?? null;
+		const reason = unavailableReason(provider);
+		out.push({
+			id: model.id,
+			modelId: model.modelId,
+			name: model.name || model.modelId,
+			providerId: model.provider,
+			providerLabel: model.providerLabel,
+			available: !reason,
+			reason,
+			model: mergeModel(model, config),
+		});
+	}
+	for (const provider of view.data.providers) {
+		for (const config of provider.models ?? []) {
+			const key = `${provider.id}/${config.id}`;
+			if (seen.has(key)) continue;
+			seen.add(key);
+			const reason = unavailableReason(provider, false);
+			out.push({
+				id: key,
+				modelId: config.id,
+				name: config.name || config.id,
+				providerId: provider.id,
+				providerLabel: provider.label,
+				available: !reason,
+				reason,
+				model: mergeModel(null, config),
+			});
+		}
+	}
+	return out;
+}
+
+/** 配置里的模型条目（自定义供应商才有）。 */
+function configModelOf(providerId, modelId) {
+	const provider = view.data.providers.find((p) => p.id === providerId);
+	return provider?.models?.find((m) => m.id === modelId) ?? null;
+}
+
+/** 运行时摘要（/api/models）与配置条目合并：配置说了算，摘要补运行时才知道的东西。 */
+function mergeModel(summary, config) {
+	if (!config) return summary ?? null;
+	return { ...(summary ?? {}), ...config, cost: costOf(config, summary) };
+}
+
+/**
+ * 某个模型此刻为什么用不了。
+ *
+ * known=false 表示配置里有、运行时却没有登记（模型 id 写错了、或者上游还没拉到）。
+ * 返回空串就是「能用」。
+ */
+function unavailableReason(provider, known = true) {
+	if (!provider) return "未注册";
+	if (!provider.enabled) return "供应商已停用";
+	const status = statusOf(provider.id);
+	if (status && status.authSource === "none") {
+		if (provider.kind === "custom") return provider.noAuthRequired === true ? "" : "未配置密钥";
+		// 内置供应商：只有确实要密钥的那种才算缺，别把本地模型也判成不可用。
+		return (status.envVars ?? []).length > 0 ? "未配置密钥" : "";
+	}
+	if (!known) return "未注册";
+	return "";
+}
+
+/** 成本。后端没透出 cost 就返回 null，界面据此隐藏成本编辑区。 */
+function costOf(config, summary) {
+	const raw = config?.cost ?? summary?.cost;
+	if (!raw || typeof raw !== "object") return null;
+	const num = (value) => (Number.isFinite(Number(value)) ? Number(value) : 0);
+	return {
+		input: num(raw.input),
+		output: num(raw.output),
+		cacheRead: num(raw.cacheRead),
+		cacheWrite: num(raw.cacheWrite),
+	};
+}
+
+/** 模型下拉按供应商分组。 */
+function groupCandidates(candidates) {
+	const groups = new Map();
+	for (const entry of candidates) {
+		if (!groups.has(entry.providerId)) {
+			const provider = view.data.providers.find((p) => p.id === entry.providerId);
+			const label = entry.providerLabel || entry.providerId;
+			groups.set(entry.providerId, {
+				id: entry.providerId,
+				label: provider && !provider.enabled ? `${label}（已停用）` : label,
+				entries: [],
+			});
+		}
+		groups.get(entry.providerId).entries.push(entry);
+	}
+	return [...groups.values()];
+}
+
+function optionLabel(entry) {
+	return entry.available ? entry.name : `${entry.name}（${entry.reason}）`;
+}
+
+function matchesCandidate(entry, query) {
+	const haystack = [entry.name, entry.modelId, entry.providerLabel].join(" ").toLowerCase();
+	return haystack.includes(query);
+}
+
 function renderDefaults() {
 	const modelSelect = $("settings-default-model");
+	if (!modelSelect) return;
+	const candidates = defaultCandidates();
+	const query = view.defaultSearch.trim().toLowerCase();
+	let shown = query ? candidates.filter((entry) => matchesCandidate(entry, query)) : candidates.slice();
+	// 当前默认的那一支永远留在下拉里：筛掉了它，下拉就会变成空的，看起来像默认丢了。
+	const current = modelSelect.value || view.data.defaultModel || "";
+	if (current && !shown.some((entry) => entry.id === current)) {
+		const keep = candidates.find((entry) => entry.id === current);
+		if (keep) shown.unshift(keep);
+	}
+
 	modelSelect.replaceChildren();
-	if (view.models.length === 0) {
-		const option = el("option", "", "暂无可用模型，请先配置供应商");
+	if (shown.length === 0) {
+		const option = el("option", "", candidates.length === 0 ? "暂无可用模型，请先配置供应商" : "没有匹配的模型");
 		option.value = "";
 		modelSelect.append(option);
 		modelSelect.disabled = true;
 	} else {
 		modelSelect.disabled = false;
-		for (const model of view.models) {
-			const option = el("option", "", `${model.providerLabel} · ${model.name}`);
-			option.value = model.id;
-			modelSelect.append(option);
+		for (const group of groupCandidates(shown)) {
+			const optgroup = el("optgroup");
+			optgroup.label = group.label;
+			for (const entry of group.entries) {
+				const option = el("option", "", optionLabel(entry));
+				option.value = entry.id;
+				if (!entry.available) option.dataset.unavailable = "1";
+				optgroup.append(option);
+			}
+			modelSelect.append(optgroup);
 		}
-		modelSelect.value = view.data.defaultModel;
-		if (!view.data.defaultModel) modelSelect.value = view.models[0].id;
+		const wanted = [...modelSelect.options].some((option) => option.value === current)
+			? current
+			: shown[0].id;
+		modelSelect.value = wanted;
 	}
 
+	renderThinkingSelect();
+	updateDefaultHints();
+}
+
+function renderThinkingSelect() {
 	const thinking = $("settings-default-thinking");
+	if (!thinking) return;
+	const current = thinking.value || view.data.defaultThinkingLevel;
 	thinking.replaceChildren();
 	for (const [value, label] of THINKING_LEVELS) {
 		const option = el("option", "", levelText(value, label));
 		option.value = value;
 		thinking.append(option);
 	}
-	thinking.value = view.data.defaultThinkingLevel;
+	thinking.value = [...thinking.options].some((option) => option.value === current)
+		? current
+		: view.data.defaultThinkingLevel;
+}
+
+/**
+ * 默认档位与所选模型的联动提示，以及成本粗估。
+ *
+ * 选了支不支持思考的模型，档位还停在「深思」上，是静默失效 —— 得说出来。
+ */
+function updateDefaultHints() {
+	const hint = $("settings-default-hint");
+	const costBox = $("settings-default-cost");
+	const modelSelect = $("settings-default-model");
+	const thinking = $("settings-default-thinking");
+	if (!modelSelect || !thinking) return;
+
+	const modelId = modelSelect.value || view.data.defaultModel || "";
+	const entry = defaultCandidates().find((item) => item.id === modelId) ?? null;
+	const level = thinking.value;
+
+	let text = "";
+	if (entry) {
+		if (!entry.available) {
+			text = `「${entry.name}」当前不可用：${entry.reason}。`;
+		} else if (entry.model?.reasoning === false && level !== "off") {
+			text = `「${entry.name}」未开启思考能力，当前档位「${levelLabel(level)}」不会生效。`;
+		} else if (entry.model?.reasoning === true && level !== "off" && Array.isArray(entry.model.thinkingLevels)) {
+			if (!entry.model.thinkingLevels.includes(level)) {
+				text = `「${entry.name}」不支持「${levelLabel(level)}」档位。`;
+			}
+		}
+	}
+	if (hint) {
+		hint.textContent = text;
+		hint.classList.toggle("is-warn", Boolean(text));
+	}
+	if (costBox) costBox.textContent = costEstimate(entry);
+}
+
+/**
+ * 一章的成本粗估。
+ *
+ * 中文 1 字 ≈ 0.7 token，一章 3000 字 ≈ 4.3K token；输入与输出各按这个量级估。
+ * 没填成本就说没填，不写 ¥0.00 —— 那会被当成「这家不收钱」。
+ */
+function costEstimate(entry) {
+	if (!entry) return "未选模型";
+	const cost = entry.model?.cost;
+	if (!cost || (!cost.input && !cost.output)) return "未填成本";
+	const tokens = Math.round(CHAPTER_CHARS / CHARS_PER_TOKEN);
+	const total = (tokens / 1_000_000) * (cost.input + cost.output);
+	const money = total >= 0.1 ? total.toFixed(2) : total.toFixed(3);
+	return `一章 ${CHAPTER_CHARS} 字 ≈ 输入 ${formatTokens(tokens)} + 输出 ${formatTokens(tokens)} token ≈ ¥${money}（粗估，1 字 ≈ 0.7 token）`;
 }
 
 async function saveDefaults() {
-	await api("/api/settings", {
-		method: "PUT",
-		body: {
-			defaultModel: $("settings-default-model").value,
-			defaultThinkingLevel: $("settings-default-thinking").value,
-		},
-	});
+	const modelSelect = $("settings-default-model");
+	const thinking = $("settings-default-thinking");
+	const body = {};
+	// 下拉为空或被禁用时不要把 defaultModel 写成空串：那等于把默认笔抹掉。
+	if (modelSelect && !modelSelect.disabled && modelSelect.value) body.defaultModel = modelSelect.value;
+	if (thinking && thinking.value) body.defaultThinkingLevel = thinking.value;
+	if (Object.keys(body).length === 0) return;
+	await api("/api/settings", { method: "PUT", body });
+	await refresh();
 	notifyChanged();
 }
+
+// ---------------------------------------------------------------- 供应商列表
 
 /** 搜索命中：名称、id、环境变量名任一包含即可。 */
 function matches(provider, query) {
@@ -221,6 +462,12 @@ function providerRow(provider) {
 	else row.append(el("span", "badge", "未配置"));
 
 	row.addEventListener("click", () => {
+		if (view.selected !== provider.id) {
+			// 换供应商时，勾选与批量表单都是上一家的语境，留在原地会误伤。
+			view.picked.clear();
+			view.modelQuery = "";
+			view.batchOpen = false;
+		}
 		view.selected = provider.id;
 		renderAll();
 	});
@@ -231,6 +478,14 @@ function providerRow(provider) {
 
 function renderDetail() {
 	const box = $("settings-detail");
+	if (!box) return;
+	// 重画会把滚动位置和焦点一并清掉：模型列表往往很长，存完一个值就跳回顶部很难受。
+	const scrollTop = box.scrollTop;
+	const active = document.activeElement;
+	const keepFocus = active && active.id && box.contains(active) && (active.type === "search" || active.type === "text");
+	const focusId = keepFocus ? active.id : null;
+	const caret = keepFocus && typeof active.selectionStart === "number" ? active.selectionStart : null;
+
 	box.replaceChildren();
 	const provider = view.data.providers.find((p) => p.id === view.selected);
 	if (!provider) {
@@ -240,13 +495,50 @@ function renderDetail() {
 	const status = statusOf(provider.id);
 	if (provider.kind === "builtin") renderBuiltinDetail(box, provider, status);
 	else renderCustomDetail(box, provider, status);
+
+	box.scrollTop = scrollTop;
+	if (focusId) {
+		const next = document.getElementById(focusId);
+		if (next) {
+			next.focus();
+			if (caret !== null && typeof next.setSelectionRange === "function") {
+				try {
+					next.setSelectionRange(caret, caret);
+				} catch {
+					/* 某些输入类型不支持选区，忽略即可 */
+				}
+			}
+		}
+	}
 }
+
+/** 表单字段计数器：给没 id 的控件补一个，好让 label 真的能指到它。 */
+let fieldSeq = 0;
+
+/** 控件 id 计数器：思考开关、档位组都需要一个唯一 id，label 才能指对地方。 */
+let reasonSeq = 0;
+
+/** 只有表单控件才配得上 label for。 */
+const LABELABLE = new Set(["INPUT", "SELECT", "TEXTAREA"]);
 
 function field(labelText, control, hint) {
 	const wrap = el("div", "field");
-	wrap.append(el("label", "", labelText));
+	const label = el("label", "", labelText);
+	if (LABELABLE.has(control.tagName)) {
+		// 标签只画在眼前却没指到控件上，读屏的人听到的是一串没头没尾的字。
+		if (!control.id) control.id = `settings-fld-${++fieldSeq}`;
+		label.htmlFor = control.id;
+	}
+	wrap.append(label);
 	wrap.append(control);
 	if (hint) wrap.append(el("div", "hint", hint));
+	return wrap;
+}
+
+/** 模型卡片里的字段：沿用 .field 的排版，再加一个网格类。 */
+function modelField(labelText, control, hint) {
+	const wrap = field(labelText, control, hint);
+	wrap.classList.add("model-field");
 	return wrap;
 }
 
@@ -301,31 +593,8 @@ function renderBuiltinDetail(box, provider, status) {
 	actions.append(toggleButton(provider));
 	box.append(actions);
 
-	// 内置目录只读展示，够用即可：它的模型清单由 pi-ai 维护，不需要手工配 token 上限。
-	box.append(el("h5", "detail-h", "可用模型"));
-	if ((status?.modelCount ?? 0) === 0) {
-		box.append(el("div", "empty-hint", "该供应商没有内置模型目录。"));
-		return;
-	}
-	const table = el("table", "model-table");
-	table.append(
-		headerRow(["模型", "上下文", "输出上限", "思考", ""]),
-	);
-	for (const model of view.models.filter((m) => m.provider === provider.id)) {
-		const tr = el("tr", model.id === view.data.defaultModel ? "is-default" : "");
-		tr.append(cell(model.modelId, "model-id"));
-		tr.append(cell(formatTokens(model.contextWindow)));
-		tr.append(cell(formatTokens(model.maxTokens)));
-		tr.append(cell(model.reasoning ? model.thinkingLevels.map(levelLabel).join("/") : "不支持"));
-		const actions2 = el("td");
-		const pick = el("button", "btn btn-sm", model.id === view.data.defaultModel ? "当前默认" : "设为默认");
-		pick.disabled = model.id === view.data.defaultModel;
-		pick.addEventListener("click", () => saveDefaultsFor(model.id));
-		actions2.append(pick);
-		tr.append(actions2);
-		table.append(tr);
-	}
-	box.append(table);
+	// 内置目录只读展示：模型清单由 pi-ai 维护，改了也不生效，只给检索与查看。
+	renderModelZone(box, provider, false);
 }
 
 function renderCustomDetail(box, provider, status) {
@@ -408,108 +677,14 @@ function renderCustomDetail(box, provider, status) {
 		if (!confirm(`确定删除供应商「${provider.label}」？已保存的 Key 与模型配置会一并清除。`)) return;
 		await api(`/api/providers/${provider.id}`, { method: "DELETE" });
 		view.selected = null;
+		view.picked.clear();
 		await refresh();
 		notifyChanged();
 	});
 	actions.append(remove);
 	box.append(actions);
 
-	renderCustomModels(box, provider);
-}
-
-function renderCustomModels(box, provider) {
-	box.append(el("h5", "detail-h", `模型配置（${provider.models.length}）`));
-
-	if (provider.models.length === 0) {
-		box.append(el("div", "empty-hint", "还没有模型。填好 Base URL 与 Key 后点「拉取模型」，或直接在下方手动添加。"));
-	}
-
-	const defaults = view.data.defaults ?? { contextWindow: 1_048_576, maxTokens: 131_072 };
-	if (provider.models.some((m) => m.contextWindow === defaults.contextWindow || m.maxTokens === defaults.maxTokens)) {
-		box.append(
-			el(
-				"div",
-				"notice",
-				`带 ${formatTokens(defaults.contextWindow)} / ${formatTokens(defaults.maxTokens)} 的是默认占位值，不是探测结果。` +
-					"上游接口报了限制就用上游的；报不出来（OpenAI 兼容的 /models 只回 id）的模型需要你按实际规格核对，否则超长的输入会被上游直接拒绝。",
-			),
-		);
-	}
-
-	const table = el("table", "model-table");
-	table.append(headerRow(["模型", "输入上下文", "输出上限", "思考", "档位", ""]));
-
-	for (const model of provider.models) {
-		const tr = el("tr", `${provider.id}/${model.id}` === view.data.defaultModel ? "is-default" : "");
-
-		const idCell = el("td");
-		const idInput = document.createElement("input");
-		idInput.type = "text";
-		idInput.value = model.id;
-		idInput.addEventListener("change", () => void saveModel(provider.id, { ...model, id: idInput.value.trim() || model.id }));
-		idCell.append(idInput);
-		tr.append(idCell);
-
-		const ctxCell = el("td");
-		const ctx = numberInput(model.contextWindow, (value) => void saveModel(provider.id, { ...model, contextWindow: value }));
-		if (model.contextWindow === defaults.contextWindow) ctx.classList.add("is-placeholder");
-		ctxCell.append(ctx);
-		tr.append(ctxCell);
-
-		const maxCell = el("td");
-		const max = numberInput(model.maxTokens, (value) => void saveModel(provider.id, { ...model, maxTokens: value }));
-		if (model.maxTokens === defaults.maxTokens) max.classList.add("is-placeholder");
-		maxCell.append(max);
-		tr.append(maxCell);
-
-		const reasonCell = el("td");
-		const reason = document.createElement("input");
-		reason.type = "checkbox";
-		reason.checked = model.reasoning;
-		reason.addEventListener("change", () =>
-			void saveModel(provider.id, {
-				...model,
-				reasoning: reason.checked,
-				thinkingLevels: reason.checked ? model.thinkingLevels.filter((l) => l !== "off") : ["off"],
-			}),
-		);
-		reasonCell.append(reason);
-		tr.append(reasonCell);
-
-		const levelsCell = el("td");
-		const levels = el("div", "levels");
-		for (const [value, labelText] of THINKING_LEVELS) {
-			if (value === "off") continue;
-			const wrap = el("label", "", "");
-			const box = document.createElement("input");
-			box.type = "checkbox";
-			box.checked = model.reasoning && model.thinkingLevels.includes(value);
-			box.addEventListener("change", () => {
-				const next = new Set(model.thinkingLevels);
-				if (box.checked) next.add(value);
-				else next.delete(value);
-				void saveModel(provider.id, { ...model, reasoning: true, thinkingLevels: [...next] });
-			});
-			wrap.append(box, document.createTextNode(labelText), el("span", "level-code", `（${value}）`));
-			levels.append(wrap);
-		}
-		levelsCell.append(levels);
-		tr.append(levelsCell);
-
-		const actCell = el("td");
-		const box = el("div", "row-actions");
-		const pick = el("button", "btn btn-sm", `${provider.id}/${model.id}` === view.data.defaultModel ? "当前默认" : "默认");
-		pick.disabled = `${provider.id}/${model.id}` === view.data.defaultModel;
-		pick.addEventListener("click", () => saveDefaultsFor(`${provider.id}/${model.id}`));
-		const del = el("button", "btn btn-ghost btn-sm", "删");
-		del.addEventListener("click", () => void deleteModel(provider.id, model.id));
-		box.append(pick, del);
-		actCell.append(box);
-		tr.append(actCell);
-
-		table.append(tr);
-	}
-	box.append(table);
+	renderModelZone(box, provider, true);
 
 	const addRow = el("div", "actions");
 	const add = el("button", "btn btn-sm", "+ 手动添加模型");
@@ -517,7 +692,7 @@ function renderCustomModels(box, provider) {
 		const name = prompt("模型 id（发送给服务端的 model 字段）");
 		if (!name?.trim()) return;
 		// 默认值由服务端下发，不在前端硬编码
-		const defaults = view.data.defaults ?? { contextWindow: 1_048_576, maxTokens: 131_072 };
+		const defaults = defaultLimits();
 		void saveModel(provider.id, {
 			id: name.trim(),
 			name: name.trim(),
@@ -532,22 +707,675 @@ function renderCustomModels(box, provider) {
 	box.append(addRow);
 }
 
-function headerRow(labels) {
-	const tr = el("tr");
-	for (const label of labels) tr.append(el("th", "", label));
-	return tr;
+// ---------------------------------------------------------------- 模型区
+
+/**
+ * 模型区的条目。
+ *
+ * 自定义供应商以配置为准（配置里就有上下文、上限、档位与成本）；
+ * 内置供应商的清单由 pi-ai 维护，从 /api/models 里取，只读展示。
+ */
+function modelEntries(provider) {
+	const limits = defaultLimits();
+	if (provider.kind === "custom") {
+		return (provider.models ?? []).map((config) => {
+			const summary = view.models.find((m) => m.provider === provider.id && m.modelId === config.id) ?? null;
+			const reason = unavailableReason(provider, Boolean(summary));
+			return {
+				key: `${provider.id}/${config.id}`,
+				modelId: config.id,
+				name: config.name || config.id,
+				contextWindow: config.contextWindow,
+				maxTokens: config.maxTokens,
+				reasoning: config.reasoning === true,
+				thinkingLevels: Array.isArray(config.thinkingLevels) ? [...config.thinkingLevels] : ["off"],
+				cost: costOf(config, summary),
+				placeholder: isPlaceholder(config, summary),
+				contextPlaceholder: config.contextWindow === limits.contextWindow,
+				maxPlaceholder: config.maxTokens === limits.maxTokens,
+				available: !reason,
+				reason,
+				config,
+				summary,
+			};
+		});
+	}
+	return view.models
+		.filter((model) => model.provider === provider.id)
+		.map((model) => {
+			const reason = unavailableReason(provider);
+			return {
+				key: model.id,
+				modelId: model.modelId,
+				name: model.name || model.modelId,
+				contextWindow: model.contextWindow,
+				maxTokens: model.maxTokens,
+				reasoning: model.reasoning === true,
+				thinkingLevels: Array.isArray(model.thinkingLevels) ? [...model.thinkingLevels] : ["off"],
+				cost: costOf(null, model),
+				placeholder: isPlaceholder(model, model),
+				contextPlaceholder: model.contextWindow === limits.contextWindow,
+				maxPlaceholder: model.maxTokens === limits.maxTokens,
+				available: !reason,
+				reason,
+				config: null,
+				summary: model,
+			};
+		});
 }
 
-function cell(text, className) {
-	return el("td", className, text);
+/**
+ * 是不是「待核对」。
+ *
+ * 后端给了 placeholder 就以它为准；没给就自己按占位默认值比 ——
+ * 老后端也得能看，不能因为少个字段就整页报错。
+ */
+function isPlaceholder(model, summary) {
+	if (summary && typeof summary.placeholder === "boolean") return summary.placeholder;
+	const limits = defaultLimits();
+	return model?.contextWindow === limits.contextWindow || model?.maxTokens === limits.maxTokens;
 }
 
-function numberInput(value, onChange) {
+/**
+ * 供应商详情里的模型区：检索 + 统计 + 批量 + 卡片行。
+ *
+ * editable = false 时（内置供应商）只读展示：目录由 pi-ai 维护，改了也不生效。
+ */
+function renderModelZone(box, provider, editable) {
+	const entries = modelEntries(provider);
+	const zone = el("div", "model-zone");
+	zone.id = "model-zone";
+
+	const head = el("div", "model-zone-head");
+	head.append(el("h5", "detail-h", editable ? `模型配置（${entries.length}）` : `可用模型（${entries.length}）`));
+
+	const searchWrap = el("div", "model-search-wrap");
+	const search = document.createElement("input");
+	search.type = "search";
+	search.id = "model-search";
+	search.className = "model-search";
+	search.placeholder = "搜模型：id 或名称";
+	search.autocomplete = "off";
+	search.setAttribute("aria-label", "搜索模型");
+	search.value = view.modelQuery;
+	// 只重画列表，输入框本身不动 —— 否则每敲一个字焦点就没了。
+	search.addEventListener("input", (event) => {
+		view.modelQuery = event.target.value;
+		renderModelList();
+	});
+	searchWrap.append(search);
+	head.append(searchWrap);
+
+	const stats = el("div", "model-stats");
+	stats.id = "model-stats";
+	head.append(stats);
+	zone.append(head);
+
+	// 「待核对」是什么意思，得说清楚：不然用户看到虚线框不知道该动还是不该动。
+	const pendingCount = entries.filter((entry) => entry.placeholder).length;
+	if (editable && pendingCount > 0) {
+		const limits = defaultLimits();
+		zone.append(
+			el(
+				"div",
+				"notice model-note",
+				`带 ${formatTokens(limits.contextWindow)} / ${formatTokens(limits.maxTokens)} 的是默认占位值，不是探测结果。` +
+					"上游接口报了限制就用上游的（点「按上游回填」）；报不出来（OpenAI 兼容的 /models 只回 id）的模型需要你按实际规格核对，" +
+					"否则超长的输入会被上游直接拒绝。",
+			),
+		);
+	}
+
+	const toolbar = el("div", "model-toolbar");
+	toolbar.id = "model-toolbar";
+	const ctx = { provider, entries, editable, allBox: null, countEl: null, shown: entries, stats };
+	view.modelContext = ctx;
+
+	if (editable) {
+		const pickAll = el("label", "model-pick-all");
+		const allBox = document.createElement("input");
+		allBox.type = "checkbox";
+		allBox.id = "model-select-all";
+		allBox.setAttribute("aria-label", "全选当前列出的模型");
+		allBox.addEventListener("change", () => setAllPicked(allBox.checked));
+		pickAll.append(allBox, document.createTextNode("全选"));
+		toolbar.append(pickAll);
+		ctx.allBox = allBox;
+
+		const count = el("span", "model-selected-count");
+		count.id = "model-selected-count";
+		count.setAttribute("aria-live", "polite");
+		toolbar.append(count);
+		ctx.countEl = count;
+
+		const batch = el("button", "btn btn-sm", "批量设置…");
+		batch.id = "model-batch-open";
+		batch.addEventListener("click", () => {
+			view.batchOpen = !view.batchOpen;
+			renderDetail();
+		});
+		toolbar.append(batch);
+
+		const backfill = el("button", "btn btn-sm", "按上游回填");
+		backfill.id = "model-backfill";
+		backfill.setAttribute("aria-label", "从上游拉取模型并回填上下文与输出上限");
+		backfill.addEventListener("click", () => void backfillFromUpstream(provider));
+		toolbar.append(backfill);
+	}
+	zone.append(toolbar);
+
+	const panelHost = el("div", "model-batch-host");
+	panelHost.id = "model-batch-host";
+	zone.append(panelHost);
+
+	const list = el("div", "model-list");
+	list.id = "model-list";
+	zone.append(list);
+
+	box.append(zone);
+	ctx.list = list;
+	ctx.panelHost = panelHost;
+
+	renderBatchPanel(ctx);
+	renderModelList();
+	updatePickUi();
+}
+
+/** 只重画模型列表：搜索时用，输入框与工具条都不动。 */
+function renderModelList() {
+	const ctx = view.modelContext;
+	if (!ctx || !ctx.list) return;
+	const list = ctx.list;
+	list.replaceChildren();
+	const query = view.modelQuery.trim().toLowerCase();
+	const shown = ctx.entries.filter(
+		(entry) =>
+			!query ||
+			entry.modelId.toLowerCase().includes(query) ||
+			entry.name.toLowerCase().includes(query),
+	);
+	if (shown.length === 0) {
+		list.append(
+			el(
+				"div",
+				"empty-hint",
+				query
+					? "没有匹配的模型。"
+					: ctx.editable
+						? "还没有模型。填好 Base URL 与 Key 后点「拉取模型」，或用下方「＋ 手动添加模型」。"
+						: "该供应商没有内置模型目录。",
+			),
+		);
+	} else {
+		for (const entry of shown) list.append(modelCard(ctx.provider, entry, ctx.editable));
+	}
+	ctx.shown = shown;
+	updateModelStats();
+	updatePickUi();
+}
+
+function updateModelStats() {
+	const ctx = view.modelContext;
+	if (!ctx || !ctx.stats) return;
+	const total = ctx.entries.length;
+	const pending = ctx.entries.filter((entry) => entry.placeholder).length;
+	const unavailable = ctx.entries.filter((entry) => !entry.available).length;
+	const shown = ctx.shown?.length ?? total;
+	const bits = [`共 ${total} 个模型`];
+	if (shown !== total) bits.push(`显示 ${shown} 个`);
+	bits.push(`待核对 ${pending} 个`);
+	if (unavailable) bits.push(`不可用 ${unavailable} 个`);
+	ctx.stats.textContent = bits.join(" · ");
+}
+
+function updatePickUi() {
+	const ctx = view.modelContext;
+	if (!ctx || !ctx.allBox) return;
+	const shown = ctx.shown ?? ctx.entries;
+	const picked = shown.filter((entry) => view.picked.has(entry.key)).length;
+	ctx.allBox.checked = shown.length > 0 && picked === shown.length;
+	ctx.allBox.indeterminate = picked > 0 && picked < shown.length;
+	if (ctx.countEl) ctx.countEl.textContent = `已选 ${view.picked.size} 个`;
+}
+
+function togglePick(key, on) {
+	if (on) view.picked.add(key);
+	else view.picked.delete(key);
+	updatePickUi();
+}
+
+function setAllPicked(on) {
+	const ctx = view.modelContext;
+	const shown = ctx?.shown ?? [];
+	for (const entry of shown) {
+		if (on) view.picked.add(entry.key);
+		else view.picked.delete(entry.key);
+	}
+	updatePickUi();
+}
+
+/** 一个模型的卡片行。 */
+function modelCard(provider, entry, editable) {
+	const card = el("div", "model-card" + (entry.key === view.data.defaultModel ? " is-default" : ""));
+	card.dataset.modelKey = entry.key;
+
+	const head = el("div", "model-card-head");
+	if (editable) {
+		const wrap = el("label", "model-pick");
+		const check = document.createElement("input");
+		check.type = "checkbox";
+		check.className = "model-check";
+		check.checked = view.picked.has(entry.key);
+		check.setAttribute("aria-label", `选择模型 ${entry.name}`);
+		check.addEventListener("change", () => togglePick(entry.key, check.checked));
+		wrap.append(check);
+		head.append(wrap);
+	}
+	const title = el("div", "model-card-title");
+	title.append(el("span", "model-name", entry.name));
+	title.append(el("code", "model-id", entry.modelId));
+	head.append(title);
+	if (entry.placeholder) head.append(el("span", "model-badge is-warn", "待核对"));
+	if (entry.key === view.data.defaultModel) head.append(el("span", "model-badge is-ok", "默认"));
+	if (!entry.available) head.append(el("span", "model-badge is-off", entry.reason));
+	card.append(head);
+
+	const body = el("div", "model-card-body");
+
+	// 模型 id
+	if (editable) {
+		const idInput = document.createElement("input");
+		idInput.type = "text";
+		idInput.className = "model-id-input";
+		idInput.value = entry.modelId;
+		idInput.setAttribute("aria-label", `模型 id：${entry.name}`);
+		idInput.addEventListener("change", () => {
+			const next = idInput.value.trim();
+			if (!next || next === entry.modelId) {
+				idInput.value = entry.modelId;
+				return;
+			}
+			void renameModel(provider, entry.modelId, next);
+		});
+		body.append(modelField("模型 id", idInput));
+	} else {
+		body.append(modelField("模型 id", el("div", "model-value", entry.modelId)));
+	}
+
+	// 输入上下文
+	body.append(
+		modelField(
+			"输入上下文",
+			editable ? contextInput(provider, entry) : el("div", "model-value", formatTokens(entry.contextWindow)),
+			editable && entry.placeholder ? "占位值，需人工核对" : null,
+		),
+	);
+
+	// 输出上限
+	body.append(
+		modelField(
+			"输出上限",
+			editable ? maxInput(provider, entry) : el("div", "model-value", formatTokens(entry.maxTokens)),
+			editable && entry.placeholder ? "占位值，需人工核对" : null,
+		),
+	);
+
+	// 思考
+	const thinkField = el("div", "model-field model-field-wide");
+	const thinkLabel = el("label", "", "思考");
+	thinkField.append(thinkLabel);
+	if (editable) {
+		const line = el("div", "model-think-line");
+		const reason = document.createElement("input");
+		reason.type = "checkbox";
+		reason.className = "model-reason";
+		reason.id = `settings-reason-${++reasonSeq}`;
+		reason.checked = entry.reasoning;
+		reason.setAttribute("aria-label", `是否支持思考：${entry.name}`);
+		thinkLabel.htmlFor = reason.id;
+		reason.addEventListener("change", () => {
+			const on = reason.checked;
+			// 打开思考却一个档位都没选，就当「全都支持」：这比让模型停在
+			// 一个半吊子状态更贴近多数厂商的实际情况。
+			const levels = on
+				? entry.thinkingLevels.filter((level) => level !== "off").length
+					? entry.thinkingLevels.filter((level) => level !== "off")
+					: THINKING_CHIPS.map(([value]) => value)
+				: ["off"];
+			void saveModel(provider.id, { ...entry.config, reasoning: on, thinkingLevels: levels });
+		});
+		const reasonLabel = el("label", "model-reason-label");
+		reasonLabel.append(reason, document.createTextNode("支持思考"));
+		line.append(reasonLabel);
+		line.append(levelChips(provider, entry));
+		thinkField.append(line);
+	} else {
+		const levels = entry.thinkingLevels.filter((level) => level !== "off");
+		thinkField.append(
+			el("div", "model-value", entry.reasoning ? (levels.length ? levels.map(levelLabel).join(" / ") : "可深思") : "不支持"),
+		);
+	}
+	body.append(thinkField);
+
+	// 成本
+	if (entry.cost) {
+		const costField = el("div", "model-field");
+		costField.append(el("span", "model-field-label", "成本（元 / 百万 token）"));
+		if (editable) {
+			const row = el("div", "model-cost-row");
+			row.append(costInput(provider, entry, "input", "输入"));
+			row.append(costInput(provider, entry, "output", "输出"));
+			costField.append(row);
+		} else {
+			costField.append(el("div", "model-value", `输入 ${entry.cost.input} · 输出 ${entry.cost.output}`));
+		}
+		body.append(costField);
+	}
+
+	card.append(body);
+
+	const actions = el("div", "model-card-actions");
+	const pick = el("button", "btn btn-sm", entry.key === view.data.defaultModel ? "当前默认" : "设为默认");
+	pick.disabled = entry.key === view.data.defaultModel;
+	pick.addEventListener("click", () => void saveDefaultsFor(entry.key));
+	actions.append(pick);
+	if (editable) {
+		const del = el("button", "btn btn-ghost btn-sm", "删");
+		del.setAttribute("aria-label", `删除模型 ${entry.name}`);
+		del.addEventListener("click", () => void deleteModel(provider.id, entry.modelId));
+		actions.append(del);
+	}
+	card.append(actions);
+	return card;
+}
+
+function contextInput(provider, entry) {
+	const input = numberInput(entry.contextWindow, (value) => void saveModel(provider.id, { ...entry.config, contextWindow: value }), `输入上下文：${entry.name}`);
+	input.className = "model-num";
+	if (entry.contextPlaceholder) input.classList.add("is-placeholder");
+	return input;
+}
+
+function maxInput(provider, entry) {
+	const input = numberInput(entry.maxTokens, (value) => void saveModel(provider.id, { ...entry.config, maxTokens: value }), `输出上限：${entry.name}`);
+	input.className = "model-num";
+	if (entry.maxPlaceholder) input.classList.add("is-placeholder");
+	return input;
+}
+
+function costInput(provider, entry, key, label) {
+	const input = document.createElement("input");
+	input.type = "number";
+	input.min = "0";
+	input.step = "0.01";
+	input.className = "model-num model-cost-num";
+	input.value = String(entry.cost[key] ?? 0);
+	input.setAttribute("aria-label", `${label}价（每百万 token）：${entry.name}`);
+	input.addEventListener("change", () => {
+		const value = Math.max(0, Number(input.value) || 0);
+		void saveModel(provider.id, { ...entry.config, cost: { ...entry.cost, [key]: value } });
+	});
+	return input;
+}
+
+/**
+ * 思考档位的 chip 组。
+ *
+ * 关闭思考时档位固定为「不思(off)」，chip 全部禁用；
+ * 打开后 chip 可勾，取消到空会自动回到「全选」——不会出现「支持思考但一个档位都没有」的半截状态。
+ */
+function levelChips(provider, entry) {
+	const wrap = el("div", "level-chips");
+	wrap.setAttribute("role", "group");
+	wrap.setAttribute("aria-label", `思考档位：${entry.name}`);
+
+	if (!entry.reasoning) {
+		const locked = el("span", "level-chip is-locked is-on");
+		locked.append(el("span", "level-text", "不思"), el("span", "level-code", "off"));
+		wrap.append(locked);
+	}
+
+	for (const [value, label] of THINKING_CHIPS) {
+		const chip = el("label", "level-chip" + (entry.reasoning && entry.thinkingLevels.includes(value) ? " is-on" : ""));
+		const box = document.createElement("input");
+		box.type = "checkbox";
+		box.value = value;
+		box.checked = entry.reasoning && entry.thinkingLevels.includes(value);
+		box.disabled = !entry.reasoning;
+		box.setAttribute("aria-label", `${label}（${value}）`);
+		box.addEventListener("change", () => {
+			const next = new Set(entry.thinkingLevels.filter((level) => level !== "off"));
+			if (box.checked) next.add(value);
+			else next.delete(value);
+			const levels = next.size ? [...next] : THINKING_CHIPS.map(([v]) => v);
+			void saveModel(provider.id, { ...entry.config, reasoning: true, thinkingLevels: levels });
+		});
+		chip.append(box, el("span", "level-text", label), el("span", "level-code", value));
+		wrap.append(chip);
+	}
+
+	if (entry.reasoning) {
+		const chosen = entry.thinkingLevels.filter((level) => level !== "off").length;
+		wrap.append(el("span", "level-note", `已选 ${chosen} 档`));
+	}
+	return wrap;
+}
+
+// ---------------------------------------------------------------- 批量
+
+/** 批量设置小表单。收起时不占地方，展开后只多出一小块。 */
+function renderBatchPanel(ctx) {
+	const host = ctx.panelHost;
+	if (!host) return;
+	host.replaceChildren();
+	if (!view.batchOpen) return;
+
+	const panel = el("div", "model-batch-panel");
+	panel.id = "model-batch-panel";
+	panel.setAttribute("role", "group");
+	panel.setAttribute("aria-label", "批量设置模型参数");
+	panel.append(el("div", "batch-title", "批量设置：填好数值，再选一个去处"));
+
+	const form = el("div", "model-batch-form");
+
+	const ctxInput = document.createElement("input");
+	ctxInput.type = "number";
+	ctxInput.min = "1";
+	ctxInput.step = "1000";
+	ctxInput.placeholder = "留空 = 不改";
+	ctxInput.className = "model-num";
+	ctxInput.setAttribute("aria-label", "批量输入上下文");
+	form.append(modelField("输入上下文", ctxInput));
+
+	const maxInputBox = document.createElement("input");
+	maxInputBox.type = "number";
+	maxInputBox.min = "1";
+	maxInputBox.step = "1000";
+	maxInputBox.placeholder = "留空 = 不改";
+	maxInputBox.className = "model-num";
+	maxInputBox.setAttribute("aria-label", "批量输出上限");
+	form.append(modelField("输出上限", maxInputBox));
+
+	const reasonSelect = document.createElement("select");
+	for (const [value, label] of [
+		["", "不改"],
+		["on", "开启"],
+		["off", "关闭"],
+	]) {
+		const option = el("option", "", label);
+		option.value = value;
+		reasonSelect.append(option);
+	}
+	reasonSelect.setAttribute("aria-label", "批量设置思考能力");
+	form.append(modelField("思考能力", reasonSelect));
+
+	const levelField = el("div", "model-field model-field-wide");
+	const levelLabel = el("label", "", "思考档位");
+	levelField.append(levelLabel);
+	const chips = el("div", "level-chips");
+	chips.id = `settings-batch-levels-${++reasonSeq}`;
+	chips.setAttribute("role", "group");
+	levelLabel.htmlFor = chips.id;
+	const chosen = new Set();
+	for (const [value, label] of THINKING_CHIPS) {
+		const chip = el("label", "level-chip");
+		const box = document.createElement("input");
+		box.type = "checkbox";
+		box.value = value;
+		box.setAttribute("aria-label", `${label}（${value}）`);
+		box.addEventListener("change", () => {
+			if (box.checked) chosen.add(value);
+			else chosen.delete(value);
+		});
+		chip.append(box, el("span", "level-text", label), el("span", "level-code", value));
+		chips.append(chip);
+	}
+	levelField.append(chips);
+	levelField.append(el("div", "hint", "勾了档位就按「开启思考」处理；一个都不勾 = 思考能力保持原样。"));
+	form.append(levelField);
+	panel.append(form);
+
+	const actions = el("div", "actions");
+	const readForm = () => ({
+		contextWindow: Number(ctxInput.value) > 0 ? Math.floor(Number(ctxInput.value)) : 0,
+		maxTokens: Number(maxInputBox.value) > 0 ? Math.floor(Number(maxInputBox.value)) : 0,
+		reasoning: reasonSelect.value,
+		levels: [...chosen],
+	});
+
+	const picked = [...view.picked];
+	const applyPicked = el("button", "btn btn-primary btn-sm", `应用到选中（${picked.length}）`);
+	applyPicked.disabled = picked.length === 0;
+	applyPicked.addEventListener("click", () => void applyBatch(ctx.provider, picked, readForm()));
+	actions.append(applyPicked);
+
+	const pending = ctx.entries.filter((entry) => entry.placeholder).map((entry) => entry.key);
+	const applyPending = el("button", "btn btn-sm", `应用到待核对（${pending.length}）`);
+	applyPending.disabled = pending.length === 0;
+	applyPending.addEventListener("click", () => void applyBatch(ctx.provider, pending, readForm()));
+	actions.append(applyPending);
+
+	const close = el("button", "btn btn-ghost btn-sm", "收起");
+	close.addEventListener("click", () => {
+		view.batchOpen = false;
+		renderDetail();
+	});
+	actions.append(close);
+	panel.append(actions);
+
+	host.append(panel);
+}
+
+/**
+ * 批量改一批模型。
+ *
+ * 走后端的批量接口：PATCH /api/providers/:id/models。
+ * 后端还没上线这个接口时（404 / 405）退回逐个设置 —— 结果一样，只是慢一点。
+ */
+async function applyBatch(provider, keys, form) {
+	const detail = $("settings-detail");
+	if (!keys.length) {
+		noticeBox(detail, "没有可应用的模型。", "err");
+		return;
+	}
+	// 界面里用的键是「供应商/模型」（如 cttai/MiniMax-M3），
+	// 后端批量接口认的是裸模型 id，所以这里要拆掉供应商前缀。
+	const prefix = `${provider.id}/`;
+	const ids = keys.map((key) => (key.startsWith(prefix) ? key.slice(prefix.length) : key));
+	const body = {};
+	if (form.contextWindow > 0) body.contextWindow = form.contextWindow;
+	if (form.maxTokens > 0) body.maxTokens = form.maxTokens;
+	if (form.levels.length) {
+		body.reasoning = true;
+		body.thinkingLevels = [...form.levels];
+	} else if (form.reasoning === "on") {
+		body.reasoning = true;
+		body.thinkingLevels = THINKING_CHIPS.map(([value]) => value);
+	} else if (form.reasoning === "off") {
+		body.reasoning = false;
+		body.thinkingLevels = ["off"];
+	}
+	if (Object.keys(body).length === 0) {
+		noticeBox(detail, "没有填写要改的内容。", "err");
+		return;
+	}
+
+	try {
+		const result = await api(`/api/providers/${provider.id}/models`, { method: "PATCH", body: { ids, ...body } });
+		const updated = Array.isArray(result?.updated) ? result.updated : ids;
+		await refresh();
+		notifyChanged();
+		noticeBox(
+			$("settings-detail"),
+			updated.length ? `已更新 ${updated.length} 个模型。` : "没有模型被改动（填的值与原值相同）。",
+			updated.length ? "ok" : "err",
+		);
+	} catch (error) {
+		if (error.status !== 404 && error.status !== 405) {
+			noticeBox(detail, `批量设置失败：${error.message}`, "err");
+			return;
+		}
+		const done = await applyOneByOne(provider, ids, body);
+		await refresh();
+		notifyChanged();
+		noticeBox(
+			$("settings-detail"),
+			done > 0
+				? `后端批量接口尚未上线，已逐个设置 ${done} 个模型。`
+				: `批量设置失败：${error.message}`,
+			done > 0 ? "ok" : "err",
+		);
+	}
+}
+
+/** 批量接口不可用时的兜底：逐个走单模型接口。ids 是裸模型 id。 */
+async function applyOneByOne(provider, ids, body) {
+	const models = view.data.providers.find((p) => p.id === provider.id)?.models ?? [];
+	let done = 0;
+	for (const modelId of ids) {
+		const current = models.find((m) => m.id === modelId);
+		if (!current) continue;
+		try {
+			await api(`/api/providers/${provider.id}/models`, { method: "POST", body: { ...current, ...body } });
+			done += 1;
+		} catch {
+			/* 单个失败不打断其余 */
+		}
+	}
+	return done;
+}
+
+/**
+ * 按上游回填：拉一次模型，让后端把上游报出的上限写回仍是占位值的那些模型。
+ *
+ * 后端没给 backfilled 字段时退回到普通提示，不假装回填成功。
+ */
+async function backfillFromUpstream(provider) {
+	const detail = $("settings-detail");
+	noticeBox(detail, "正在从上游拉取模型并回填上限…");
+	try {
+		const result = await api(`/api/providers/${provider.id}/models/fetch`, { method: "POST" });
+		await refresh();
+		notifyChanged();
+		const backfilled = Array.isArray(result?.backfilled) ? result.backfilled : [];
+		const message = backfilled.length
+			? `已回填 ${backfilled.length} 个模型的上游上限。`
+			: `拉取到 ${result?.fetched ?? 0} 个模型，新增 ${result?.added ?? 0} 个。上游没有报出可回填的限制，仍需人工核对。`;
+		noticeBox($("settings-detail"), message, "ok");
+	} catch (error) {
+		noticeBox(detail, `回填失败：${error.message}`, "err");
+	}
+}
+
+// ---------------------------------------------------------------- 辅助
+
+function numberInput(value, onChange, ariaLabel) {
 	const input = document.createElement("input");
 	input.type = "number";
 	input.min = "1";
 	input.step = "1000";
 	input.value = String(value);
+	if (ariaLabel) input.setAttribute("aria-label", ariaLabel);
 	input.addEventListener("change", () => onChange(Math.max(1, Math.floor(Number(input.value) || value))));
 	return input;
 }
@@ -578,8 +1406,29 @@ async function saveModel(providerId, model) {
 	notifyChanged();
 }
 
+/** 改模型 id：先建新的，再删旧的；默认笔若指着旧 id，一并指到新 id。 */
+async function renameModel(provider, oldId, newId) {
+	try {
+		const current = (view.data.providers.find((p) => p.id === provider.id)?.models ?? []).find((m) => m.id === oldId);
+		if (!current) return;
+		await api(`/api/providers/${provider.id}/models`, {
+			method: "POST",
+			body: { ...current, id: newId, name: current.name === oldId ? newId : current.name },
+		});
+		await api(`/api/providers/${provider.id}/models/${encodeURIComponent(oldId)}`, { method: "DELETE" });
+		if (view.data.defaultModel === `${provider.id}/${oldId}`) {
+			await api("/api/settings", { method: "PUT", body: { defaultModel: `${provider.id}/${newId}` } });
+		}
+		await refresh();
+		notifyChanged();
+	} catch (error) {
+		noticeBox($("settings-detail"), `改名失败：${error.message}`, "err");
+	}
+}
+
 async function deleteModel(providerId, modelId) {
 	await api(`/api/providers/${providerId}/models/${encodeURIComponent(modelId)}`, { method: "DELETE" });
+	view.picked.delete(`${providerId}/${modelId}`);
 	await refresh();
 	notifyChanged();
 }
@@ -613,7 +1462,9 @@ async function pullModels(providerId, box) {
 		await refresh();
 		notifyChanged();
 		const detail = $("settings-detail");
-		noticeBox(detail, `拉取到 ${result.fetched} 个模型，新增 ${result.added} 个。已有配置保持不变。`, "ok");
+		const backfilled = Array.isArray(result?.backfilled) ? result.backfilled.length : 0;
+		const tail = backfilled > 0 ? `，回填了 ${backfilled} 个模型的上游上限` : "，已有配置保持不变";
+		noticeBox(detail, `拉取到 ${result.fetched} 个模型，新增 ${result.added} 个${tail}。`, "ok");
 	} catch (error) {
 		noticeBox(box, `拉取失败：${error.message}`, "err");
 	}
@@ -716,6 +1567,43 @@ export function bindProviderForm() {
 
 // ---------------------------------------------------------------- 绑定
 
+/**
+ * 默认模型区的搜索框与提示行。
+ *
+ * 这一块在 index.html 里只有一个 select，搜索与提示都是运行时挂上去的：
+ * index.html 由别人在改，这里不碰它。
+ */
+function ensureDefaultsExtras() {
+	const host = document.querySelector(".settings-defaults");
+	if (!host || $("settings-default-extra")) return;
+	const extra = el("div", "default-extra");
+	extra.id = "settings-default-extra";
+
+	const search = document.createElement("input");
+	search.type = "search";
+	search.id = "settings-default-search";
+	search.className = "default-search-input";
+	search.placeholder = "搜默认模型：id 或名称";
+	search.autocomplete = "off";
+	search.setAttribute("aria-label", "搜索默认模型");
+	search.addEventListener("input", (event) => {
+		view.defaultSearch = event.target.value;
+		renderDefaults();
+	});
+	const searchWrap = el("div", "default-search");
+	searchWrap.append(search);
+
+	const hint = el("p", "default-hint");
+	hint.id = "settings-default-hint";
+	hint.setAttribute("role", "status");
+
+	const cost = el("p", "default-cost");
+	cost.id = "settings-default-cost";
+
+	extra.append(searchWrap, hint, cost);
+	host.append(extra);
+}
+
 export function bindSettings() {
 	$("open-settings").addEventListener("click", () => void openSettings());
 	$("provider-form-cancel").addEventListener("click", () => $("provider-dialog").close());
@@ -734,4 +1622,5 @@ export function bindSettings() {
 		view.query = event.target.value.trim().toLowerCase();
 		renderProviderList();
 	});
+	ensureDefaultsExtras();
 }

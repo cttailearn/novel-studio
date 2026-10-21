@@ -2,9 +2,20 @@
 <html lang="zh-CN">
 	<head>
 		<meta charset="utf-8" />
-		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<!-- viewport-fit=cover：让页面铺到刘海与 Home Indicator 之下，安全区由 CSS 的 env() 补。
+		     不禁缩放：正文放大是读长章的人自己的权利。 -->
+		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 		<title>墨耕 · AI 长章小说创作台</title>
 		<meta name="color-scheme" content="light dark" />
+		<!-- theme-color 随应用内的昼夜切换走，由脚本改写；系统主题由 media 那份兜底。 -->
+		<meta name="theme-color" id="theme-color" content="#efe8d9" />
+		<meta name="theme-color" media="(prefers-color-scheme: light)" content="#efe8d9" />
+		<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#17150f" />
+		<meta name="format-detection" content="telephone=no" />
+		<meta name="mobile-web-app-capable" content="yes" />
+		<meta name="apple-mobile-web-app-capable" content="yes" />
+		<meta name="apple-mobile-web-app-title" content="墨耕" />
+		<meta name="apple-mobile-web-app-status-bar-style" content="default" />
 		<script>
 			// 主题必须在首帧之前定下来，否则暗色用户会先看到一屏白纸。
 			// 这段要排在样式表之前：data-theme 晚于 CSS 生效，第一帧就已经是错色了。
@@ -15,12 +26,17 @@
 					var prefers = window.matchMedia("(prefers-color-scheme: dark)").matches;
 					var theme = saved === "light" || saved === "dark" ? saved : prefers ? "dark" : "light";
 					document.documentElement.dataset.theme = theme;
+					// 顶栏颜色也跟着昼夜走，手机上的地址栏才不会在暗色里留一条白边。
+					var meta = document.querySelector('meta[name="theme-color"]:not([media])');
+					if (meta) meta.setAttribute("content", theme === "dark" ? "#17150f" : "#efe8d9");
 				} catch (e) {
 					document.documentElement.dataset.theme = "light";
 				}
 			})();
 		</script>
 		<link rel="stylesheet" href="/style.css" />
+		<!-- 设置页的模型配置区（卡片、档位 chip、批量面板）样式单独成文件，排在 style.css 之后以覆盖它。 -->
+		<link rel="stylesheet" href="/settings.css" />
 	</head>
 	<body>
 		<div class="desk">
@@ -44,8 +60,15 @@
 					<button id="open-palette" class="btn btn-quiet btn-sm beam-search" title="检索与跳转（Ctrl+K / ⌘K）">
 						<span class="beam-search-glyph" aria-hidden="true">搜</span><span class="beam-search-label">检索</span><kbd class="beam-kbd">Ctrl K</kbd>
 					</button>
-					<select id="model-select" title="模型"></select>
-					<select id="thinking-select" title="推理档位"></select>
+					<!-- 手机上顶栏放不下两个下拉，收进这块浮层里；桌面端用 display:contents 把它们还原成顶栏的一行。 -->
+					<button id="toggle-rail" class="btn btn-quiet btn-sm only-phone" title="章目" aria-controls="chapter-list" aria-expanded="false">目</button>
+					<div class="beam-tools" id="beam-tools">
+						<span class="beam-tools-cap">模型</span>
+						<select id="model-select" title="模型"></select>
+						<span class="beam-tools-cap">档位</span>
+						<select id="thinking-select" title="推理档位"></select>
+					</div>
+					<button id="toggle-tools" class="btn btn-quiet btn-sm only-phone" title="模型与档位" aria-controls="beam-tools" aria-expanded="false">笔</button>
 					<button id="toggle-bible" class="btn btn-quiet btn-sm only-narrow" title="素材、大纲与待办" aria-controls="bible" aria-expanded="false">案</button>
 					<button id="open-shortcuts" class="btn btn-quiet theme-toggle" title="键盘快捷键" aria-label="键盘快捷键">?</button>
 					<button id="theme-toggle" class="btn btn-quiet theme-toggle" title="切换昼夜" aria-label="切换昼夜">
@@ -66,9 +89,12 @@
 			<div id="toast-stack" class="toast-stack" aria-live="polite" aria-atomic="false"></div>
 
 			<!-- ── 左卷：写作台里只剩章目；选卷与素材库都在「案头」── -->
-			<aside class="rail">
+			<aside class="rail" id="rail">
 				<section class="rail-block rail-grow">
-					<h2 class="rail-label"><i class="tick"></i>章目</h2>
+					<div class="rail-head">
+						<h2 class="rail-label"><i class="tick"></i>章目</h2>
+						<button id="close-rail" class="btn btn-quiet btn-sm only-phone rail-close" title="收起章目" aria-label="收起章目">×</button>
+					</div>
 					<button id="add-chapter" class="rail-add">＋ 立一章</button>
 					<input id="chapter-filter" class="rail-filter" type="search" placeholder="搜章目…" autocomplete="off" aria-label="搜章目" />
 					<ol id="chapter-list" class="chapter-list"></ol>
@@ -266,6 +292,8 @@
 				<div id="bible" class="bible"></div>
 			</aside>
 			<button id="bible-backdrop" class="bible-backdrop hidden" tabindex="-1" aria-label="收起右案"></button>
+			<!-- 章目抽屉的遮罩：与右案那一套同模，只是各管一边。 -->
+			<button id="rail-backdrop" class="rail-backdrop hidden" tabindex="-1" aria-label="收起章目"></button>
 		</div>
 
 		<dialog id="project-dialog" class="sheet sheet-wide sheet-form">

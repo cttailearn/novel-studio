@@ -81,25 +81,60 @@ export interface Settings {
 export const DEFAULT_COST: CostRates = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
 /**
- * 新模型的起始值。
+ * 占位默认值，需人工核对。
  *
- * 这只是"还没从上游取到真实限制"时的占位，不是测出来的数字。
+ * 这两个数字不是测出来的，只是"还没从上游取到真实限制"时的兜底：
  * 上游报了 inputTokenLimit / outputTokenLimit 就用上游的；
  * 报不出来的（如 OpenAI 兼容的 /models 只回 id）就落在这里，需要人工核对。
+ *
+ * 用它们和"用户手填的值"区分开：等于占位值就说明这个模型还没核对过，
+ * 设置页据此打「待核对」徽标。判定见 isPlaceholderModel。
  */
-export const DEFAULT_CONTEXT_WINDOW = 1_048_576; // 1M
-export const DEFAULT_MAX_TOKENS = 131_072; // 128K
+export const PLACEHOLDER_CONTEXT_WINDOW = 1_048_576; // 1M
+export const PLACEHOLDER_MAX_TOKENS = 131_072; // 128K
+
+/**
+ * 占位默认值的旧别名。
+ *
+ * 保留是为了不破坏现有引用（main.ts 的 settingsView 等处仍在用），
+ * 新代码请用 PLACEHOLDER_CONTEXT_WINDOW / PLACEHOLDER_MAX_TOKENS。
+ */
+export const DEFAULT_CONTEXT_WINDOW = PLACEHOLDER_CONTEXT_WINDOW;
+export const DEFAULT_MAX_TOKENS = PLACEHOLDER_MAX_TOKENS;
 
 export function emptyModel(id: string, name = id): ModelConfig {
 	return {
 		id,
 		name,
-		contextWindow: DEFAULT_CONTEXT_WINDOW,
-		maxTokens: DEFAULT_MAX_TOKENS,
+		contextWindow: PLACEHOLDER_CONTEXT_WINDOW,
+		maxTokens: PLACEHOLDER_MAX_TOKENS,
 		reasoning: false,
 		thinkingLevels: ["off"],
 		cost: { ...DEFAULT_COST },
 	};
+}
+
+/** 上下文窗口是否仍是占位值（未经人工核对）。 */
+export function isPlaceholderContextWindow(contextWindow: unknown): boolean {
+	return Number(contextWindow) === PLACEHOLDER_CONTEXT_WINDOW;
+}
+
+/** 输出上限是否仍是占位值（未经人工核对）。 */
+export function isPlaceholderMaxTokens(maxTokens: unknown): boolean {
+	return Number(maxTokens) === PLACEHOLDER_MAX_TOKENS;
+}
+
+/**
+ * 这个模型的限制是否还停留在占位值上。
+ *
+ * 只有上下文窗口与输出上限都还是占位值时才算"整条待核对"；
+ * 回填时需要逐项判断，用的是上面两个单值判定。
+ *
+ * 参数只要求 contextWindow / maxTokens 两个字段，
+ * 因此 ModelConfig 与 pi-ai 的 Model 都能直接传进来。
+ */
+export function isPlaceholderModel(model: Pick<ModelConfig, "contextWindow" | "maxTokens">): boolean {
+	return isPlaceholderContextWindow(model?.contextWindow) && isPlaceholderMaxTokens(model?.maxTokens);
 }
 
 export function emptySettings(): Settings {
@@ -156,6 +191,8 @@ function normalizeModel(raw: ModelConfig): ModelConfig {
 		thinkingLevels: Array.isArray(raw?.thinkingLevels)
 			? THINKING_LEVELS.filter((level) => raw.thinkingLevels.includes(level))
 			: ["off"],
+		// cost 是真正的运行期数据（pi-ai 用它算钱），不能在这里丢。
+		// 四个数值逐一归一化：缺失填 0，负数与非数一律按 0 处理。
 		cost: {
 			input: numberOr(raw?.cost?.input, 0),
 			output: numberOr(raw?.cost?.output, 0),
