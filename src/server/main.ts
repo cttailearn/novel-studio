@@ -217,7 +217,13 @@ function buildWritingContext(projectId: string, chapterId: string, mode: Chapter
 		chapter,
 		materials,
 		mode,
-		...(previousChapter ? { previous: project.drafts[previousChapter.id] } : {}),
+		// 上一章的两样都给：正文草稿（结尾 + 实际小结）与大纲条目（写前定的要略）。
+		...(previousChapter
+			? {
+					previous: project.drafts[previousChapter.id],
+					previousOutline: previousChapter,
+				}
+			: {}),
 		...(project.drafts[chapterId] ? { existing: project.drafts[chapterId] } : {}),
 	};
 }
@@ -822,7 +828,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		if (!project.outline.some((chapter) => chapter.id === chapterId)) {
 			return json(res, 404, { error: "章节不存在" });
 		}
-		const body = await readJsonBody<{ content?: string; title?: string; autosave?: boolean }>(req);
+		const body = await readJsonBody<{ content?: string; title?: string; autosave?: boolean; summary?: string }>(req);
 		if (typeof body.content !== "string") return json(res, 400, { error: "缺少 content" });
 		// 取成常量：属性访问的类型收窄无法穿透闭包。
 		const content = body.content;
@@ -855,6 +861,13 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 					id: chapterId,
 					title: body.title?.trim() || existing?.title || chapterId,
 					content,
+					// 手动存稿是作者手改正文，不是重写这一章：旧小结一律留着。
+					// 它可能略旧（正文改了、小结没跟着改），但比空着强 ——
+					// 下一章接续靠的就是它。作者显式补了小结才用新值。
+					summary:
+						typeof body.summary === "string" && body.summary.trim()
+							? body.summary
+							: (existing?.summary ?? ""),
 					revision: (existing?.revision ?? 0) + 1,
 					updatedAt: Date.now(),
 					// 首次存稿时继承该章的装配清单：正文是拿这些料写的，

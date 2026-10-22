@@ -662,7 +662,9 @@ function writeChapterTool(deps: NovelToolDeps): AgentTool<any> {
 		description:
 			"把已装配的素材组装成章节正文。每一次调用会整段覆盖该章节已有内容并保留一个新版本。" +
 			"续写时 mode 选 continue；重写选 rewrite；从零写起选 create。" +
-			"materialIds 如实填入实际用到的素材 id，供回溯这段正文从什么料而来。",
+			"materialIds 如实填入实际用到的素材 id，供回溯这段正文从什么料而来。" +
+			"summary 顺手交一份 2-4 句的小结：谁做了什么、留下了什么钩子、哪些事没写完 —— " +
+			"下一章靠它接续，所以不要复述正文，也不要写成开写前的要略。",
 		parameters: Type.Object(
 			{
 				chapterId: nonEmpty("章节 id"),
@@ -674,6 +676,13 @@ function writeChapterTool(deps: NovelToolDeps): AgentTool<any> {
 					}),
 				),
 				materialIds: Type.Optional(stringArray("本次实际用到的素材 id")),
+				summary: Type.Optional(
+					Type.String({
+						description:
+							"这一章实际写了什么的小结，2-4 句：谁做了什么、留下了什么钩子、哪些事没写完。" +
+							"下一章靠它接续，别复述正文，也别写成开写前的要略。留空则沿用上一版的小结。",
+					}),
+				),
 			},
 			{ description: "写入章节" },
 		),
@@ -711,6 +720,9 @@ function writeChapterTool(deps: NovelToolDeps): AgentTool<any> {
 						id: params.chapterId,
 						title: params.title,
 						content: params.content,
+						// 小结没交就沿用旧的那份：作者手改过正文时旧小结可能略旧，
+						// 但比空着强 —— 下一章接续靠的就是它。
+						summary: params.summary ?? existing?.summary ?? "",
 						revision: (existing?.revision ?? 0) + 1,
 						updatedAt: Date.now(),
 						// 没显式传素材时，依次回落到上一版记录、本章装配清单。
@@ -724,8 +736,11 @@ function writeChapterTool(deps: NovelToolDeps): AgentTool<any> {
 				});
 			});
 			const draft = written.drafts[params.chapterId]!;
+			const summaryNote = draft.summary.trim()
+				? "小结已记下，下一章靠它接续。"
+				: "本次没有小结，下一章会拿不到上一章的交代 —— 补交时请带上 summary。";
 			return result(
-				"已写入《" + draft.title + "》：第 " + draft.revision + " 版，" + countWords(draft.content) + " 字（" + mode + "）。",
+				"已写入《" + draft.title + "》：第 " + draft.revision + " 版，" + countWords(draft.content) + " 字（" + mode + "）。" + summaryNote,
 				draft,
 			);
 		},

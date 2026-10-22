@@ -213,7 +213,13 @@ function writingContextOf(options: NovelAgentOptions, project: Project): Writing
 		mode: existing ? "rewrite" : "create",
 		// 现算的这一支就是常驻工作台会话：作业由作者当轮交代，提示词不预设。
 		interactive: true,
-		...(previousChapter ? { previous: project.drafts[previousChapter.id] } : {}),
+		// 上一章的两样都给：正文草稿（结尾 + 实际小结）与大纲条目（写前定的要略）。
+		...(previousChapter
+			? {
+					previous: project.drafts[previousChapter.id],
+					previousOutline: previousChapter,
+				}
+			: {}),
 		...(existing ? { existing } : {}),
 	};
 }

@@ -184,6 +184,17 @@ export interface ChapterDraft {
 	id: string;
 	title: string;
 	content: string;
+	/**
+	 * 这一章**实际写了什么**的小结，2-4 句。
+	 *
+	 * 与大纲的 summary（要略）不是一回事，别混：
+	 * 要略是开写前定下的"打算写什么"，这里是写完之后交上来的"实际写了什么"——
+	 * 谁做了什么、留下了什么钩子、哪些事没写完。
+	 * 下一章靠它接续，所以既不是正文的复述，也不是要略的复述。
+	 *
+	 * 老工程没有这个字段，缺省空串：读得开，只是接续时拿不到上一章小结。
+	 */
+	summary: string;
 	revision: number;
 	updatedAt: number;
 	/** 写作时装配了哪些素材，用于回溯"这段正文是从什么料来的"。 */
@@ -401,6 +412,8 @@ export function normalizeProject(raw: unknown): Project {
 				id: typeof draft.id === "string" ? draft.id : key,
 				title: typeof draft.title === "string" ? draft.title : "",
 				content: typeof draft.content === "string" ? draft.content : "",
+				// 老工程没有小结字段，缺省空串：读得开，接续时提示"上一章没有小结"。
+				summary: typeof draft.summary === "string" ? draft.summary : "",
 				revision: typeof draft.revision === "number" ? draft.revision : 1,
 				updatedAt: typeof draft.updatedAt === "number" ? draft.updatedAt : Date.now(),
 				materialIds: Array.isArray(draft.materialIds)
@@ -792,6 +805,8 @@ export class ProjectStore {
 					...draft,
 					history: Array.isArray(draft.history) ? draft.history.slice(-MAX_DRAFT_HISTORY) : [],
 					materialIds: Array.isArray(draft.materialIds) ? draft.materialIds : [],
+					// 老章节文件没有小结字段，缺省空串。
+					summary: typeof draft.summary === "string" ? draft.summary : "",
 				};
 			} catch (error) {
 				const kept = file + ".corrupt";

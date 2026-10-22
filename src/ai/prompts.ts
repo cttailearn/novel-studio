@@ -192,6 +192,14 @@ export interface WritingContext {
 	materials: Material[];
 	/** 上一章的结尾，用于接续文气。 */
 	previous?: ChapterDraft;
+	/**
+	 * 上一章的大纲条目，也就是写前定下的"要略"。
+	 *
+	 * 与 previous 是两回事：previous 是上一章写出来的东西（正文 + 实际小结），
+	 * previousOutline 是上一章当初打算写什么。三样一起给，模型才知道上一章
+	 * 停在哪、到底发生了什么、原本要干什么。
+	 */
+	previousOutline?: OutlineChapter;
 	/** 本章已有的正文，重写或续写时存在。 */
 	existing?: ChapterDraft;
 	mode: ChapterWriteMode;
@@ -255,8 +263,62 @@ function materialBlock(materials: Material[]): string {
 		.join("\n\n");
 }
 
+/**
+ * 接续块：上一章的大纲要略 + 实际小结 + 结尾 600 字 + 上一章 id。
+ *
+ * 三样各管一件事：
+ * - 要略 = 上一章当初"打算写什么"（写前定的）
+ * - 小结 = 上一章"实际写了什么"（写完交上来的）
+ * - 结尾那 600 字 = 上一章"停在哪"（接文气用）
+ *
+ * 少了任一样都会接歪：只有结尾会接上字接不上事；只有要略会把没写的当成写了；
+ * 只有小结则不知道这一章本来打算干什么。给全了，模型才有连续的上一章。
+ */
+function continuationBlock(ctx: WritingContext): string {
+	const { previous, previousOutline } = ctx;
+	if (!previous && !previousOutline) return "这是第一章，没有上一章可接。";
+	const title = previousOutline?.title ?? previous?.title ?? "上一章";
+	const id = previous?.id ?? previousOutline?.id ?? "";
+	const head = "上一章《" + title + "》" + (id ? "（id: " + id + "）" : "");
+	// 要略：大纲里写前定下的"打算写什么"。
+	const outlineLine = previousOutline?.summary?.trim()
+		? '- 大纲要略（开写前定的"要写什么"）：' + previousOutline.summary.trim()
+		: "- 大纲要略：（没有）";
+	if (!previous || !previous.content.trim()) {
+		return (
+			head +
+			"尚未成稿，没有可接的正文；按本章要点自行开篇，不要假设上一章发生过什么。\n" +
+			outlineLine
+		);
+	}
+	// 小结：上一章写完后交上来的"实际写了什么"。
+	const hasSummary = Boolean(previous.summary.trim());
+	const summaryLine = hasSummary
+		? '- 上一章小结（上一章写完后交上来的"实际写了什么"）：' + previous.summary.trim()
+		: "- 上一章小结：（没有 —— 上一章可能是老工程没记小结，或写它时没交小结）";
+	// 有小结时不必再叮嘱"去读上一章"，但仍要防它凭印象续写。
+	const hint = hasSummary
+		? "上一章没有小结，或者你拿不准上一章到底发生了什么，就先 read_chapter 读上一章（id: " +
+			id +
+			"）再动笔 —— 它会把那一章的大纲要点和正文一起给你。不要凭印象续写。"
+		: "上一章没有小结 —— 先 read_chapter 读上一章（id: " +
+			id +
+			"）再动笔，它会把那一章的大纲要点和正文一起给你。不要凭印象续写。";
+	return [
+		head,
+		outlineLine,
+		summaryLine,
+		"",
+		"上一章结尾（最后 600 字，接文气用）：",
+		"",
+		previous.content.slice(-600),
+		"",
+		hint,
+	].join("\n");
+}
+
 export function buildWritingSystemPrompt(project: Project, ctx: WritingContext): string {
-	const { chapter, materials, previous, existing, mode } = ctx;
+	const { chapter, materials, existing, mode } = ctx;
 	const target = chapter.targetWords > 0 ? `${chapter.targetWords} 字左右` : "篇幅不限";
 	// 作业必须与调用方要求的 mode 一致：write_chapter 是整段覆盖，
 	// 若提示词说"继续往后写"而调用方要的是重写，交出来的会是个残篇。
@@ -318,13 +380,7 @@ ${existing.content}
 
 ` : ""}# 接续
 
-${previous
-	? previous.content.trim()
-		? `上一章《${previous.title}》的结尾状态：
-
-${previous.content.slice(-600)}`
-		: `上一章《${previous.title}》尚未成稿，没有可接的正文；按本章要点自行开篇，不要假设上一章发生过什么。`
-	: "这是第一章，没有上一章可接。"}
+${continuationBlock(ctx)}
 
 # 绝对要保持的原则
 
@@ -354,6 +410,7 @@ ${chapter.targetWords > 0 ? `- 字数：控制在 ${chapter.targetWords} 字左�
 - 默认使用中文写作。
 - 除了工具调用参数，不要输出任何结构化文本，不要用 Markdown 标题分级。
 - 写正文时只写正文本身，章节标题传给 write_chapter 的 title，不要在正文前写"第一章"。
+- 交稿时顺手交一份小结：write_chapter 的 summary 参数写 2-4 句 —— 谁做了什么、留下了什么钩子、哪些事没写完。下一章靠它接续，所以别复述正文，也别写成开写前的要略。
 - 工具写完后用一两句话说清成绩与下一步，不要复述正文内容。`;
 }
 

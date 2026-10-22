@@ -57,18 +57,39 @@ const state = {
 	transcripts: new Map(),
 	/** 面板当前显示的会话键，用来判断该不该换内容。 */
 	streamKeys: { material: null, writing: null, library: null },
-	/** 正在流式的面板：null | "material" | "writing" | "library"。 */
-	streaming: null,
 	/** 「另起一席」的二次确认：先记住哪个面板，再点一次才真弃。 */
 	pendingNewChat: null,
 	/**
-	 * 正在流式生成的那一份内容挂在哪：node 就是收到 token 就往上写的那个节点。
-	 * 作者中途切章时它被整体挪进一个游离容器（node 暂时不在文档里），token 照写不误，
-	 * 切回来再原样搬回面板。拍成 HTML 快照只会留下一段永远冻住的半截。
+	 * 每块面板各自一套流式状态 —— 三块面板可以同时生成。
+	 *
+	 * 作者的真实干法就是这样：执笔者在写第三章，人却挪到「料」工作台
+	 * 让设定官备第四章的料。从前三块面板共用一套状态，第二块一开口就把
+	 * 第一块的代次拨走，前一轮当场作废；三枚「呈上」还被一起禁掉，
+	 * 按下去静默无效。所以这里按面板各存一份。
+	 *
+	 * 键是面板名（material / writing / library），每格四样：
+	 *   epoch   —— 这一轮流的代次。只有换卷、删作品、或这块面板自己重起一轮才 +1，
+	 *              作废只作废自己这块，邻栏照跑；
+	 *   holder  —— 这一轮的内容挂在哪：node 就是收到 token 就往上写的那个节点。
+	 *              作者中途切章时它被整体挪进一个游离容器（node 暂时不在文档里），
+	 *              token 照写不误，切回来再原样搬回面板。拍成 HTML 快照只会
+	 *              留下一段永远冻住的半截；
+	 *   waiting —— 这一轮的「正在落笔」占位。两块面板同时跑时不能共用一枚，
+	 *              否则收一块会顺手把另一块的占位摘掉；
+	 *   busy    —— 是否正在生成。守卫与按钮禁用都只看自己这块。
 	 */
-	streamHolder: null,
-	/** 流的代次。换项目时 +1，跑着的 pumpStream 发现自己过期就收手。 */
-	streamEpoch: 0,
+	stream: {
+		material: { epoch: 0, holder: null, waiting: null, busy: false },
+		writing: { epoch: 0, holder: null, waiting: null, busy: false },
+		library: { epoch: 0, holder: null, waiting: null, busy: false },
+	},
+	/**
+	 * 换笔时正撞上生成的那几席：先记下 sessionId → 它属于哪块面板，
+	 * 等那一轮收完再补发。服务端在生成途中换模型会回 409
+	 * （它会把正在跑的那支智能体整支换掉），当场发不出去，
+	 * 但也绝不能像从前那样吞掉 —— 作者会以为换好了。
+	 */
+	pendingModelSwitch: new Map(),
 	/** 读操作的发号。号小的响应一律丢弃：它比已经落地的那次更旧。 */
 	readSeq: { project: 0, library: 0, projects: 0 },
 	/** 一次性成文的 AbortController，让「止笔」对它也有效。 */
@@ -124,9 +145,6 @@ let materialForm = { scope: "project", mode: "create", uploadId: null, materialI
 
 /** 正在被拖的素材 id。dragover 时读不到 dataTransfer，落区提示只能靠它。 */
 let draggingMaterialId = null;
-
-/** 当前这一轮「正在落笔」的占位节点。止笔时要能立刻把它收掉。 */
-let currentWaiting = null;
 
 const kindLabel = (kind) => MATERIAL_KIND_LABELS[kind] || kind;
 
@@ -1578,10 +1596,9 @@ async function deleteProject(project) {
 	}
 
 	// 删的是当前这部：清空案头，退到另一部，没有就退回空稿台。
-	// 手上那一轮同样作废：它的节点马上要被清掉，再往里写就是给下一部作品添字。
-	state.streamEpoch += 1;
-	endStream();
-	dismissWaiting();
+	// 手上那几轮同样作废：它们的节点马上要被清掉，再往里写就是给下一部作品添字。
+	// 三块面板各拨一格代次，占位与按钮一并收干净。
+	invalidateAllStreams();
 	clearEditorState();
 	state.editing = false;
 	state.projectId = null;
@@ -1590,7 +1607,6 @@ async function deleteProject(project) {
 	state.chapterId = null;
 	resetProjectSessions();
 	state.uploads = [];
-	setStreaming(null);
 	$(PANES.material.stream).replaceChildren();
 	$(PANES.writing.stream).replaceChildren();
 	await reloadLibrary();
@@ -2929,8 +2945,13 @@ function renderUploads(scope = "material") {
  * 前者会写成"本书的男主"，后者不能这么写。
  */
 async function refineUpload(entry) {
-	if (state.streaming) return;
 	const pane = entry.scope === "library" ? "library" : "material";
+	// 只看自己这块面板：邻栏在跑不该挡住这份资料的提炼。
+	// 但同一块面板已经在写时不能再塞一轮，否则两份回答会挤进同一个框。
+	if (streamBusy(pane)) {
+		toast("这边的设定官还在落笔，等它收笔再交。", "warn");
+		return;
+	}
 	entry.status = "sent";
 	renderUploads(pane);
 	const tail =
@@ -3243,7 +3264,8 @@ $("chapter-form").addEventListener("submit", async (event) => {
  * options.repeat：这一轮是重试，对话里留一行「再写一遍」而不是重抄一遍。
  */
 async function runWrite(mode, note, chapterOverride, options = {}) {
-	if (state.streaming) return;
+	// 只看执笔者这块：设定官在邻栏备料，不该把成文按钮锁住。
+	if (streamBusy("writing")) return;
 	const chapterId = chapterOverride ?? state.chapterId;
 	if (!chapterId || !state.project) return;
 
@@ -3264,7 +3286,7 @@ async function runWrite(mode, note, chapterOverride, options = {}) {
 	);
 	const waiting = showWaiting("writing");
 	setStreaming("writing");
-	const epoch = state.streamEpoch;
+	const epoch = streamSlot("writing").epoch;
 	try {
 		const res = await fetch(
 			"/api/projects/" + state.projectId + "/chapters/" + encodeURIComponent(chapterId) + "/write",
@@ -3288,10 +3310,10 @@ async function runWrite(mode, note, chapterOverride, options = {}) {
 			retry: () => retryWrite(mode, note, chapterId),
 		});
 	} catch (error) {
-		dismissWaiting(waiting);
+		dismissWaiting("writing", waiting);
 		if (error.name === "AbortError") {
-			if (!streamStale(epoch)) appendMessage("writing", "assistant", "已止笔。", epoch);
-		} else if (!streamStale(epoch)) {
+			if (!streamStale("writing", epoch)) appendMessage("writing", "assistant", "已止笔。", epoch);
+		} else if (!streamStale("writing", epoch)) {
 			appendMessage("writing", "error", error.message, epoch, {
 				actions: retryActions(() => retryWrite(mode, note, chapterId)),
 			});
@@ -3299,11 +3321,11 @@ async function runWrite(mode, note, chapterOverride, options = {}) {
 			restoreComposer("writing", note);
 		}
 	} finally {
-		dismissWaiting(waiting);
+		dismissWaiting("writing", waiting);
 		state.writeAbort = null;
-		if (!streamStale(epoch)) {
-			endStream();
-			setStreaming(null);
+		if (!streamStale("writing", epoch)) {
+			endStream("writing");
+			setStreaming("writing", false);
 			await reloadProjectSafely("writing", "落笔已毕，但右案与章目没能同步刷新");
 		}
 	}
@@ -3315,8 +3337,8 @@ async function runWrite(mode, note, chapterOverride, options = {}) {
  * 返回值：发出去没有。按钮据此决定自己是「已重发」还是留在原处。
  */
 function retryWrite(mode, note, chapterId) {
-	if (state.streaming) {
-		toast("这一轮还没收完，稍等片刻再试。", "warn");
+	if (streamBusy("writing")) {
+		toast("这一笔还没收完，稍等片刻再试。", "warn");
 		return false;
 	}
 	void runWrite(mode, note, chapterId, { repeat: true });
@@ -3408,14 +3430,22 @@ function renderBible() {
 
 // ═══════════════════════════════════════════════════ 工程
 
+/** 换卷、删作品：三块面板各自那一轮全部作废，占位与按钮一并收干净。 */
+function invalidateAllStreams() {
+	for (const pane of Object.keys(state.stream)) {
+		streamSlot(pane).epoch += 1;
+		endStream(pane);
+	}
+	dismissAllWaiting();
+	clearStreaming();
+}
+
 async function selectProject(id) {
 	state.projectId = id;
 	writeStored(PROJECT_KEY, id);
-	// 换卷即换会话：手上那一轮作废，它剩下的 token 不许写进新卷的面板。
-	// 案头的「设定官」不绑作品，它那一席要留着 —— 作者换本书接着备料是常事。
-	state.streamEpoch += 1;
-	endStream();
-	dismissWaiting();
+	// 换卷即换会话：手上那几轮作废，它们剩下的 token 不许写进新卷的面板。
+	// 三块面板各拨一格代次 —— 从前是一个全局代次，现在一块一格，谁也不会漏。
+	invalidateAllStreams();
 	resetProjectSessions();
 	state.chapterId = null;
 	state.editing = false;
@@ -3440,9 +3470,8 @@ async function selectProject(id) {
 	syncInput("library-search", "");
 	syncInput("bible-search", "");
 	syncBibleTabs();
-	// 用 setStreaming 而不是直接改 state：按钮与下拉的禁用态得一起放开，
-	// 不然换卷之后输入框还杵在「落笔中」，人也点不动。
-	setStreaming(null);
+	// invalidateAllStreams 里已经放过按钮与禁用态；这里再清一次屏上的旧对话，
+	// 免得新卷底下还压着上一卷的半截。
 	$(PANES.material.stream).replaceChildren();
 	$(PANES.writing.stream).replaceChildren();
 
@@ -3628,6 +3657,23 @@ function activeKey(pane) {
 	if (pane === "library") return "library";
 	return pane === "writing" ? "writing:" + (state.chapterId ?? "") : "material";
 }
+
+/**
+ * 取这块面板的流式状态格子。
+ *
+ * 三块面板各一格，互不相干：一块在跑不会挡另一块发话，
+ * 也不会把另一块正在写的字作废。面板名写错了就当「料」那格用，
+ * 宁可错在保守一侧，也不要抛异常把整轮生成掀掉。
+ */
+function streamSlot(pane) {
+	return state.stream[pane] ?? state.stream.material;
+}
+
+/** 这块面板是不是正在生成。守卫、按钮禁用、止笔都只问这一句。 */
+function streamBusy(pane) {
+	return streamSlot(pane).busy;
+}
+
 /**
  * 把面板切到当前会话的内容上。键没变就什么都不做。
  *
@@ -3640,7 +3686,7 @@ function mountStream(pane) {
 	const key = activeKey(pane);
 	const previous = state.streamKeys[pane];
 	if (previous === key) return key;
-	const holder = state.streamHolder && state.streamHolder.pane === pane ? state.streamHolder : null;
+	const holder = streamSlot(pane).holder;
 	if (previous) {
 		if (holder && holder.key === previous) {
 			// 切走的正是生成中的那一章：把节点整体摘下来寄放到游离容器，
@@ -3673,33 +3719,38 @@ function mountStream(pane) {
 /**
  * 这一轮内容当前挂在哪个节点上。生成中被切走时是那个游离容器。
  *
- * epoch 是发起这一轮时的代次。代次不对说明这一轮已经作废（换卷、被新的一轮顶掉），
- * 那它就写进一个一次性丢弃的容器：宁可这段字丢掉，也不能落进别人的面板。
+ * epoch 是发起这一轮时的代次。代次不对说明这一轮已经作废（换卷、删作品、
+ * 或这块面板自己重起一轮），那它就写进一个一次性丢弃的容器：
+ * 宁可这段字丢掉，也不能落进别人的面板。
+ *
+ * 代次按面板各算各的 —— 邻栏开新轮不该让这一栏的字消失。
  */
-function streamNode(pane, epoch = state.streamEpoch) {
-	const holder = state.streamHolder;
-	if (holder && holder.pane === pane && holder.epoch === epoch) return holder.node;
-	if (streamStale(epoch)) return document.createDocumentFragment();
+function streamNode(pane, epoch = streamSlot(pane).epoch) {
+	const holder = streamSlot(pane).holder;
+	if (holder && holder.epoch === epoch) return holder.node;
+	if (streamStale(pane, epoch)) return document.createDocumentFragment();
 	return $(PANES[pane].stream);
 }
 
 /**
  * 开一轮生成：先把这一轮钉在它自己的会话键上。
  * 之后作者爱切章切面板，token 都知道该写回哪一份。
- * 代次也顺手往前拨一格：万一上一轮还在读流，它会发现自己过期而收手。
+ * 代次也顺手往前拨一格：万一这块面板的上一轮还在读流，它会发现自己过期而收手。
+ *
+ * 只拨自己这一格。三块面板各跑各的，同时生成互不相扰。
  */
 function beginStream(pane) {
+	const slot = streamSlot(pane);
 	mountStream(pane);
-	endStream();
-	state.streamEpoch += 1;
+	endStream(pane);
+	slot.epoch += 1;
 	state.autoScroll[pane] = true;
 	// 发话了就不再等着确认"另起一席"：确认态该跟着这一轮一起收掉。
 	state.pendingNewChat = null;
 	renderNewChatButtons();
-	state.streamHolder = {
-		pane,
+	slot.holder = {
 		key: activeKey(pane),
-		epoch: state.streamEpoch,
+		epoch: slot.epoch,
 		node: $(PANES[pane].stream),
 	};
 }
@@ -3707,17 +3758,23 @@ function beginStream(pane) {
 /**
  * 收尾：把生成中的内容按它自己的键落成快照。
  * 无论它此刻挂在面板上还是寄放在游离容器里，都归它自己的会话，不归面板此刻的键。
+ *
+ * 只收这一块面板。别的面板还在跑的那一轮，它的 holder 动都不能动。
  */
-function endStream() {
-	const holder = state.streamHolder;
+function endStream(pane) {
+	const slot = streamSlot(pane);
+	const holder = slot.holder;
 	if (!holder) return;
-	state.streamHolder = null;
+	slot.holder = null;
 	state.transcripts.set(holder.key, holder.node.innerHTML);
 }
 
-/** 这一轮是否已经作废（换卷、重新起一轮）。作废了就不能再往界面上写。 */
-function streamStale(epoch) {
-	return epoch !== state.streamEpoch;
+/**
+ * 这一轮是否已经作废（换卷、删作品、这块面板重起一轮）。
+ * 作废了就不能再往界面上写。判据只看自己这块面板的代次。
+ */
+function streamStale(pane, epoch) {
+	return epoch !== streamSlot(pane).epoch;
 }
 /**
  * 往面板里放一条消息。
@@ -3797,7 +3854,8 @@ function showWaiting(pane) {
 		if (text) text.textContent = node.waitingPhase + " " + Math.floor((Date.now() - started) / 1000) + " 秒";
 	}, 1000);
 	scrollToBottom(pane);
-	currentWaiting = node;
+	// 占位按面板各记一枚：两块面板同时跑时，收一块不能把另一块的占位摘掉。
+	streamSlot(pane).waiting = node;
 	return node;
 }
 
@@ -3814,26 +3872,116 @@ function setWaitingPhase(node, phase) {
 	if (text) text.textContent = phase + " " + Math.floor((Date.now() - node.waitingStarted) / 1000) + " 秒";
 }
 
-function dismissWaiting(node = currentWaiting) {
+/**
+ * 撤掉这一块面板的「正在落笔」占位。
+ *
+ * 按面板撤：两块面板同时跑时，一块收尾不能顺手把另一块的占位摘掉
+ * （那会让邻栏看起来像死了，其实还在等首字）。
+ * node 显式传进来时就只撤那一枚，不动格子里记的那枚 ——
+ * 一轮里换了占位、旧的那枚晚到时不能误删新的。
+ */
+function dismissWaiting(pane, node = streamSlot(pane).waiting) {
 	if (!node) return;
 	clearInterval(node.waitingTimer);
 	node.remove();
-	if (currentWaiting === node) currentWaiting = null;
+	const slot = streamSlot(pane);
+	if (slot.waiting === node) slot.waiting = null;
 }
 
-function setStreaming(pane) {
-	state.streaming = pane;
-	// 三个面板都要跟着禁用：库面板也能提交，漏掉它会出现"这边还在写、那边能再发一轮"。
-	for (const role of ["material", "writing", "library"]) {
-		const talk = $(PANES[role].stream).closest(".bench-talk");
-		if (!talk) continue;
+/** 换卷、删作品时把三块面板的占位一起撤掉 —— 那一轮全都作废了。 */
+function dismissAllWaiting() {
+	for (const pane of Object.keys(state.stream)) dismissWaiting(pane);
+}
+
+/**
+ * 标记这块面板「正在生成 / 已收笔」，并把它自己那套控件跟着刷新。
+ *
+ * 只动自己这一块：从前三块面板共用一套状态，一块开跑就把三枚「呈上」
+ * 一起禁掉 —— 作者在「文」让执笔者写着，想同时到「料」让设定官备料，
+ * 按钮是灰的，按下去静默无效。现在各管各的。
+ *
+ * 顶栏那两支下拉（模型、档位）不在这里禁：那是「下一轮用哪支笔」的
+ * 全局偏好，不该被某一块面板的生成锁住 —— 换笔的麻烦另有 pendingModelSwitch 兜。
+ */
+function setStreaming(pane, busy = true) {
+	const slot = streamSlot(pane);
+	slot.busy = busy;
+	const talk = $(PANES[pane].stream).closest(".bench-talk");
+	if (talk) {
 		const submit = talk.querySelector("button[type=submit]");
-		submit.disabled = Boolean(pane);
-		submit.textContent = pane === role ? "落笔中" : "呈上";
-		talk.querySelector("[data-abort]").classList.toggle("hidden", pane !== role);
+		if (submit) {
+			submit.disabled = busy;
+			submit.textContent = busy ? "落笔中" : "呈上";
+		}
+		talk.querySelector("[data-abort]")?.classList.toggle("hidden", !busy);
 	}
-	$("model-select").disabled = Boolean(pane);
-	$("thinking-select").disabled = Boolean(pane);
+	// 收笔了就去补发那些生成途中被挡下的换笔请求。
+	if (!busy) flushPendingModelSwitches();
+}
+
+/** 换卷、删作品：三块面板一起回到空闲。那一轮全都作废了。 */
+function clearStreaming() {
+	for (const pane of Object.keys(state.stream)) setStreaming(pane, false);
+}
+
+/**
+ * 把顶栏此刻选的笔与档位发给一席会话。
+ *
+ * 服务端若正在为这一席生成会回 409（换模型等于把跑着的那支智能体整支换掉）。
+ * 那种情况不算失败，但必须记下来：等它收笔再补发，否则作者以为换好了，
+ * 下一章却还是旧笔在写。
+ */
+async function sendModelSwitch(sessionId, key) {
+	const modelRef = $("model-select").value;
+	const thinkingLevel = $("thinking-select").value;
+	try {
+		const res = await fetch("/api/sessions/" + sessionId + "/model", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ modelRef, thinkingLevel }),
+		});
+		if (res.status === 409) {
+			// 还是生成中：留在待补发清单里，等那一轮收笔时再来。
+			state.pendingModelSwitch.set(sessionId, key);
+			return;
+		}
+		if (!res.ok) {
+			const data = await res.json().catch(() => ({}));
+			throw new Error(data.error || "换笔失败 (" + res.status + ")");
+		}
+	} catch (error) {
+		// 网络抽风也一样要留痕：静默吞掉的话，作者要到下一轮跑出旧笔的字才会发现。
+		state.pendingModelSwitch.set(sessionId, key);
+		toast("换笔没能送到：" + error.message + "，收笔后会再试。", "warn", 5200);
+	}
+}
+
+/**
+ * 补发生成途中被挡下的换笔请求。
+ *
+ * 时机：任何一块面板收笔（setStreaming(pane, false)）之后。
+ * 判定：这一席所属的面板还在生成就先留着，空闲了就发。
+ * 席位归属按会话键判 —— 写作面板按章各留一席，不能只看 activeKey。
+ */
+function flushPendingModelSwitches() {
+	if (state.pendingModelSwitch.size === 0) return;
+	for (const [sessionId, key] of [...state.pendingModelSwitch]) {
+		// 这一席已经不在册了（另起一席、换卷清席）：补发也是发给一个不存在的会话。
+		if (![...state.sessions.values()].includes(sessionId)) {
+			state.pendingModelSwitch.delete(sessionId);
+			continue;
+		}
+		// 它那块面板还在写，就再等等。
+		if (streamBusy(paneOfSessionKey(key))) continue;
+		state.pendingModelSwitch.delete(sessionId);
+		void sendModelSwitch(sessionId, key);
+	}
+}
+
+/** 会话键属于哪块面板：库一席独用，写作按章分席，其余归「料」。 */
+function paneOfSessionKey(key) {
+	if (key === "library") return "library";
+	return String(key).startsWith("writing:") ? "writing" : "material";
 }
 
 /**
@@ -3854,11 +4002,12 @@ async function startNewChat(pane) {
 
 	// 正在跑的那一轮挂在这个会话上，会话没了就该收手 ——
 	// 先作废代次再收尾，否则它会把半截内容写回快照。
-	if (state.streamHolder && state.streamHolder.pane === pane) {
-		state.streamEpoch += 1;
-		endStream();
-		dismissWaiting();
-		setStreaming(null);
+	// 只作废自己这一块：邻栏跑着的那一轮跟这次弃席毫无关系。
+	if (streamSlot(pane).holder) {
+		streamSlot(pane).epoch += 1;
+		endStream(pane);
+		dismissWaiting(pane);
+		setStreaming(pane, false);
 	}
 
 	const key = activeKey(pane);
@@ -3951,7 +4100,11 @@ function retryActions(retry) {
  *   是刚才那个「再试一次」，不是「按现在的装料再写一遍」。
  */
 async function sendMessage(pane, text, options = {}) {
-	if (state.streaming) return;
+	// 只看自己这块面板：设定官与执笔者各跑各的，一块在写不该挡住另一块发话。
+	if (streamBusy(pane)) {
+		toast("这一席还在落笔，等它收笔再发。", "warn");
+		return;
+	}
 	if (pane === "writing" && !state.chapterId) {
 		appendMessage("writing", "error", "先在左栏点开一章。");
 		return;
@@ -3966,7 +4119,7 @@ async function sendMessage(pane, text, options = {}) {
 	else appendMessage(pane, "user", text);
 	const waiting = showWaiting(pane);
 	setStreaming(pane);
-	const epoch = state.streamEpoch;
+	const epoch = streamSlot(pane).epoch;
 	try {
 		const sessionId = await ensureSession(pane);
 		const res = await fetch("/api/sessions/" + sessionId + "/messages", {
@@ -3984,8 +4137,8 @@ async function sendMessage(pane, text, options = {}) {
 			retry: () => retryRound(pane, text, outgoing),
 		});
 	} catch (error) {
-		dismissWaiting(waiting);
-		if (!streamStale(epoch)) {
+		dismissWaiting(pane, waiting);
+		if (!streamStale(pane, epoch)) {
 			// 服务重启或会话 TTL 到点后，缓存里的会话 id 已经作废。
 			// 自动丢掉它，下一次「呈上」就会开一席新的 —— 而不是让作者先去点两次“另起一席”。
 			if (/会话/.test(error.message) && /(不存在|过期)/.test(error.message)) {
@@ -3999,10 +4152,10 @@ async function sendMessage(pane, text, options = {}) {
 			restoreComposer(pane, text);
 		}
 	} finally {
-		dismissWaiting(waiting);
-		if (!streamStale(epoch)) {
-			endStream();
-			setStreaming(null);
+		dismissWaiting(pane, waiting);
+		if (!streamStale(pane, epoch)) {
+			endStream(pane);
+			setStreaming(pane, false);
 			// 设定官这一轮可能新建或改了素材：重载让素材库与生文工作台同步跟上。
 			// 库面板尤其要紧 —— 它写的正是库本身，不重载就看不见刚备好的料。
 			if (pane === "library") await reloadLibrarySafely(pane, "这一轮已完成，但通用素材库没能刷新");
@@ -4020,8 +4173,8 @@ async function sendMessage(pane, text, options = {}) {
  * 返回值：发出去没有。按钮据此决定自己是"已重发"还是留在原处。
  */
 function retryRound(pane, text, outgoing) {
-	if (state.streaming) {
-		toast("这一轮还没收完，稍等片刻再试。", "warn");
+	if (streamBusy(pane)) {
+		toast("这一席还没收完，稍等片刻再试。", "warn");
 		return false;
 	}
 	void sendMessage(pane, text, { repeat: true, outgoing });
@@ -4058,7 +4211,7 @@ async function reloadLibrarySafely(pane, note) {
  * epoch 是发起这一轮时的流代次：中途换了卷，这一轮就作废了，
  * 剩下的 token 不许再往界面上写 —— 那是另一部作品的面板了。
  */
-async function pumpStream(res, pane, epoch = state.streamEpoch, waiting = null, context = {}) {
+async function pumpStream(res, pane, epoch = streamSlot(pane).epoch, waiting = null, context = {}) {
 	const reader = res.body.getReader();
 	const decoder = new TextDecoder();
 	let buffer = "";
@@ -4077,7 +4230,7 @@ async function pumpStream(res, pane, epoch = state.streamEpoch, waiting = null, 
 	 */
 	const handOver = () => {
 		if (!waiting) return;
-		dismissWaiting(waiting);
+		dismissWaiting(pane, waiting);
 		waiting = null;
 	};
 
@@ -4101,9 +4254,9 @@ async function pumpStream(res, pane, epoch = state.streamEpoch, waiting = null, 
 	while (true) {
 		const chunk = await reader.read();
 		if (chunk.done) break;
-		if (streamStale(epoch)) {
+		if (streamStale(pane, epoch)) {
 			await reader.cancel().catch(() => {});
-			dismissWaiting(waiting);
+			dismissWaiting(pane, waiting);
 			return;
 		}
 		buffer += decoder.decode(chunk.value, { stream: true });
@@ -4203,7 +4356,7 @@ async function pumpStream(res, pane, epoch = state.streamEpoch, waiting = null, 
 			message.wrap.remove();
 		}
 	}
-	if (waiting) dismissWaiting(waiting);
+	if (waiting) dismissWaiting(pane, waiting);
 	if (usage) {
 		streamNode(pane, epoch).append(
 			el("div", "msg-foot", "入 " + usage.input + " · 出 " + usage.output + " · " + usage.turns + " 轮"),
@@ -4494,7 +4647,7 @@ for (const [pane, ids] of Object.entries(PANES)) {
 		const text = $(ids.input).value.trim();
 		// 库面板不绑作品，不能拿 projectId 当门槛 —— 那会让它在案头上永远发不出去。
 		const needsProject = pane !== "library";
-		if (!text || state.streaming || (needsProject && !state.projectId)) return;
+		if (!text || streamBusy(pane) || (needsProject && !state.projectId)) return;
 		$(ids.input).value = "";
 		syncComposer();
 		void sendMessage(pane, text);
@@ -4506,20 +4659,22 @@ for (const [pane, ids] of Object.entries(PANES)) {
 		}
 	});
 	form.querySelector("[data-abort]").addEventListener("click", () => {
-		// 一次性成文没有会话，直接掐断 fetch。
-		if (state.writeAbort) {
+		// 一次性成文（执笔者那支）没有会话，直接掐断 fetch。
+		// 判 pane 是必须的：这块是执笔者的一次性成文，别处的「止笔」不许把它掐掉。
+		if (pane === "writing" && state.writeAbort) {
 			state.writeAbort.abort();
-			dismissWaiting();
+			dismissWaiting(pane);
 			toast("已止笔。", "info", 1800);
 			return;
 		}
-		// 要掐的是正在跑的那一轮，不是面板此刻挂着的那一轮：
+		// 要掐的是这一块面板正在跑的那一轮，不是面板此刻挂着的那一轮：
 		// 作者中途切了章，activeKey 已经指到别处去了。
-		const holder = state.streamHolder;
-		const key = holder && holder.pane === pane ? holder.key : activeKey(pane);
+		// 也只看自己这一块：邻栏还在跑的那一轮，按这边的「止笔」不该受影响。
+		const holder = streamSlot(pane).holder;
+		const key = holder ? holder.key : activeKey(pane);
 		const sessionId = state.sessions.get(key);
 		if (sessionId) fetch("/api/sessions/" + sessionId + "/abort", { method: "POST" }).catch(() => {});
-		dismissWaiting();
+		dismissWaiting(pane);
 		toast("已止笔。", "info", 1800);
 	});
 }
@@ -4577,13 +4732,8 @@ $("model-select").addEventListener("change", () => {
 	renderThinkingLevels();
 	// 手机上这块在浮层里，选完就收，别挡住稿子。
 	closeToolsPanel();
-	for (const sessionId of state.sessions.values()) {
-		fetch("/api/sessions/" + sessionId + "/model", {
-			method: "POST",
-			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ modelRef: $("model-select").value, thinkingLevel: $("thinking-select").value }),
-		}).catch(() => {});
-	}
+	// 逐席送过去。键要一起带上：补发时靠它判断这一席属于哪块面板。
+	for (const [key, sessionId] of state.sessions) void sendModelSwitch(sessionId, key);
 });
 
 window.addEventListener("settings-changed", async () => {
