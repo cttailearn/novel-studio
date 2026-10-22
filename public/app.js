@@ -131,6 +131,9 @@ const state = {
 	materialQuery: "",
 	libraryQuery: "",
 	bibleQuery: "",
+	/** 生文工作台「库中可装」的检索词与分类。 */
+	poolQuery: "",
+	poolFilter: "",
 	/** 版本回滚的二次确认：`chapterId:revision`。 */
 	pendingRestore: null,
 	/** 导出对话框此刻针对哪一章。 */
@@ -3094,7 +3097,13 @@ function renderWritingBench() {
 	poolBox.replaceChildren();
 	actions.replaceChildren();
 
+	// 「库中可装」先定下这一轮的池子：库里还没装进本章的料。
+	// 检索与分类都作用在它身上，分类条上的数目也按它算 ——
+	// 免得「人物 3」点进去空空如也（那 3 条早已装进本章，不在池子里）。
 	const chapter = project.outline.find((item) => item.id === state.chapterId);
+	const pool = project.materials.filter((material) => !chapter || !chapter.materialIds.includes(material.id));
+	renderPoolFilter(pool);
+
 	if (!chapter) {
 		const hasChapters = project.outline.length > 0;
 		$("assembly-chapter").textContent = hasChapters ? "未选章节" : "尚无章目";
@@ -3108,13 +3117,15 @@ function renderWritingBench() {
 			),
 		);
 		assemblyBox.append(button("＋ 立一章", "btn btn-ink btn-sm", () => openChapterDialog()));
-		const allMaterials = project.materials;
-		$("pool-count").textContent = allMaterials.length ? allMaterials.length + " 条" : "";
-		if (allMaterials.length === 0) {
+		const poolShown = pool.filter(poolMatches);
+		setPoolCount(pool.length, poolShown.length);
+		if (pool.length === 0) {
 			poolBox.append(el("div", "bench-empty", "素材库是空的。到「料」上传资料或让设定官备料。"));
+		} else if (poolShown.length === 0) {
+			poolBox.append(el("div", "bench-empty", poolEmptyText()));
 		} else {
 			poolBox.append(el("div", "bench-hint", "先立一章，才能把料装进去。"));
-			poolBox.append(materialGrid(allMaterials, "pool", true));
+			poolBox.append(materialGrid(poolShown, "pool", true));
 		}
 		return;
 	}
@@ -3159,8 +3170,8 @@ function renderWritingBench() {
 		),
 	);
 
-	const pool = project.materials.filter((material) => !chapter.materialIds.includes(material.id));
-	$("pool-count").textContent = pool.length ? pool.length + " 条" : "";
+	const poolShown = pool.filter(poolMatches);
+	setPoolCount(pool.length, poolShown.length);
 	if (pool.length === 0) {
 		poolBox.append(
 			el(
@@ -3171,9 +3182,75 @@ function renderWritingBench() {
 					: "库里的料都装上了。",
 			),
 		);
+	} else if (poolShown.length === 0) {
+		poolBox.append(el("div", "bench-empty", poolEmptyText()));
 	} else {
-		poolBox.append(materialGrid(pool, "pool"));
+		poolBox.append(materialGrid(poolShown, "pool"));
 	}
+}
+
+/**
+ * 生文工作台「库中可装」的检索与分类。
+ *
+ * 控件、匹配口径、样式全跟素材工作台一致（同一个 .mat-search 输入、同一排
+ * .chip、同一套 matchesQuery），作者在两个工作台之间不用学第二套动作。
+ */
+
+/** 这一条料在当前的检索与分类下算不算命中。 */
+function poolMatches(material) {
+	if (state.poolFilter && material.kind !== state.poolFilter) return false;
+	return matchesQuery(
+		state.poolQuery,
+		material.title,
+		material.usage,
+		material.content,
+		material.tags.join(" "),
+		kindLabel(material.kind),
+	);
+}
+
+/** 分类条：全部 + 各类条数。数目按池子里的料算 —— 点进去就数得到那么多。 */
+function renderPoolFilter(pool) {
+	const bar = $("pool-filter");
+	bar.replaceChildren();
+	bar.append(
+		button("全部 " + pool.length, "chip" + (state.poolFilter ? "" : " is-on"), () => {
+			state.poolFilter = "";
+			renderWritingBench();
+		}),
+	);
+	const used = new Set(pool.map((material) => material.kind));
+	for (const kind of Object.keys(MATERIAL_KIND_LABELS)) {
+		if (!used.has(kind)) continue;
+		const count = pool.filter((material) => material.kind === kind).length;
+		bar.append(
+			button(kindLabel(kind) + " " + count, "chip" + (state.poolFilter === kind ? " is-on" : ""), () => {
+				state.poolFilter = state.poolFilter === kind ? "" : kind;
+				renderWritingBench();
+			}),
+		);
+	}
+	syncInput("pool-search", state.poolQuery);
+}
+
+/** 角标：全露着就写条数，筛过就写「匹配 M / N 条」。 */
+function setPoolCount(total, shown) {
+	const node = $("pool-count");
+	if (!total) {
+		node.textContent = "";
+		return;
+	}
+	node.textContent = shown === total ? total + " 条" : "匹配 " + shown + " / " + total + " 条";
+}
+
+/** 检索无果时的说法：别让作者以为料没了。 */
+function poolEmptyText() {
+	const query = state.poolQuery.trim();
+	const kind = state.poolFilter ? kindLabel(state.poolFilter) : "";
+	if (kind && query) return "池子里没有「" + kind + "」这一类里含「" + query + "」的料。";
+	if (kind) return "池子里没有「" + kind + "」这一类料。";
+	if (query) return "池子里没有含「" + query + "」的料。若它已装入本章，请看上面的「装配」。";
+	return "池子里没有可装的料。";
 }
 
 /**
@@ -3464,11 +3541,14 @@ async function selectProject(id) {
 	state.bibleQuery = "";
 	state.materialFilter = "";
 	state.libraryFilter = "";
+	state.poolQuery = "";
+	state.poolFilter = "";
 	state.bibleTab = "materials";
 	syncInput("chapter-filter", "");
 	syncInput("material-search", "");
 	syncInput("library-search", "");
 	syncInput("bible-search", "");
+	syncInput("pool-search", "");
 	syncBibleTabs();
 	// invalidateAllStreams 里已经放过按钮与禁用态；这里再清一次屏上的旧对话，
 	// 免得新卷底下还压着上一卷的半截。
@@ -4836,6 +4916,10 @@ function bindSearch(id, key, render) {
 bindSearch("chapter-filter", "chapterQuery", renderChapters);
 bindSearch("material-search", "materialQuery", () => {
 	if (state.view === "materials") renderMaterialsBench();
+	else renderView();
+});
+bindSearch("pool-search", "poolQuery", () => {
+	if (state.view === "writing") renderWritingBench();
 	else renderView();
 });
 bindSearch("library-search", "libraryQuery", () => {
