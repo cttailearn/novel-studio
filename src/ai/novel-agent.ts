@@ -1,7 +1,7 @@
 import { Agent, type AgentMessage, type ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model, Models } from "@earendil-works/pi-ai";
 import type { AppConfig } from "../config/env.ts";
-import { assembledMaterials, MATERIAL_KIND_LABELS, type MaterialKind, type Project, type ProjectStore } from "../store/project.ts";
+import { assembledMaterials, kindLabel, type Project, type ProjectStore } from "../store/project.ts";
 import type { MaterialLibrary } from "../store/library.ts";
 import {
 	buildContextDigest,
@@ -183,9 +183,9 @@ function buildLibraryDigest(library: MaterialLibrary): string {
 	if (all.length === 0) return "通用素材库为空。";
 	const byKind = new Map<string, number>();
 	for (const entry of all) byKind.set(entry.kind, (byKind.get(entry.kind) ?? 0) + 1);
-	const counts = [...byKind.entries()].map(([kind, n]) => MATERIAL_KIND_LABELS[kind as MaterialKind] + " " + n).join("、");
+	const counts = [...byKind.entries()].map(([kind, n]) => kindLabel(kind) + " " + n).join("、");
 	const index = all
-		.map((entry) => "- [" + MATERIAL_KIND_LABELS[entry.kind] + "] " + entry.title + "（id: " + entry.id + "）" + (entry.usage ? " —— " + entry.usage : ""))
+		.map((entry) => "- [" + kindLabel(entry.kind) + "] " + entry.title + "（id: " + entry.id + "）" + (entry.usage ? " —— " + entry.usage : ""))
 		.join("\n");
 	return `共 ${all.length} 条（${counts}）：\n${index}`;
 }

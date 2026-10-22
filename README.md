@@ -73,7 +73,7 @@ pnpm dev                  # 默认 http://127.0.0.1:8787
 
 | 字段 | 说明 |
 | --- | --- |
-| `kind` | 13 种：`premise` 核心设定、`character` 人物、`world` 世界观、`location` 场景地点、`plot` 情节线、`beat` 桥段、`scene` 场景卡、`dialogue` 对话、`imagery` 意象、`foreshadow` 伏笔、`style` 文风、`research` 考据、`other` 其他 |
+| `kind` | 内置 13 种：`premise` 核心设定、`character` 人物、`world` 世界观、`location` 场景地点、`plot` 情节线、`beat` 桥段、`scene` 场景卡、`dialogue` 对话、`imagery` 意象、`foreshadow` 伏笔、`style` 文风、`research` 考据、`other` 其他。**作者还能自己添**（见下） |
 | `usage` | **必填**。什么情况下该用这条素材。组装智能体靠它判断相关性；写"用于推进剧情"等于没写 |
 | `chapterIds` | 显式装配到哪些章节。与章节的 `materialIds` 双向同步 |
 | `status` | `draft` / `confirmed` |
@@ -83,6 +83,29 @@ pnpm dev                  # 默认 http://127.0.0.1:8787
 前者是**计划**用什么料，后者是**实际**用了什么料，用于回溯"这段正文从什么料来"。
 
 旧数据（`characters` / `worldFacts`）在读取时单向迁移成素材，迁移幂等，输出里不再有旧字段。
+
+
+### 素材种类：内置十三种，其余自己添
+
+内置的十三个是所有书共用的**笔法**（人物、世界观、伏笔……），写死在代码里。但一本书常有自己的
+门类：势力、道具、民俗、某个行当的规矩。把这些料硬塞进「其他」等于把它们埋了 —— 检索、按类分组、
+界面筛选全靠 `kind`，混在一起就再也分不开。
+
+所以种类表是开着口子的：
+
+- **目录全局一份**，存 `data/kinds.json`，不挂在某部作品下 —— 势力、道具在哪本书里都成立。
+- **自建种类的 id 就是作者起的名字**（如 `势力`），限 24 字，路径里惹祸的字符换成短横。
+  这么定是因为 id 要出现在智能体的工具参数里：让模型写「势力」比写一个编号不容易错，
+  作者回头也认得出。撞上内置 id 会加 `c-` 前缀，撞上已有自建会加 `-2`。
+- **内置种类不可改名、不可删**（400）—— 它们是所有书共用的地基。
+- **删自建种类时，用着它的料改判为「其他」**，响应回来一个 `moved` 条数。不这么办，
+  这些料就成了认不出的孤儿：界面上选不到它们的类别，智能体也检索不着。界面上第一次点删除
+  只把按钮变成「确认删除」并报出「还有 N 条料在用」，第二下才真删。
+- 智能体的 `kind` 枚举**每次建会话时按目录现取**（`materialKindSchema()`），
+  作者添了新门类，下一个会话立刻认得，不用改代码。
+
+> 添之前先问一句：已有的种类里，换一个 `title` 和 `tags` 能不能装下？
+> 门类一多，分类签排成两行，反倒不如 handful 几条好找。
 
 
 ### 通用素材库：复制，不是引用
@@ -504,6 +527,9 @@ scripts/                     测试
 | PATCH | `/api/projects/:id/chapters/:chapterId` | 保存章节正文（稿面直接编辑；`autosave` 见下） |
 | POST | `/api/projects/:id/chapters/:chapterId/write` | **一次性成文**：组装素材生成正文，返回 NDJSON 事件流 |
 | POST | `/api/sessions` | 创建会话（`role: material` / `writing`） |
+| GET | `/api/kinds` | 素材种类目录：内置 + 自建，各带 `builtin` 与 `count`（用它的料有多少条） |
+| POST | `/api/kinds` | 添自建种类：`{ label }`，返回 `{ kind, label, kinds }` |
+| PATCH/DELETE | `/api/kinds/:kind` | 改名 / 删。内置种类一律 400；删除时回 `moved`（被改判成「其他」的料数） |
 | POST | `/api/sessions/:id/model` | 切换模型，保留对话历史（生成中返回 409） |
 | POST | `/api/sessions/:id/messages` | 发送消息，返回 NDJSON 事件流 |
 | POST | `/api/sessions/:id/abort` | 中止当前生成 |

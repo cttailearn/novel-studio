@@ -650,6 +650,41 @@
 			</form>
 		</dialog>
 
+		<!-- 素材种类：内置的只读，自定义的可增删改。分类签与素材表单都从这份目录取。 -->
+		<dialog id="kind-dialog" class="sheet sheet-form kind-dialog">
+			<form id="kind-form">
+				<header class="form-head">
+					<h3>素材种类</h3>
+					<p class="form-hint">内置那几类改不得名；缺哪一类就自己添，添完在素材表单里直接选得到。</p>
+				</header>
+
+				<div class="form-body">
+					<div class="kind-add">
+						<label class="field">
+							<span class="field-label">新种类</span>
+							<input
+								id="kind-name"
+								name="label"
+								maxlength="24"
+								autocomplete="off"
+								placeholder="例如：门规、器物、方言"
+								data-autofocus
+							/>
+						</label>
+						<button type="submit" class="btn btn-ink">添入</button>
+					</div>
+					<ul id="kind-list" class="kind-list"></ul>
+				</div>
+
+				<footer class="form-foot">
+					<p id="kind-error" class="form-error"></p>
+					<div class="dialog-actions">
+						<button type="button" id="kind-close" class="btn btn-quiet">合上</button>
+					</div>
+				</footer>
+			</form>
+		</dialog>
+
 		<dialog id="provider-dialog" class="sheet">
 			<form id="provider-form">
 				<h3>添加自定义供应商</h3>

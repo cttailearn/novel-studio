@@ -3,10 +3,10 @@ import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { randomUUID } from "node:crypto";
 import {
 	countWords,
+	kindLabel,
+	kindOptions,
 	linkMaterials,
 	MAX_DRAFT_HISTORY,
-	MATERIAL_KINDS,
-	MATERIAL_KIND_LABELS,
 	type ContinuityNote,
 	type Material,
 	type MaterialKind,
@@ -29,11 +29,19 @@ function lines(items: string[]): string {
 const nonEmpty = (description: string) => Type.String({ minLength: 1, description });
 const optionalText = (description: string) => Type.Optional(Type.String({ description }));
 
-/** 素材 kind 的枚举 schema，直接由 MATERIAL_KINDS 生成，新增种类不会漏。 */
-const materialKindSchema = Type.Union(
-	MATERIAL_KINDS.map((kind) => Type.Literal(kind)),
-	{ description: "素材种类" },
-);
+/**
+ * 素材 kind 的枚举 schema。
+ *
+ * 每次建智能体时现取一次种类目录 —— 作者添了新门类，智能体立刻就能用，
+ * 不用等谁改代码。枚举里带上中文名，模型才知道「势力」是哪一门。
+ */
+function materialKindSchema() {
+	const options = kindOptions();
+	return Type.Union(
+		options.map((option) => Type.Literal(option.kind)),
+		{ description: "素材种类：" + options.map((option) => option.kind + "（" + option.label + "）").join("、") },
+	);
+}
 
 const stringArray = (description: string) => Type.Array(Type.String(), { description });
 
@@ -72,7 +80,7 @@ function getProject(deps: NovelToolDeps): Project {
 
 /** 素材的一行摘要，用于工具结果与快照。 */
 function materialLine(material: Material): string {
-	const label = MATERIAL_KIND_LABELS[material.kind];
+	const label = kindLabel(material.kind);
 	const head = "[" + label + "] " + material.title + "（id: " + material.id + "）";
 	const bits: string[] = [];
 	if (material.usage) bits.push("用于：" + material.usage);
@@ -171,7 +179,7 @@ function renderHit(hit: MaterialHit): string {
 		.slice(hit.from, hit.to + 1)
 		.map((row) => "  " + row)
 		.join("\n");
-	return `【${MATERIAL_KIND_LABELS[hit.material.kind]} · ${hit.material.title}】第 ${hit.from + 1}-${hit.to + 1} 行\n${body}`;
+	return `【${kindLabel(hit.material.kind)} · ${hit.material.title}】第 ${hit.from + 1}-${hit.to + 1} 行\n${body}`;
 }
 // ═══════════════════════════════════════════════════════════ 两套智能体共用的工具
 
@@ -514,7 +522,7 @@ function upsertMaterialTool(deps: NovelToolDeps): AgentTool<any> {
 		parameters: Type.Object(
 			{
 				id: optionalText("已存在素材的 id；新建时留空"),
-				kind: Type.Optional(materialKindSchema),
+				kind: Type.Optional(materialKindSchema()),
 				title: optionalText("标题。新建必填，更新时可省"),
 				content: optionalText("素材内容：只写事实、约束与边界，一行一个事实，务必精减。新建必填，更新时可省"),
 				usage: optionalText("装配提示：什么情况下该用这条素材。新建必填，更新时可省"),
@@ -775,7 +783,7 @@ export interface LibraryToolDeps {
 
 /** 库条目的一行摘要。与作品素材同格式，但不带"已装入"——库里没有章节。 */
 function libraryLine(entry: LibraryMaterial): string {
-	const head = "[" + MATERIAL_KIND_LABELS[entry.kind] + "] " + entry.title + "（id: " + entry.id + "）";
+	const head = "[" + kindLabel(entry.kind) + "] " + entry.title + "（id: " + entry.id + "）";
 	const bits: string[] = [];
 	if (entry.usage) bits.push("用于：" + entry.usage);
 	if (entry.tags.length > 0) bits.push("标签：" + entry.tags.join("、"));
@@ -841,7 +849,7 @@ export function createLibraryTools(deps: LibraryToolDeps): AgentTool<any>[] {
 			parameters: Type.Object(
 				{
 					id: optionalText("已存在条目的 id；新建时留空"),
-					kind: Type.Optional(materialKindSchema),
+					kind: Type.Optional(materialKindSchema()),
 					title: optionalText("标题。新建必填，更新时可省"),
 					content: optionalText("素材内容：只写事实、约束与边界，一行一个事实，务必精减。新建必填，更新时可省"),
 					usage: optionalText("装配提示：什么情况下该用这条素材。新建必填，更新时可省"),

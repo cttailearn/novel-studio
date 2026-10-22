@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { copyFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { MATERIAL_KINDS, type Material, type MaterialKind, type MaterialStatus } from "./project.ts";
+import { isKnownKind, type Material, type MaterialKind, type MaterialStatus } from "./project.ts";
 
 /**
  * 通用素材：不属于任何一部作品，可以被取用到多部作品里。
@@ -37,7 +37,7 @@ function normalizeLibraryMaterial(raw: unknown): LibraryMaterial | undefined {
 	const now = Date.now();
 	return {
 		id: typeof input.id === "string" && input.id ? input.id : randomUUID(),
-		kind: MATERIAL_KINDS.includes(input.kind as MaterialKind) ? (input.kind as MaterialKind) : "other",
+		kind: isKnownKind(String(input.kind ?? "").trim()) ? (String(input.kind).trim() as MaterialKind) : "other",
 		title: typeof input.title === "string" && input.title.trim() ? input.title.trim() : "未命名素材",
 		content: typeof input.content === "string" ? input.content : "",
 		tags: Array.isArray(input.tags) ? input.tags.filter((tag): tag is string => typeof tag === "string") : [],
@@ -150,7 +150,7 @@ export class MaterialLibrary {
 		const now = Date.now();
 		const entry: LibraryMaterial = {
 			id: randomUUID(),
-			kind: MATERIAL_KINDS.includes(input.kind as MaterialKind) ? (input.kind as MaterialKind) : "other",
+			kind: isKnownKind(String(input.kind ?? "").trim()) ? (String(input.kind).trim() as MaterialKind) : "other",
 			title: input.title?.trim() || "未命名素材",
 			content: input.content ?? "",
 			tags: Array.isArray(input.tags) ? [...input.tags] : [],
@@ -168,7 +168,7 @@ export class MaterialLibrary {
 	update(id: string, input: LibraryMaterialInput): LibraryMaterial | undefined {
 		const entry = this.get(id);
 		if (!entry) return undefined;
-		if (input.kind !== undefined && MATERIAL_KINDS.includes(input.kind)) entry.kind = input.kind;
+		if (input.kind !== undefined && isKnownKind(String(input.kind).trim())) entry.kind = String(input.kind).trim() as MaterialKind;
 		if (input.title !== undefined && input.title.trim()) entry.title = input.title.trim();
 		if (input.content !== undefined) entry.content = input.content;
 		if (input.usage !== undefined) entry.usage = input.usage;

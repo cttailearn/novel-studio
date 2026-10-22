@@ -104,6 +104,14 @@ const state = {
 	writeMode: "create",
 	/** 通用素材库。每条带 usedBy，由服务端从各作品现算，所以不会两边不一致。 */
 	library: [],
+	/**
+	 * 素材种类目录：[{ kind, label, builtin, count }]，由服务端给。
+	 *
+	 * 从前种类是写死在前端的一张表，作者想加一类「门规」就得改代码。
+	 * 现在目录归服务端管：内置的不可改名，自定义的可以增删改。
+	 * 这里留空也不算故障 —— kindEntries() 会退回内置那份，界面照常能用。
+	 */
+	kinds: [],
 	libraryFilter: "",
 	/** 新建作品时勾选的库条目 id。 */
 	libraryPick: new Set(),
@@ -149,7 +157,63 @@ let materialForm = { scope: "project", mode: "create", uploadId: null, materialI
 /** 正在被拖的素材 id。dragover 时读不到 dataTransfer，落区提示只能靠它。 */
 let draggingMaterialId = null;
 
-const kindLabel = (kind) => MATERIAL_KIND_LABELS[kind] || kind;
+/**
+ * 种类目录。服务端给了就用服务端的，没给（旧版服务端 / 接口一时抽风）
+ * 就退回内置那份 —— 分类条、下拉框都从这里取，所以只留这一处兜底。
+ */
+function kindEntries() {
+	if (state.kinds.length > 0) return state.kinds;
+	return Object.entries(MATERIAL_KIND_LABELS).map(([kind, label]) => ({ kind, label, builtin: true, count: 0 }));
+}
+
+/**
+ * 素材表单里「＋ 新种类…」那一项的 value。
+ *
+ * 不能是空串（空串在 select 里等于「没选」），也不能撞上任何真 kind。
+ * 它只在下拉框里当个按钮用：选中就弹种类弹层，提交表单时永远不该读到它。
+ */
+const KIND_NEW_OPTION = "__new__";
+
+/** 种类的显示名。自定义种类的名字只有服务端知道，所以先查目录再查内置表。 */
+const kindLabel = (kind) => state.kinds.find((entry) => entry.kind === kind)?.label || MATERIAL_KIND_LABELS[kind] || kind;
+
+/**
+ * 分类签：只列池子里真出现过的种类。
+ *
+ * 遍历目录而不是遍历池子 —— 顺序才稳定（内置在前、自定义按加的先后），
+ * 同一批料在三个工作台的签序也才一致。
+ *
+ * 池子里若有目录里没有的 kind（种类刚删、那几条料还没改判完），补在末尾：
+ * 不然那些料从此哪个签都筛不出来，看着像丢了。
+ */
+function kindChips(items, activeKind, onPick) {
+	const catalog = kindEntries();
+	const used = new Set(items.map((item) => item.kind));
+	const order = catalog.filter((entry) => used.has(entry.kind)).map((entry) => ({ kind: entry.kind, label: entry.label }));
+	for (const kind of used) {
+		if (catalog.some((entry) => entry.kind === kind)) continue;
+		order.push({ kind, label: kindLabel(kind) });
+	}
+	return order.map(({ kind, label }) => {
+		const count = items.filter((item) => item.kind === kind).length;
+		return button(label + " " + count, "chip" + (activeKind === kind ? " is-on" : ""), () => onPick(kind));
+	});
+}
+
+/**
+ * 分类条末尾那个「＋」：增删素材种类的入口。
+ *
+ * 三个工作台的分类条都挂一个 —— 缺哪一类，往往是写到手边才发现，
+ * 让人再绕回素材表单去加，多半就懒得加了。
+ */
+function kindAddChip() {
+	const node = button("＋", "chip chip-add", () => openKindDialog());
+	// 这些分类条有的在表单里，按钮默认是 submit，得点明。
+	node.type = "button";
+	node.title = "增删素材种类";
+	node.setAttribute("aria-label", "增删素材种类");
+	return node;
+}
 
 /** 章节状态与版本来源都要说人话，别把 planned / agent 这种内部值直接摆到稿纸上。 */
 const CHAPTER_STATUS_LABELS = {
@@ -1080,11 +1144,29 @@ async function retryStorage() {
 		btn.disabled = false;
 	}
 }
+/**
+ * 单独问一次种类目录。
+ *
+ * 只在 bootstrap 没带 kinds 时才走到这里；失败就返回空数组，
+ * 让 kindEntries() 退回内置表 —— 备料这件事不该因为分类目录问不到就停摆。
+ */
+async function fetchKinds() {
+	try {
+		const data = await api("/api/kinds");
+		return Array.isArray(data.kinds) ? data.kinds : [];
+	} catch {
+		return [];
+	}
+}
+
 async function bootstrap() {
 	const [data, library] = await Promise.all([api("/api/bootstrap"), api("/api/library")]);
 	state.projects = data.projects;
 	state.library = library.materials ?? [];
 	state.models = data.models;
+	// 种类目录：bootstrap 里带了就用它；没带（旧服务端）再单独问一次。
+	// 两处都拿不到就留空，kindEntries() 会退回内置表，不该因此挡住起手。
+	state.kinds = Array.isArray(data.kinds) ? data.kinds : await fetchKinds();
 	renderModels(data.models, data.defaultModel);
 	renderThinkingLevels(data.defaultThinkingLevel);
 
@@ -1625,24 +1707,22 @@ async function deleteProject(project) {
 function renderLibraryFilter() {
 	const bar = $("library-filter");
 	bar.replaceChildren();
-	if (state.library.length === 0) return;
-	bar.append(
-		button("全部 " + state.library.length, "chip" + (state.libraryFilter ? "" : " is-on"), () => {
-			state.libraryFilter = "";
-			renderHomeBench();
-		}),
-	);
-	const used = new Set(state.library.map((entry) => entry.kind));
-	for (const kind of Object.keys(MATERIAL_KIND_LABELS)) {
-		if (!used.has(kind)) continue;
-		const count = state.library.filter((entry) => entry.kind === kind).length;
+	// 库空着的时候也得留「＋」：正是没料的时候才最可能缺一类。
+	if (state.library.length > 0) {
 		bar.append(
-			button(kindLabel(kind) + " " + count, "chip" + (state.libraryFilter === kind ? " is-on" : ""), () => {
-				state.libraryFilter = state.libraryFilter === kind ? "" : kind;
-			renderHomeBench();
+			button("全部 " + state.library.length, "chip" + (state.libraryFilter ? "" : " is-on"), () => {
+				state.libraryFilter = "";
+				renderHomeBench();
 			}),
 		);
+		for (const chip of kindChips(state.library, state.libraryFilter, (kind) => {
+			state.libraryFilter = state.libraryFilter === kind ? "" : kind;
+			renderHomeBench();
+		})) {
+			bar.append(chip);
+		}
 	}
+	bar.append(kindAddChip());
 }
 
 function libraryCard(entry) {
@@ -2421,17 +2501,14 @@ function renderMaterialsBench() {
 			renderMaterialsBench();
 		}),
 	);
-	const used = new Set(project.materials.map((material) => material.kind));
-	for (const kind of Object.keys(MATERIAL_KIND_LABELS)) {
-		if (!used.has(kind)) continue;
-		const count = project.materials.filter((material) => material.kind === kind).length;
-		filterBar.append(
-			button(kindLabel(kind) + " " + count, "chip" + (state.materialFilter === kind ? " is-on" : ""), () => {
-				state.materialFilter = state.materialFilter === kind ? "" : kind;
-				renderMaterialsBench();
-			}),
-		);
+	for (const chip of kindChips(project.materials, state.materialFilter, (kind) => {
+		state.materialFilter = state.materialFilter === kind ? "" : kind;
+		renderMaterialsBench();
+	})) {
+		filterBar.append(chip);
 	}
+	// 分类条末尾留一个口子：写着写着发现缺一类，就地加，不用绕去表单里。
+	filterBar.append(kindAddChip());
 	$("material-count").textContent = project.materials.length ? project.materials.length + " 条" : "";
 	syncInput("material-search", state.materialQuery);
 
@@ -2986,12 +3063,7 @@ function openMaterialDialog(options) {
 	$("material-form-error").textContent = "";
 
 	const select = $("material-form-kind");
-	select.replaceChildren();
-	for (const [kind, label] of Object.entries(MATERIAL_KIND_LABELS)) {
-		const option = el("option", "", label);
-		option.value = kind;
-		select.append(option);
-	}
+	fillKindOptions(select, null);
 
 	const hint = $("material-form-hint");
 	const source = options.entry ?? options.material;
@@ -3075,6 +3147,254 @@ $("material-form").addEventListener("submit", async (event) => {
 });
 
 $("material-form-cancel").addEventListener("click", () => closeDialog($("material-dialog")));
+
+// ── 素材种类：内置的只读，自定义的可增删改
+
+/**
+ * 按目录重填素材表单那个下拉框。
+ *
+ * selected 传 null 就按浏览器默认（第一项）。末尾永远挂一条「＋ 新种类…」，
+ * 它不是真种类，选中只会弹弹层。
+ */
+function fillKindOptions(select, selected) {
+	const keep = selected ?? select.value;
+	select.replaceChildren();
+	for (const entry of kindEntries()) {
+		const option = el("option", "", entry.label);
+		option.value = entry.kind;
+		select.append(option);
+	}
+	const addOption = el("option", "", "＋ 新种类…");
+	addOption.value = KIND_NEW_OPTION;
+	select.append(addOption);
+	// 原来的选择若还在目录里就留着；不在了（种类刚被删）就退回第一项，
+	// 不能让 select 停在一个不存在的值上 —— 那样提交会带着旧 kind 发出去。
+	if ([...select.options].some((option) => option.value === keep)) select.value = keep;
+}
+
+/** 种类弹层是从哪儿来的：null 表示只是看看，否则是那个等着回填的下拉框。 */
+let kindPick = null;
+
+/** 行内改名正在改哪一条；null 表示都在只读状态。 */
+let pendingKindRename = null;
+
+/** 等第二次点击确认的删除。删掉会把用它的料改判成「其他」，值当再问一句。 */
+let pendingKindDelete = null;
+
+function openKindDialog(options = {}) {
+	kindPick = options.pick ?? null;
+	pendingKindRename = null;
+	pendingKindDelete = null;
+	$("kind-name").value = "";
+	$("kind-error").textContent = "";
+	renderKindList();
+	openDialog($("kind-dialog"), { focus: "#kind-name" });
+}
+
+/**
+ * 重画种类清单：自定义的逐条可改可删，内置的只在末尾报一遍名字。
+ *
+ * 内置的不给按钮不是偷懒 —— 服务端本来就不许改它们（400），
+ * 摆一排按不动的按钮只会让人反复去点。
+ */
+function renderKindList() {
+	const list = $("kind-list");
+	list.replaceChildren();
+	const custom = state.kinds.filter((entry) => !entry.builtin);
+	const builtin = state.kinds.filter((entry) => entry.builtin);
+
+	if (custom.length === 0) {
+		list.append(el("li", "kind-empty", "还没有自定义的种类。上面添一个，就能在素材表单里选到。"));
+	}
+	for (const entry of custom) list.append(kindRow(entry));
+
+	if (builtin.length > 0) {
+		const box = el("li", "kind-builtin");
+		box.append(el("span", "kind-builtin-cap", "内置"));
+		box.append(el("span", "kind-builtin-names", builtin.map((entry) => entry.label).join("、")));
+		list.append(box);
+	}
+}
+
+/**
+ * 清单里的按钮。
+ *
+ * 必须显式写 type="button"：这些按钮都在 #kind-form 里，而 <button> 默认是 submit，
+ * 不写的话点「删」会顺手把上面的「添入」也提交一遍。
+ */
+function kindButton(label, className, onClick) {
+	const node = button(label, className, onClick);
+	node.type = "button";
+	return node;
+}
+
+/** 一条自定义种类。改名走行内编辑：点「改名」当场换成输入框，不必再开一层弹层。 */
+function kindRow(entry) {
+	const row = el("li", "kind-row");
+
+	if (pendingKindRename === entry.kind) {
+		const input = el("input", "kind-rename");
+		input.value = entry.label;
+		// 与服务端 MAX_LABEL 一致，别在前端先卡一道人家允许的名字。
+		input.maxLength = 24;
+		input.setAttribute("aria-label", "「" + entry.label + "」的新名字");
+		const save = () => void renameKind(entry.kind, input.value);
+		input.addEventListener("keydown", (event) => {
+			// 这颗输入框在表单里，回车本来会去提交「添入」—— 拦下来当确认用。
+			if (event.key === "Enter") {
+				event.preventDefault();
+				save();
+			}
+			if (event.key === "Escape") {
+				event.preventDefault();
+				event.stopPropagation();
+				pendingKindRename = null;
+				renderKindList();
+			}
+		});
+		row.append(input);
+		row.append(kindButton("存", "btn btn-ink btn-xs", save));
+		row.append(
+			kindButton("罢", "btn btn-quiet btn-xs", () => {
+				pendingKindRename = null;
+				renderKindList();
+			}),
+		);
+		// 换行编辑时把焦点送进去，手机上一按就能改。
+		setTimeout(() => {
+			input.focus();
+			input.select();
+		}, 0);
+		return row;
+	}
+
+	row.append(el("span", "kind-name", entry.label));
+	if (entry.count > 0) row.append(el("span", "kind-count", entry.count + " 条"));
+	row.append(
+		kindButton("改名", "btn btn-quiet btn-xs", () => {
+			pendingKindRename = entry.kind;
+			pendingKindDelete = null;
+			renderKindList();
+		}),
+	);
+	const pending = pendingKindDelete === entry.kind;
+	const del = kindButton(pending ? "确认删除" : "删", "btn btn-quiet btn-xs" + (pending ? " btn-danger" : ""), () =>
+		void deleteKind(entry),
+	);
+	del.title = entry.count > 0 ? "删掉这一类，用它的 " + entry.count + " 条料会归到「其他」" : "删掉这一类";
+	row.append(del);
+	return row;
+}
+
+/** 增删改之后统一收尾：换目录、刷下拉框、重画清单与当前视图。 */
+function applyKinds(next) {
+	if (Array.isArray(next)) state.kinds = next;
+	// 素材表单可能正开着：下拉框要跟着换，不然新加的种类选不到。
+	const select = $("material-form-kind");
+	if (select) fillKindOptions(select, select.value === KIND_NEW_OPTION ? null : select.value);
+	renderKindList();
+	renderView();
+}
+
+async function addKind(label) {
+	const error = $("kind-error");
+	const name = label.trim();
+	error.textContent = "";
+	if (!name) {
+		error.textContent = "先给这一类起个名字。";
+		return;
+	}
+	const submit = $("kind-form").querySelector("button[type=submit]");
+	submit.disabled = true;
+	try {
+		const data = await api("/api/kinds", { method: "POST", body: { label: name } });
+		applyKinds(data.kinds);
+		$("kind-name").value = "";
+		// 从素材表单进来的：建完就把这个种类选上，别让人再回下拉框里找一遍。
+		if (kindPick) {
+			kindPick(data.kind);
+			kindPick = null;
+			closeDialog($("kind-dialog"));
+		}
+	} catch (err) {
+		error.textContent = err.message;
+	} finally {
+		submit.disabled = false;
+	}
+}
+
+async function renameKind(kind, label) {
+	const error = $("kind-error");
+	const name = label.trim();
+	error.textContent = "";
+	if (!name) {
+		error.textContent = "名字不能空着。";
+		return;
+	}
+	try {
+		const data = await api("/api/kinds/" + encodeURIComponent(kind), { method: "PATCH", body: { label: name } });
+		pendingKindRename = null;
+		applyKinds(data.kinds);
+	} catch (err) {
+		error.textContent = err.message;
+	}
+}
+
+/**
+ * 删一类。第一下只是把按钮变成「确认删除」，第二下才真删。
+ *
+ * 用它的料会被服务端改判成「其他」—— 这件事不可逆，所以要先把条数说出来，
+ * 光一个「删」字点下去，人不会意识到那些料换了地方。
+ */
+async function deleteKind(entry) {
+	const error = $("kind-error");
+	error.textContent = "";
+	if (pendingKindDelete !== entry.kind) {
+		pendingKindDelete = entry.kind;
+		pendingKindRename = null;
+		renderKindList();
+		if (entry.count > 0) error.textContent = "这一类还有 " + entry.count + " 条料在用；删了它们会归到「其他」。再点一次确认。";
+		else error.textContent = "再点一次确认删除「" + entry.label + "」。";
+		return;
+	}
+	pendingKindDelete = null;
+	try {
+		const data = await api("/api/kinds/" + encodeURIComponent(entry.kind), { method: "DELETE" });
+		applyKinds(data.kinds);
+		if (data.moved > 0) toast("已删「" + entry.label + "」，" + data.moved + " 条料归到「其他」。", "info", 4600);
+		else toast("已删「" + entry.label + "」。", "ok");
+	} catch (err) {
+		error.textContent = err.message;
+	}
+}
+
+$("kind-form").addEventListener("submit", (event) => {
+	event.preventDefault();
+	void addKind($("kind-name").value);
+});
+$("kind-close").addEventListener("click", () => closeDialog($("kind-dialog")));
+
+// 不管怎么关的（合上、Esc、安卓返回键），都把这次的临时状态清掉：
+// 否则下次打开会带着上次没做完的改名/待删/待回填，看着像界面错乱。
+$("kind-dialog").addEventListener("close", () => {
+	kindPick = null;
+	pendingKindRename = null;
+	pendingKindDelete = null;
+});
+
+// 下拉框里选中「＋ 新种类…」：那不是真种类，退回上一个再弹弹层。
+$("material-form-kind").addEventListener("change", (event) => {
+	const select = event.currentTarget;
+	if (select.value !== KIND_NEW_OPTION) return;
+	// 先退回一个真种类：万一弹层被关掉没建成，表单也不该带着哨兵值提交。
+	const fallback = kindEntries()[0]?.kind ?? "other";
+	select.value = fallback;
+	openKindDialog({
+		pick: (kind) => {
+			fillKindOptions(select, kind);
+		},
+	});
+});
 
 // ═══════════════════════════════════════════════════ 文 · 生文工作台
 
@@ -3219,17 +3539,14 @@ function renderPoolFilter(pool) {
 			renderWritingBench();
 		}),
 	);
-	const used = new Set(pool.map((material) => material.kind));
-	for (const kind of Object.keys(MATERIAL_KIND_LABELS)) {
-		if (!used.has(kind)) continue;
-		const count = pool.filter((material) => material.kind === kind).length;
-		bar.append(
-			button(kindLabel(kind) + " " + count, "chip" + (state.poolFilter === kind ? " is-on" : ""), () => {
-				state.poolFilter = state.poolFilter === kind ? "" : kind;
-				renderWritingBench();
-			}),
-		);
+	for (const chip of kindChips(pool, state.poolFilter, (kind) => {
+		state.poolFilter = state.poolFilter === kind ? "" : kind;
+		renderWritingBench();
+	})) {
+		bar.append(chip);
 	}
+	// 「＋」也放一份在这里：装料时才发现缺一类，比在表单里加顺手。
+	bar.append(kindAddChip());
 	syncInput("pool-search", state.poolQuery);
 }
 

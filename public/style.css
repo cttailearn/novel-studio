@@ -3389,3 +3389,121 @@ body.focus-mode { background: var(--paper); }
 	.toast-close { font-size: 14px; padding: 0 8px; }
 }
 
+/* ── 素材种类 ────────────────────────────────────────────────
+   添一类是「一行输入 + 一个按钮」，改名与删除都在清单里就地做。
+   所以这一层不需要再开第二层弹层，手机上少一次转场，也不会
+   让返回键连着退两次。 */
+
+.kind-add {
+	display: flex;
+	align-items: flex-end;
+	gap: var(--sp-2);
+	margin-bottom: var(--sp-4);
+	/* form-body 是竖排 flex：不加 flex:none，内容一多这两块会被压扁 */
+	flex: none;
+}
+/* 不用 .field-grow：那是给整段文本框的（min-height 220px），
+   这一行只要一格输入框高。 */
+.kind-add .field {
+	flex: 1;
+	min-width: 0;
+	margin-bottom: 0;
+}
+.kind-add .btn { flex: none; }
+
+.kind-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: var(--sp-2);
+	flex: none;
+}
+
+.kind-row {
+	display: flex;
+	align-items: center;
+	gap: var(--sp-2);
+	padding: var(--sp-2) var(--sp-3);
+	border: 1px solid var(--rule-soft);
+	border-radius: var(--r-2);
+	background: var(--shade);
+}
+
+.kind-row .kind-name {
+	flex: 1;
+	min-width: 0;
+	font-family: var(--kai);
+	font-size: var(--fs-md);
+	color: var(--ink);
+	overflow-wrap: anywhere;
+}
+
+.kind-row .kind-count {
+	flex: none;
+	font-size: var(--fs-xs);
+	color: var(--ink-4);
+}
+
+/* 行内改名：宽度跟着格子走，别把两个按钮挤出去 */
+.kind-row .kind-rename {
+	flex: 1;
+	min-width: 0;
+	font-size: var(--fs-md);
+	padding: 6px var(--sp-2);
+}
+
+.kind-empty {
+	padding: var(--sp-4);
+	border: 1px dashed var(--rule);
+	border-radius: var(--r-2);
+	font-size: var(--fs-sm);
+	color: var(--ink-3);
+	text-align: center;
+}
+
+/* 内置的那几类只报名字：改不得，就别摆一排按不动的按钮 */
+.kind-builtin {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: var(--sp-2);
+	padding: var(--sp-2) var(--sp-3);
+	font-size: var(--fs-sm);
+	color: var(--ink-3);
+}
+.kind-builtin-cap {
+	flex: none;
+	font-size: var(--fs-xs);
+	letter-spacing: 0.14em;
+	color: var(--ink-4);
+	padding: 1px 6px;
+	border: 1px solid var(--rule-soft);
+	border-radius: var(--r-1);
+}
+.kind-builtin-names { min-width: 0; overflow-wrap: anywhere; }
+
+/* 分类条末尾那个「＋」：它是动作不是筛选项，所以不跟着 is-on 走 */
+.chip.chip-add {
+	font-family: var(--sans);
+	letter-spacing: 0;
+	color: var(--ink-3);
+	border-style: dashed;
+}
+.chip.chip-add:hover { color: var(--ink); border-color: var(--ink-4); }
+
+/* 手指底下这几行都要够高：改名、删、添入都靠点 */
+@media (pointer: coarse) {
+	.kind-row { padding: var(--sp-1) var(--sp-2); }
+	.kind-row .btn { min-height: var(--tap); }
+	.kind-add .btn { min-height: var(--tap); }
+}
+
+/* 手机上添入那一行改竖排：横排时输入框只剩半截，打两个字就看不见了 */
+@media (max-width: 640px) {
+	.kind-add { flex-direction: column; align-items: stretch; }
+	.kind-add .btn { width: 100%; }
+}
+
+

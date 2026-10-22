@@ -47,7 +47,8 @@ import {
 	type Settings,
 } from "../config/settings.ts";
 import { loadEnvFile, readConfig, type AppConfig } from "../config/env.ts";
-import { assembledMaterials, linkMaterials, MATERIAL_KINDS, MATERIAL_KIND_LABELS, MAX_DRAFT_HISTORY, removeMaterial, ProjectStore, type MaterialKind, type Project } from "../store/project.ts";
+import { assembledMaterials, isKnownKind, kindOptions, linkMaterials, MATERIAL_KINDS, MAX_DRAFT_HISTORY, registerCustomKinds, removeMaterial, ProjectStore, type MaterialKind, type Project } from "../store/project.ts";
+import { KindStore } from "../store/kinds.ts";
 
 loadEnvFile();
 const config = readConfig();
@@ -707,8 +708,32 @@ function libraryView() {
 	const usage = libraryUsage();
 	return {
 		materials: libraryStore.list().map((entry) => ({ ...entry, usedBy: usage.get(entry.id) ?? [] })),
-		kinds: MATERIAL_KINDS.map((kind) => ({ kind, label: MATERIAL_KIND_LABELS[kind] })),
+		kinds: kindsView(),
 	};
+}
+
+/**
+ * 种类目录：内置在前，自建在后，各带一个用它的素材数。
+ *
+ * 数目是现算的 —— 库里一份、各作品里一份，加起来才是作者真正放了多少料在这一类。
+ * 目录里没有、却仍有素材在用的种类（比如在别的机器上添的）也补一条出来，
+ * 免得那些料在界面上无处安放。
+ */
+function kindsView() {
+	const counts = new Map<string, number>();
+	const bump = (kind: string): void => {
+		counts.set(kind, (counts.get(kind) ?? 0) + 1);
+	};
+	for (const entry of libraryStore.list()) bump(entry.kind);
+	for (const project of store.list()) {
+		for (const material of project.materials) bump(material.kind);
+	}
+	const catalog = kindOptions().map((option) => ({ ...option, count: counts.get(option.kind) ?? 0 }));
+	const known = new Set(catalog.map((option) => option.kind));
+	for (const [kind, count] of counts) {
+		if (!known.has(kind)) catalog.push({ kind, label: kind, builtin: false, count });
+	}
+	return catalog;
 }
 
 /** 过滤标签数组：去掉非字符串与空串。 */
@@ -748,6 +773,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 			models,
 			providers,
 			settings,
+			kinds: kindsView(),
 			projects: store.list().map(projectSummary),
 		});
 	}
@@ -1150,7 +1176,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		if (!title) return json(res, 400, { error: "请填写素材标题" });
 		if (!content) return json(res, 400, { error: "素材内容是空的" });
 		const entry = libraryStore.create({
-			kind: MATERIAL_KINDS.includes(body.kind as MaterialKind) ? (body.kind as MaterialKind) : "other",
+			kind: isKnownKind(String(body.kind ?? "")) ? (String(body.kind).trim() as MaterialKind) : "other",
 			title,
 			content,
 			usage: body.usage?.trim() ?? "",
@@ -1180,8 +1206,8 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 			status?: string;
 		}>(req, 8_000_000);
 		const input: LibraryMaterialInput = {};
-		if (typeof body.kind === "string" && MATERIAL_KINDS.includes(body.kind as MaterialKind)) {
-			input.kind = body.kind as MaterialKind;
+		if (typeof body.kind === "string" && isKnownKind(body.kind.trim())) {
+			input.kind = body.kind.trim() as MaterialKind;
 		}
 		if (typeof body.title === "string") input.title = body.title;
 		if (typeof body.content === "string") input.content = body.content;
@@ -1189,6 +1215,66 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		if (body.status === "confirmed" || body.status === "draft") input.status = body.status;
 		if (Array.isArray(body.tags)) input.tags = pickTags(body.tags);
 		return json(res, 200, { material: libraryStore.update(libraryId, input), ...libraryView() });
+	}
+
+	/**
+	 * 素材种类目录。
+	 *
+	 * 内置的十三个是所有书共用的笔法，自建的那些是这位作者自己的门类 ——
+	 * 势力、道具、民俗，哪本书里都成立，所以目录是全局一份，不挂在某部作品下。
+	 */
+	if (pathname === "/api/kinds" && req.method === "GET") {
+		return json(res, 200, { kinds: kindsView() });
+	}
+
+	if (pathname === "/api/kinds" && req.method === "POST") {
+		const body = await readJsonBody<{ label?: string }>(req, 200_000);
+		const result = kindStore.add(String(body.label ?? ""));
+		if (!result.ok) return json(res, result.status, { error: result.error });
+		// 登记进全局：素材校验、界面分组、智能体的工具 schema 都问这张表。
+		registerCustomKinds(kindStore.list());
+		return json(res, 201, { kind: result.value.id, label: result.value.label, kinds: kindsView() });
+	}
+
+	const kindItemMatch = pathname.match(/^\/api\/kinds\/([^/]+)$/);
+	if (kindItemMatch && (req.method === "PATCH" || req.method === "DELETE")) {
+		const kindId = decodeURIComponent(kindItemMatch[1]!);
+		// 内置种类是共用的笔法：不给改名，也不给删。
+		if ((MATERIAL_KINDS as readonly string[]).includes(kindId)) {
+			return json(res, 400, { error: "内置种类不能改" });
+		}
+
+		if (req.method === "DELETE") {
+			const removed = kindStore.remove(kindId);
+			if (!removed.ok) return json(res, removed.status, { error: removed.error });
+			// 用着这一类的料改判为「其他」：不这么办，这些料就成了认不出的孤儿，
+			// 界面上既选不到它们的类别，智能体也检索不着。
+			let moved = 0;
+			for (const entry of libraryStore.list()) {
+				if (entry.kind !== kindId) continue;
+				libraryStore.update(entry.id, { kind: "other" as MaterialKind });
+				moved += 1;
+			}
+			for (const project of store.list()) {
+				if (!project.materials.some((item) => item.kind === kindId)) continue;
+				store.mutate(project.id, (draft) => {
+					for (const material of draft.materials) {
+						if (material.kind !== kindId) continue;
+						material.kind = "other" as MaterialKind;
+						material.updatedAt = Date.now();
+						moved += 1;
+					}
+				});
+			}
+			registerCustomKinds(kindStore.list());
+			return json(res, 200, { kinds: kindsView(), moved });
+		}
+
+		const body = await readJsonBody<{ label?: string }>(req, 200_000);
+		const renamed = kindStore.rename(kindId, String(body.label ?? ""));
+		if (!renamed.ok) return json(res, renamed.status, { error: renamed.error });
+		registerCustomKinds(kindStore.list());
+		return json(res, 200, { kind: renamed.value.id, label: renamed.value.label, kinds: kindsView() });
 	}
 
 	/** 把作品里的一条素材存进通用素材库，或更新它来源的那一条。 */
@@ -1304,7 +1390,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		const saved = store.mutate(projectId, (project) => {
 			project.materials.push({
 				id,
-				kind: MATERIAL_KINDS.includes(body.kind as MaterialKind) ? (body.kind as MaterialKind) : "other",
+				kind: isKnownKind(String(body.kind ?? "")) ? (String(body.kind).trim() as MaterialKind) : "other",
 				title,
 				content,
 				tags: Array.isArray(body.tags)
@@ -1362,7 +1448,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 			if (typeof body.title === "string" && body.title.trim()) material.title = body.title.trim();
 			if (typeof body.content === "string" && body.content.trim()) material.content = body.content.trim();
 			if (typeof body.usage === "string") material.usage = body.usage.trim();
-			if (MATERIAL_KINDS.includes(body.kind as MaterialKind)) material.kind = body.kind as MaterialKind;
+			if (typeof body.kind === "string" && isKnownKind(body.kind.trim())) material.kind = body.kind.trim() as MaterialKind;
 			if (body.status === "confirmed" || body.status === "draft") material.status = body.status;
 			if (Array.isArray(body.tags)) {
 				material.tags = body.tags.filter((tag): tag is string => typeof tag === "string" && tag.trim() !== "");
@@ -1420,7 +1506,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		if (!project) return json(res, 404, { error: "工程不存在" });
 		const kind = url.searchParams.get("kind")?.trim();
 		const materials = kind ? project.materials.filter((m) => m.kind === kind) : project.materials;
-		return json(res, 200, { materials, kinds: MATERIAL_KINDS.map((k) => ({ kind: k, label: MATERIAL_KIND_LABELS[k] })) });
+		return json(res, 200, { materials, kinds: kindsView() });
 	}
 
 
@@ -1766,6 +1852,9 @@ async function handleApiSafely(req: IncomingMessage, res: ServerResponse, url: U
 	}
 }
 
+// 种类表先开：项目与素材库读进来时就要认得作者自建的类别。
+const kindStore = await KindStore.open(config.dataDir);
+registerCustomKinds(kindStore.list());
 const store = await ProjectStore.open(config.dataDir);
 const libraryStore = await MaterialLibrary.open(config.dataDir);
 const settingsStore = await SettingsStore.open(config.dataDir);

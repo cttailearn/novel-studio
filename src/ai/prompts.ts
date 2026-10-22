@@ -1,7 +1,8 @@
 import {
 	assembledMaterials,
 	countWords,
-	MATERIAL_KIND_LABELS,
+	kindLabel,
+	kindOptions,
 	type ChapterDraft,
 	type Material,
 	type OutlineChapter,
@@ -51,7 +52,7 @@ ${briefOf(project)}
 - 一条素材只讲一件事。人物、场景、桥段、意象各归其类，不要混着写。
 - 素材不是正文。不要写成段落散文，写清事实、约束与边界。
 
-种类（kind）：${Object.entries(MATERIAL_KIND_LABELS).map(([key, label]) => `${key} ${label}`).join("、")}。
+种类（kind）：${kindOptions().map((option) => `${option.kind} ${option.label}`).join("、")}。
 
 # usage 是硬要求
 
@@ -233,7 +234,7 @@ export const MATERIAL_INLINE_BUDGET = 12_000;
 function materialIndexLine(m: Material): string {
 	const size = m.content.length;
 	const usage = m.usage ? `\n用于：${m.usage}` : "";
-	return `### ${MATERIAL_KIND_LABELS[m.kind]} · ${m.title}（id: ${m.id}）${usage}\n（全文 ${size} 字，较长未注入 —— 写相关段落前先 search_materials 检索）`;
+	return `### ${kindLabel(m.kind)} · ${m.title}（id: ${m.id}）${usage}\n（全文 ${size} 字，较长未注入 —— 写相关段落前先 search_materials 检索）`;
 }
 
 /**
@@ -257,7 +258,7 @@ function materialBlock(materials: Material[]): string {
 	return materials
 		.map((m) =>
 			inline.has(m.id)
-				? `### ${MATERIAL_KIND_LABELS[m.kind]} · ${m.title}（id: ${m.id}）\n${m.content}`
+				? `### ${kindLabel(m.kind)} · ${m.title}（id: ${m.id}）\n${m.content}`
 				: materialIndexLine(m),
 		)
 		.join("\n\n");
@@ -470,7 +471,7 @@ export function buildContextDigest(project: Project, options?: { scope?: DigestS
 				project.materials
 					.map(
 						(m) =>
-							`- [${MATERIAL_KIND_LABELS[m.kind]}] ${m.title}（id: ${m.id}）${
+							`- [${kindLabel(m.kind)}] ${m.title}（id: ${m.id}）${
 								m.usage ? " —— " + m.usage : ""
 							}${m.chapterIds.length > 0 ? " [已装入 " + m.chapterIds.join("、") + "]" : ""}`,
 					)

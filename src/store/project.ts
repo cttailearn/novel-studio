@@ -91,8 +91,8 @@ function stripDrafts(project: Project): Omit<Project, "drafts"> & { drafts: Reco
 /**
  * 素材种类。
  *
- * 这个集合是刻意收窄的：它决定智能体怎么找料、界面怎么分组。
- * 加一个新种类之前先问：已有的种类里，换一个 title 和 tags 能不能装下？
+ * 内置的十三个是"笔法"上的基本盘，但作者可以自己添（见 kindOptions）——
+ * 添之前先问一句：已有的种类里，换一个 title 和 tags 能不能装下？
  */
 export const MATERIAL_KINDS = [
 	"premise",
@@ -109,9 +109,17 @@ export const MATERIAL_KINDS = [
 	"research",
 	"other",
 ] as const;
-export type MaterialKind = (typeof MATERIAL_KINDS)[number];
+export type BuiltinMaterialKind = (typeof MATERIAL_KINDS)[number];
+/**
+ * 素材种类：内置那十三种，外加作者自建的。
+ *
+ * 自建种的 id 就是作者起的那个名字（限 ASCII 字母数字与中文），
+ * 所以这一型是开放的 —— 用 (string & {}) 保住内置种名的字面量补全，
+ * 又不至于把作者自建的种类挡在门外。
+ */
+export type MaterialKind = BuiltinMaterialKind | (string & {});
 
-export const MATERIAL_KIND_LABELS: Record<MaterialKind, string> = {
+export const MATERIAL_KIND_LABELS: Record<BuiltinMaterialKind, string> = {
 	premise: "核心设定",
 	character: "人物",
 	world: "世界观",
@@ -126,6 +134,54 @@ export const MATERIAL_KIND_LABELS: Record<MaterialKind, string> = {
 	research: "考据",
 	other: "其他",
 };
+
+/** 作者自建的种类：id → 显示名。服务端启动时从 data/kinds.json 登记。 */
+const customKindLabels = new Map<string, string>();
+
+/** 种类目录里的一项。 */
+export interface KindOption {
+	kind: string;
+	label: string;
+	builtin: boolean;
+}
+
+/**
+ * 登记作者自建的种类。
+ *
+ * 放在 store/project 里是因为这里已经住着 MaterialKind 这个型：
+ * 种类认不认、叫什么、怎么分组，都在同一个地方说了算，
+ * 免得各处各认一套，最后智能体认的种类和界面认的不一样。
+ */
+export function registerCustomKinds(list: readonly { id: string; label: string }[]): void {
+	customKindLabels.clear();
+	for (const item of list) {
+		const id = typeof item?.id === "string" ? item.id.trim() : "";
+		const label = typeof item?.label === "string" ? item.label.trim() : "";
+		if (!id || !label) continue;
+		customKindLabels.set(id, label);
+	}
+}
+
+/** 种类目录：内置在前，自定义在后。界面、智能体提示词、工具 schema 都用它。 */
+export function kindOptions(): KindOption[] {
+	const out: KindOption[] = MATERIAL_KINDS.map((kind) => ({
+		kind,
+		label: MATERIAL_KIND_LABELS[kind],
+		builtin: true,
+	}));
+	for (const [kind, label] of customKindLabels) out.push({ kind, label, builtin: false });
+	return out;
+}
+
+/** 任意种类的显示名：内置 → 自定义 → 原样（认不出来的种类至少还能看）。 */
+export function kindLabel(kind: string): string {
+	return MATERIAL_KIND_LABELS[kind as BuiltinMaterialKind] ?? customKindLabels.get(kind) ?? kind;
+}
+
+/** 这个种类认不认。写入时用它把关，读取时用它兜底。 */
+export function isKnownKind(kind: string): boolean {
+	return MATERIAL_KINDS.includes(kind as BuiltinMaterialKind) || customKindLabels.has(kind);
+}
 
 /**
  * 素材：可复用的创作单位。
@@ -295,7 +351,7 @@ function normalizeMaterial(raw: unknown): Material | undefined {
 	if (!raw || typeof raw !== "object") return undefined;
 	const input = raw as Partial<Material>;
 	const id = typeof input.id === "string" && input.id ? input.id : randomUUID();
-	const kind = MATERIAL_KINDS.includes(input.kind as MaterialKind) ? (input.kind as MaterialKind) : "other";
+	const kind = isKnownKind(String(input.kind ?? "").trim()) ? String(input.kind).trim() : "other";
 	const now = Date.now();
 	return {
 		id,
@@ -491,8 +547,17 @@ export function projectStats(project: Project): ProjectStats {
 /** 按种类分组，界面与提示词都用它。 */
 export function groupByKind(materials: readonly Material[]): Map<MaterialKind, Material[]> {
 	const groups = new Map<MaterialKind, Material[]>();
-	for (const kind of MATERIAL_KINDS) groups.set(kind, []);
-	for (const material of materials) groups.get(material.kind)?.push(material);
+	for (const option of kindOptions()) groups.set(option.kind, []);
+	for (const material of materials) {
+		// 作者自建的种类也可能在目录之外（比如它在别的机器上添的），
+		// 这时照样要有个桶把它接住，不能悄悄丢掉那条素材。
+		let bucket = groups.get(material.kind);
+		if (!bucket) {
+			bucket = [];
+			groups.set(material.kind, bucket);
+		}
+		bucket.push(material);
+	}
 	return groups;
 }
 

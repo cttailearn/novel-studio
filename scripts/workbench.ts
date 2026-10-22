@@ -411,6 +411,53 @@ try {
 	check("过滤到空集也返回 200", listedOther.status === 200 && listedOther.data.materials.length === 0);
 	check("接口带出 kind 目录", listed.data.kinds.length >= 13);
 
+	// ---- 素材种类 ----
+	// 内置十三种是笔法上的基本盘，但一本书常有自己的门类：势力、道具、民俗。
+	// 这些料硬塞进「其他」就等于埋了 —— 检索、分组、筛选都靠 kind。
+	console.log("\n素材种类");
+	const kindCatalog = await req("GET", "/api/kinds");
+	check("种类目录可读", kindCatalog.status === 200 && Array.isArray(kindCatalog.data.kinds));
+	check("内置十三种都在", kindCatalog.data.kinds.filter((k: { builtin: boolean }) => k.builtin).length === 13);
+	check("种类带显示名", kindCatalog.data.kinds.some((k: { kind: string; label: string }) => k.kind === "character" && k.label === "人物"));
+
+	const madeKind = await req("POST", "/api/kinds", { label: "势力" });
+	check("能添自建种类", madeKind.status === 201 && madeKind.data.kind === "势力", JSON.stringify(madeKind.data));
+	check("添完目录里就有", madeKind.data.kinds.some((k: { kind: string }) => k.kind === "势力"));
+	const dupKind = await req("POST", "/api/kinds", { label: "势力" });
+	check("重名添不进去", dupKind.status === 400 && String(dupKind.data.error).includes("已经有"));
+	const emptyKind = await req("POST", "/api/kinds", { label: "  " });
+	check("空名添不进去", emptyKind.status === 400);
+
+	const customMaterial = await req("POST", `/api/projects/${projectId}/materials`, {
+		kind: "势力",
+		title: "漕帮",
+		content: "漕帮掌着黑水汊的夜航许可。",
+	});
+	check("自建种类能存进作品", customMaterial.status === 201 && customMaterial.data.material.kind === "势力", JSON.stringify(customMaterial.data.material?.kind));
+	const customMaterialId = String(customMaterial.data.material.id);
+
+	const counted = await req("GET", "/api/kinds");
+	const faction = counted.data.kinds.find((k: { kind: string }) => k.kind === "势力");
+	check("目录里算得出这一门有几条料", Boolean(faction) && faction.count >= 1, JSON.stringify(faction));
+
+	const renamedKind = await req("PATCH", "/api/kinds/" + encodeURIComponent("势力"), { label: "帮会" });
+	check("自建种类能改名", renamedKind.status === 200 && renamedKind.data.label === "帮会");
+	check("改名不动 id（料还认得出这一门）", renamedKind.data.kind === "势力");
+	check("内置种类不给改名", (await req("PATCH", "/api/kinds/character", { label: "人物" })).status === 400);
+	check("内置种类不给删", (await req("DELETE", "/api/kinds/character")).status === 400);
+	check("删不存在的种类回 404", (await req("DELETE", "/api/kinds/" + encodeURIComponent("没有这门"))).status === 404);
+
+	const removedKind = await req("DELETE", "/api/kinds/" + encodeURIComponent("势力"));
+	check("自建种类能删", removedKind.status === 200);
+	check("删完回报被挪走的条数", removedKind.data.moved >= 1, "moved=" + removedKind.data.moved);
+	const orphan = await req("GET", `/api/projects/${projectId}/materials`);
+	const movedMaterial = orphan.data.materials.find((m: { id: string }) => m.id === customMaterialId);
+	check("被删种类的料归到「其他」", Boolean(movedMaterial) && movedMaterial.kind === "other", JSON.stringify(movedMaterial?.kind));
+	await req("DELETE", `/api/projects/${projectId}/materials/${customMaterialId}`);
+
+	const bootWithKinds = await req("GET", "/api/bootstrap");
+	check("开机数据里也带种类目录", Array.isArray(bootWithKinds.data.kinds) && bootWithKinds.data.kinds.length >= 13);
+
 	// ---- 通用素材库 ----
 	console.log("\n通用素材库");
 	const emptyLibrary = await req("GET", "/api/library");
@@ -789,6 +836,21 @@ try {
 	const referenced = new Set([...appSource.matchAll(/\$\("([^"]+)"\)/g)].map((m) => m[1]!));
 	const missingIds = [...referenced].filter((id) => !htmlIds.has(id) && !dynamicIds.has(id));
 	check("脚本引用的 id 都存在（静态或脚本自建）", missingIds.length === 0, missingIds.join(" "));
+
+	// 素材种类：作者能自己添。三处分类条、素材表单、种类管理都得从同一份目录来，
+	// 而智能体的工具 schema 必须跟着目录走 —— 不然界面能选「势力」，
+	// 智能体却不认识，模型只能瞎猜一个种类回来。
+	check("首页有种类管理弹层", indexHtml.includes('id="kind-dialog"'));
+	check("分类条末尾有添种类的入口", appSource.includes("kindAddChip") && appSource.includes("chip-add"));
+	check("种类目录统一由 kindEntries 兜底", appSource.includes("function kindEntries"));
+	check("自建种类拼地址做了转义（id 可能是中文）", appSource.includes("/api/kinds/\" + encodeURIComponent("));
+	const toolsSource = readFileSync(path.join(root, "src", "ai", "tools.ts"), "utf8");
+	check("智能体的 kind 枚举取自种类目录", toolsSource.includes("function materialKindSchema") && toolsSource.includes("kindOptions()"));
+	const kindsStore = readFileSync(path.join(root, "src", "store", "kinds.ts"), "utf8");
+	check(
+		"种类表落盘用临时名 + rename",
+		kindsStore.includes(".tmp") && kindsStore.includes("rename("),
+	);
 
 	// 高度链：桌面是 100vh 网格，里面每一级都得显式 min-height:0，
 	// 否则内容一长就把父级顶开，页面出现滚动条、输入框被推到屏幕外。
