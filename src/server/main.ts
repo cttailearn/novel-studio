@@ -47,7 +47,7 @@ import {
 	type Settings,
 } from "../config/settings.ts";
 import { loadEnvFile, readConfig, type AppConfig } from "../config/env.ts";
-import { assembledMaterials, isKnownKind, kindOptions, linkMaterials, MATERIAL_KINDS, MAX_DRAFT_HISTORY, registerCustomKinds, removeMaterial, ProjectStore, type MaterialKind, type Project } from "../store/project.ts";
+import { assembledMaterials, CHAPTER_STATUSES, isKnownKind, kindOptions, linkMaterials, MATERIAL_KINDS, MAX_DRAFT_HISTORY, registerCustomKinds, removeMaterial, ProjectStore, type ChapterStatus, type MaterialKind, type Project } from "../store/project.ts";
 import { KindStore } from "../store/kinds.ts";
 
 loadEnvFile();
@@ -817,9 +817,12 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 			summary?: string;
 			pov?: string;
 			targetWords?: number;
+			volumeId?: string;
 		}>(req);
 		const title = body.title?.trim();
 		if (!title) return json(res, 400, { error: "请填写章节标题" });
+		// 卷没填或填了个不存在的 id，就当作不分卷：立章这件事不该被一个卷 id 挡住。
+		const wantedVolume = typeof body.volumeId === "string" ? body.volumeId.trim() : "";
 		// id 在 mutate 内部现算：并发立章也不会撞号。
 		let createdId = "";
 		const saved = store.mutate(projectId, (draft) => {
@@ -832,6 +835,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 				title,
 				summary: body.summary?.trim() ?? "",
 				pov: body.pov?.trim() ?? "",
+				volumeId: draft.volumes.some((volume) => volume.id === wantedVolume) ? wantedVolume : "",
 				status: "planned",
 				targetWords:
 					typeof body.targetWords === "number" && body.targetWords > 0 ? Math.floor(body.targetWords) : 0,
@@ -841,6 +845,121 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		});
 		const chapter = saved.outline.find((item) => item.id === createdId);
 		return json(res, 201, { chapter, stats: store.stats(saved) });
+	}
+
+	// 卷：一卷书。卷只为分组与"这一卷大致写什么"服务，正文仍在章上。
+	// 章挂不挂卷是自由的 —— 老工程、短篇都不必先分卷才能写。
+	const volumesMatch = pathname.match(/^\/api\/projects\/([\w-]+)\/volumes$/);
+	if (volumesMatch && req.method === "POST") {
+		const projectId = volumesMatch[1]!;
+		if (!store.get(projectId)) return json(res, 404, { error: "工程不存在" });
+		const body = await readJsonBody<{ title?: string; summary?: string; targetWords?: number }>(req);
+		const title = body.title?.trim();
+		if (!title) return json(res, 400, { error: "请填写卷名" });
+		let createdId = "";
+		const saved = store.mutate(projectId, (draft) => {
+			const taken = new Set(draft.volumes.map((volume) => volume.id));
+			let n = draft.volumes.length + 1;
+			createdId = "v" + String(n).padStart(2, "0");
+			while (taken.has(createdId)) createdId = "v" + String(++n).padStart(2, "0");
+			draft.volumes.push({
+				id: createdId,
+				title,
+				summary: body.summary?.trim() ?? "",
+				targetWords:
+					typeof body.targetWords === "number" && body.targetWords > 0 ? Math.floor(body.targetWords) : 0,
+				notes: "",
+			});
+		});
+		const volume = saved.volumes.find((item) => item.id === createdId);
+		return json(res, 201, { volume, stats: store.stats(saved) });
+	}
+
+	const volumeMatch = pathname.match(/^\/api\/projects\/([\w-]+)\/volumes\/([^/]+)$/);
+	if (volumeMatch && (req.method === "PATCH" || req.method === "DELETE")) {
+		const projectId = volumeMatch[1]!;
+		if (!store.get(projectId)) return json(res, 404, { error: "工程不存在" });
+		const volumeId = decodeURIComponent(volumeMatch[2]!);
+		if (req.method === "DELETE") {
+			// 删卷不删章：章是作者真正写过的东西，卷只是一层分组。
+			// 这一卷下的章一律归到"不分卷"，并把条数回报给界面，免得静默改变章目。
+			let moved = 0;
+			let found = false;
+			const saved = store.mutate(projectId, (draft) => {
+				const index = draft.volumes.findIndex((volume) => volume.id === volumeId);
+				if (index < 0) return;
+				found = true;
+				draft.volumes.splice(index, 1);
+				for (const chapter of draft.outline) {
+					if (chapter.volumeId !== volumeId) continue;
+					chapter.volumeId = "";
+					moved += 1;
+				}
+			});
+			if (!found) return json(res, 404, { error: "卷不存在" });
+			return json(res, 200, { ok: true, moved, stats: store.stats(saved) });
+		}
+		const body = await readJsonBody<{ title?: string; summary?: string; targetWords?: number }>(req);
+		let found = false;
+		const saved = store.mutate(projectId, (draft) => {
+			const volume = draft.volumes.find((item) => item.id === volumeId);
+			if (!volume) return;
+			found = true;
+			if (typeof body.title === "string" && body.title.trim()) volume.title = body.title.trim();
+			if (typeof body.summary === "string") volume.summary = body.summary.trim();
+			if (typeof body.targetWords === "number" && body.targetWords >= 0) {
+				volume.targetWords = Math.floor(body.targetWords);
+			}
+		});
+		if (!found) return json(res, 404, { error: "卷不存在" });
+		const volume = saved.volumes.find((item) => item.id === volumeId);
+		return json(res, 200, { volume, stats: store.stats(saved) });
+	}
+
+	// 改章目本身（标题、要点、视角、所属卷、状态、目标字数、备注）。
+	// 与下面"存稿"那条 PATCH 分开：那条改的是正文，这条改的是计划。
+	const outlineMatch = pathname.match(/^\/api\/projects\/([\w-]+)\/outline\/([^/]+)$/);
+	if (outlineMatch && req.method === "PATCH") {
+		const projectId = outlineMatch[1]!;
+		const project = store.get(projectId);
+		if (!project) return json(res, 404, { error: "工程不存在" });
+		const chapterId = decodeURIComponent(outlineMatch[2]!);
+		if (!project.outline.some((chapter) => chapter.id === chapterId)) {
+			return json(res, 404, { error: "章节不存在" });
+		}
+		const body = await readJsonBody<{
+			title?: string;
+			summary?: string;
+			pov?: string;
+			volumeId?: string;
+			status?: string;
+			targetWords?: number;
+			notes?: string;
+		}>(req);
+		if (typeof body.title === "string" && !body.title.trim()) {
+			return json(res, 400, { error: "请填写章节标题" });
+		}
+		const saved = store.mutate(projectId, (draft) => {
+			const chapter = draft.outline.find((item) => item.id === chapterId);
+			if (!chapter) return;
+			if (typeof body.title === "string" && body.title.trim()) chapter.title = body.title.trim();
+			if (typeof body.summary === "string") chapter.summary = body.summary.trim();
+			if (typeof body.pov === "string") chapter.pov = body.pov.trim();
+			if (typeof body.notes === "string") chapter.notes = body.notes.trim();
+			if (typeof body.targetWords === "number" && body.targetWords >= 0) {
+				chapter.targetWords = Math.floor(body.targetWords);
+			}
+			if (typeof body.status === "string" && CHAPTER_STATUSES.includes(body.status as ChapterStatus)) {
+				chapter.status = body.status as ChapterStatus;
+			}
+			// 卷只能挂到确实存在的卷上；传空串就是摘下来（不分卷）。
+			if (typeof body.volumeId === "string") {
+				const wanted = body.volumeId.trim();
+				chapter.volumeId = draft.volumes.some((volume) => volume.id === wanted) ? wanted : "";
+			}
+		});
+		const chapter = saved.outline.find((item) => item.id === chapterId);
+		return json(res, 200, { chapter, stats: store.stats(saved) });
 	}
 
 	// 保存章节正文（稿件视图的直接编辑）

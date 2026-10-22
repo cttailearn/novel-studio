@@ -3,6 +3,7 @@ import {
 	countWords,
 	kindLabel,
 	kindOptions,
+	volumeTitle,
 	type ChapterDraft,
 	type Material,
 	type OutlineChapter,
@@ -95,9 +96,13 @@ ${briefOf(project)}
 3. **写完要落地**。任何素材都要调用 upsert_material 写入工程，否则作者的界面里不会出现。
 4. **建章要带料**。新建章节用 update_outline，并尽量填上 chapterIds；
    事后想补挂就用 attach_materials。
-5. **不擅自删改**。作者没点名的素材不要动；但作者明确要求改哪几条时，就照改 ——
+5. **分卷看作者**。卷是可选的：作者没提分卷就别自作主张分；作者说要分，
+   就先在 update_outline 的 volumes 里立卷（卷名 + 卷要略 + 目标字数），
+   再在章上用 volume 写卷名把章挂进去。卷要略写"这一卷大致写什么"，
+   与章要略同样是想清楚了再写，不要拿它复述已经写过的情节。
+6. **不擅自删改**。作者没点名的素材不要动；但作者明确要求改哪几条时，就照改 ——
    用 upsert_material 带上那条的 id，只给要改的字段，别把没提的字段一并重写。
-6. **不灌水**。写完 content 自查一遍：事实、约束、边界留下，其余（修饰、铺垫、
+7. **不灌水**。写完 content 自查一遍：事实、约束、边界留下，其余（修饰、铺垫、
    重复、总结）删掉。宁可少写一句让人来问，也不要写一段正确的废话。
 
 # 工作流
@@ -432,12 +437,14 @@ export function buildContextDigest(project: Project, options?: { scope?: DigestS
 	const parts: string[] = [];
 
 	if (scope === "writing") {
+		const current = chapterId ? project.outline.find((chapter) => chapter.id === chapterId) : undefined;
+		const volume = current?.volumeId ? volumeTitle(project, current.volumeId) : "";
 		parts.push(
 			section(
 				"当前进度",
 				`- 已写 ${Object.keys(project.drafts).length} 章，共 ${
 					Object.values(project.drafts).reduce((sum, d) => sum + countWords(d.content), 0)
-				} 字`,
+				} 字` + (volume ? `\n- 本章所在卷：${volume}` : ""),
 			),
 		);
 		// 本章素材全文不进 digest：系统提示词里已经带了一份（materialBlock），
@@ -479,6 +486,24 @@ export function buildContextDigest(project: Project, options?: { scope?: DigestS
 			),
 		);
 	}
+	if (project.volumes.length > 0) {
+		// 卷要略比章要略更早决定情节走向：某一卷的大方向没说清，
+		// 这一卷下的章就会各写各的。所以有卷就先把卷报出来。
+		parts.push(
+			section(
+				"卷",
+				project.volumes
+					.map((volume) => {
+						const count = project.outline.filter((c) => c.volumeId === volume.id).length;
+						return (
+							`- ${volume.title}（${count} 章${volume.targetWords ? `，目标 ${volume.targetWords} 字` : ""}）` +
+							(volume.summary ? ` —— ${volume.summary}` : " —— 尚无卷要略")
+						);
+					})
+					.join("\n"),
+			),
+		);
+	}
 	if (project.outline.length > 0) {
 		parts.push(
 			section(
@@ -486,7 +511,7 @@ export function buildContextDigest(project: Project, options?: { scope?: DigestS
 				project.outline
 					.map(
 						(c, i) =>
-							`${i + 1}. [${c.id}] ${c.title}（${c.status}）${
+							`${i + 1}. [${c.id}] ${c.volumeId ? `〔${volumeTitle(project, c.volumeId)}〕` : ""}${c.title}（${c.status}）${
 								c.pov ? ` 视角：${c.pov}` : ""
 							} 装料 ${c.materialIds.length} 条 —— ${c.summary}`,
 					)

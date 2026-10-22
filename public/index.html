@@ -283,7 +283,10 @@
 						<h2 class="rail-label"><i class="tick"></i>章目</h2>
 						<button id="close-rail" class="btn btn-quiet btn-sm only-phone rail-close icon-btn" title="收起章目" aria-label="收起章目">×</button>
 					</div>
-					<button id="add-chapter" class="rail-add">＋ 立一章</button>
+					<div class="rail-actions">
+						<button id="add-chapter" class="rail-add">＋ 立一章</button>
+						<button id="add-volume" class="rail-add rail-add-thin" title="分卷：给章目分层" aria-label="分卷">＋ 卷</button>
+					</div>
 					<input id="chapter-filter" class="rail-filter" type="search" placeholder="搜章目…" autocomplete="off" aria-label="搜章目" />
 					<ol id="chapter-list" class="chapter-list"></ol>
 					<p id="chapter-empty" class="rail-note">尚无章目。点上面的「＋ 立一章」，或到「料」让设定官拟一份大纲。</p>
@@ -558,13 +561,14 @@
 			</form>
 		</dialog>
 
-		<!-- 立一章。章节是装料的落点：此前只能由设定官的 update_outline 产出，
-		     作者想自己加一章没有路子，而没有章节就看不到也装不了料。 -->
+		<!-- 立一章 / 改一章。章节是装料的落点：此前只能由设定官的 update_outline 产出，
+		     作者想自己加一章没有路子，而没有章节就看不到也装不了料。
+		     同一个表单兼作改题：卷名、章名、要点写错是常事，不该只能靠智能体回头改。 -->
 		<dialog id="chapter-dialog" class="sheet sheet-form">
 			<form id="chapter-form">
 				<header class="form-head">
-					<h3>立一章</h3>
-					<p class="form-hint">章节是装料的落点 —— 有了章，素材才有地方装。</p>
+					<h3 id="chapter-dialog-title">立一章</h3>
+					<p class="form-hint" id="chapter-dialog-hint">章节是装料的落点 —— 有了章，素材才有地方装。</p>
 				</header>
 				<div class="form-body">
 					<label class="field">
@@ -573,20 +577,60 @@
 					</label>
 					<div class="form-row">
 						<label class="field">
-							<span class="field-label">本章要点<em>选填</em></span>
-							<textarea name="summary" rows="2" placeholder="这一章要发生什么"></textarea>
+							<span class="field-label">所属卷<em>选填</em></span>
+							<select name="volumeId" id="chapter-volume"></select>
 						</label>
 						<label class="field">
 							<span class="field-label">目标字数<em>选填</em></span>
 							<input name="targetWords" type="number" min="0" step="500" placeholder="3000" />
 						</label>
 					</div>
+					<label class="field">
+						<span class="field-label">本章要点<em>选填</em></span>
+						<textarea name="summary" rows="2" placeholder="这一章要发生什么"></textarea>
+					</label>
 				</div>
 				<footer class="form-foot">
 					<p id="chapter-error" class="form-error"></p>
 					<div class="dialog-actions">
 						<button type="button" id="chapter-cancel" class="btn btn-quiet">作罢</button>
-						<button type="submit" class="btn btn-ink">立章</button>
+						<button type="submit" id="chapter-submit" class="btn btn-ink">立章</button>
+					</div>
+				</footer>
+			</form>
+		</dialog>
+
+		<!-- 分卷。卷是独立的一层：有卷名、卷要略、目标字数；章挂不挂卷都行。
+		     上面是表单（立卷或改选中的那一卷），下面是已有的卷，可改名可删。 -->
+		<dialog id="volume-dialog" class="sheet sheet-form">
+			<form id="volume-form">
+				<header class="form-head">
+					<h3>分卷</h3>
+					<p class="form-hint">卷是章目之上的一层，可有可无。删卷不删章，那些章会回到不分卷。</p>
+				</header>
+				<div class="form-body">
+					<label class="field">
+						<span class="field-label">卷名</span>
+						<input name="title" required maxlength="60" placeholder="例如：卷一 · 黑水汊" />
+					</label>
+					<div class="form-row">
+						<label class="field">
+							<span class="field-label">卷要略<em>选填</em></span>
+							<textarea name="summary" rows="2" placeholder="这一卷要走到哪儿"></textarea>
+						</label>
+						<label class="field">
+							<span class="field-label">目标字数<em>选填</em></span>
+							<input name="targetWords" type="number" min="0" step="10000" placeholder="30000" />
+						</label>
+					</div>
+					<ul id="volume-list" class="volume-list"></ul>
+				</div>
+				<footer class="form-foot">
+					<p id="volume-error" class="form-error"></p>
+					<div class="dialog-actions">
+						<button type="button" id="volume-reset" class="btn btn-quiet hidden">改成立新卷</button>
+						<button type="button" id="volume-cancel" class="btn btn-quiet">作罢</button>
+						<button type="submit" id="volume-submit" class="btn btn-ink">立卷</button>
 					</div>
 				</footer>
 			</form>

@@ -3519,4 +3519,91 @@ body.focus-mode { background: var(--paper); }
 	.kind-add .btn { width: 100%; }
 }
 
+/* ── 分卷 ────────────────────────────────────────────────────
+   卷是章目之上的一层：章目里插一条卷头，稿面与作业条里带一句卷名。
+   卷可有可无，所以分隔一律用虚线 —— 有线，但不重。 */
+.rail-actions {
+	display: flex;
+	gap: var(--sp-1);
+	margin: 0 6px 10px;
+}
+.rail-actions .rail-add { margin: 0; flex: 1; min-width: 0; }
+.rail-actions .rail-add-thin { flex: 0 0 auto; padding: 5px 10px; }
+
+.chapter-volume {
+	display: flex;
+	align-items: baseline;
+	gap: var(--sp-2);
+	margin: 10px 0 2px;
+	padding: 8px 8px 5px;
+	border-top: 1px dashed var(--rule);
+	font-family: var(--kai);
+	font-size: 12.5px;
+	letter-spacing: 0.04em;
+	color: var(--ink-2);
+	cursor: pointer;
+}
+.chapter-volume:hover { color: var(--cinnabar); }
+.chapter-volume .cv-title {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.chapter-volume .cv-meta {
+	flex: none;
+	font-family: var(--sans);
+	font-size: var(--fs-xs);
+	letter-spacing: 0;
+	color: var(--ink-4);
+}
+.chapter-volume:hover .cv-meta { color: var(--cinnabar); }
+
+/* 稿面上那行卷名：比题签小一号、比「第几章」重一点，读的时候知道自己在哪一卷 */
+.ms-volume {
+	margin: 0 0 6px;
+	font-family: var(--kai);
+	font-size: 12px;
+	letter-spacing: 0.18em;
+	color: var(--cinnabar);
+	opacity: 0.85;
+}
+
+/* 分卷弹层里的卷目清单 */
+.volume-list {
+	list-style: none;
+	margin: var(--sp-3) 0 0;
+	padding: 0;
+	max-height: min(38vh, 260px);
+	overflow-y: auto;
+}
+.volume-row {
+	display: flex;
+	align-items: flex-start;
+	gap: var(--sp-2);
+	padding: 9px 10px;
+	border: 1px solid var(--rule-soft);
+	border-radius: var(--r-2);
+	background: var(--paper-hi);
+}
+.volume-row + .volume-row { margin-top: var(--sp-1); }
+.volume-row.is-editing { border-color: var(--cinnabar); }
+.volume-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.volume-name { font-family: var(--serif); font-size: 13.5px; color: var(--ink); }
+.volume-meta { font-size: var(--fs-xs); color: var(--ink-4); }
+.volume-summary { font-size: var(--fs-xs); color: var(--ink-3); line-height: 1.6; overflow-wrap: anywhere; }
+.volume-acts { flex: none; display: flex; gap: var(--sp-1); }
+.volume-empty { padding: var(--sp-2) 0; font-size: var(--fs-sm); color: var(--ink-3); }
+
+@media (pointer: coarse) {
+	.volume-row .btn { min-height: var(--tap); }
+	.chapter-volume { padding-block: 10px; }
+}
+@media (max-width: 640px) {
+	.volume-row { flex-wrap: wrap; }
+	.volume-acts { width: 100%; }
+	.volume-acts .btn { flex: 1; }
+}
+
 

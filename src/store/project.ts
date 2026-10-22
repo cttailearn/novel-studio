@@ -213,11 +213,30 @@ export interface Material {
 	updatedAt: number;
 }
 
+/**
+ * 卷：一卷书。
+ *
+ * 卷只管分组与"这一卷大致写什么"，不存正文 —— 正文按章存在 drafts 里。
+ * 章挂不挂卷是自由的：volumeId 为空串就是"不分卷"，
+ * 于是老工程、短篇、以及只想先写着再分的作者都不必被卷挡住。
+ */
+export interface Volume {
+	id: string;
+	title: string;
+	/** 卷要略：这一卷大致写什么。与章的要略一样，是开写前定的，不是写完之后的小结。 */
+	summary: string;
+	/** 卷目标字数，0 表示没定。 */
+	targetWords: number;
+	notes: string;
+}
+
 export interface OutlineChapter {
 	id: string;
 	title: string;
 	summary: string;
 	pov: string;
+	/** 所属卷。空串 = 不分卷；指向已删的卷时归一化会清成空串，章不会因此消失。 */
+	volumeId: string;
 	status: ChapterStatus;
 	targetWords: number;
 	notes: string;
@@ -285,6 +304,12 @@ export interface Project {
 	targetWords: number;
 	/** 全部素材。人物、世界观、场景、桥段都在这里，靠 kind 区分。 */
 	materials: Material[];
+	/**
+	 * 卷序。数组顺序就是卷的先后，章按 outline 里的顺序落在各自的卷下；
+	 * 卷头在章目里只在"换卷的地方"出现，所以卷序实际上由章的先后决定，
+	 * 这个数组只定"新建卷时的默认位置"与卷自己的元数据。
+	 */
+	volumes: Volume[];
 	outline: OutlineChapter[];
 	drafts: Record<string, ChapterDraft>;
 	notes: ContinuityNote[];
@@ -292,7 +317,8 @@ export interface Project {
 	updatedAt: number;
 }
 
-const CHAPTER_STATUSES: readonly ChapterStatus[] = ["planned", "outlined", "drafting", "drafted", "revising", "done"];
+/** 章的状态档。界面、接口、智能体工具共用这一份，免得各处各认一套。 */
+export const CHAPTER_STATUSES: readonly ChapterStatus[] = ["planned", "outlined", "drafting", "drafted", "revising", "done"];
 
 /** 中英文混排的字数统计：CJK 按字计，西文按单词计。 */
 export function countWords(text: string): number {
@@ -314,6 +340,7 @@ export function emptyProject(input: Partial<Pick<Project, "title" | "genre" | "l
 		styleGuide: input.styleGuide?.trim() || "",
 		targetWords: input.targetWords && input.targetWords > 0 ? Math.floor(input.targetWords) : 0,
 		materials: [],
+		volumes: [],
 		outline: [],
 		drafts: {},
 		notes: [],
@@ -434,6 +461,26 @@ function migrateLegacy(raw: Record<string, unknown>): Material[] {
 	return out;
 }
 
+/**
+ * 归一化一卷。
+ *
+ * 卷名是作者的门面，空名字的卷在章目里只会显示成一条无名横线，
+ * 干脆丢掉：它的章会在下面被清成"不分卷"，不会有章跟着消失。
+ */
+function normalizeVolume(raw: unknown): Volume | undefined {
+	if (!raw || typeof raw !== "object") return undefined;
+	const input = raw as Partial<Volume>;
+	const title = typeof input.title === "string" ? input.title.trim() : "";
+	if (!title) return undefined;
+	return {
+		id: typeof input.id === "string" && input.id ? input.id : randomUUID(),
+		title,
+		summary: typeof input.summary === "string" ? input.summary : "",
+		targetWords: typeof input.targetWords === "number" && input.targetWords > 0 ? Math.floor(input.targetWords) : 0,
+		notes: typeof input.notes === "string" ? input.notes : "",
+	};
+}
+
 export function normalizeProject(raw: unknown): Project {
 	const base = emptyProject();
 	if (!raw || typeof raw !== "object") return base;
@@ -444,12 +491,29 @@ export function normalizeProject(raw: unknown): Project {
 		? input.materials.map(normalizeMaterial).filter((item): item is Material => item !== undefined)
 		: [];
 
+	const volumes: Volume[] = [];
+	if (Array.isArray(input.volumes)) {
+		const taken = new Set<string>();
+		for (const raw of input.volumes) {
+			const volume = normalizeVolume(raw);
+			if (!volume) continue;
+			// 卷 id 重复会让"章挂在哪一卷"变得没法回答，后来的换号。
+			if (taken.has(volume.id)) volume.id = randomUUID();
+			taken.add(volume.id);
+			volumes.push(volume);
+		}
+	}
+	const volumeIds = new Set(volumes.map((volume) => volume.id));
+
 	const outline = Array.isArray(input.outline)
 		? input.outline.filter((c): c is OutlineChapter => Boolean(c) && typeof c === "object").map((chapter) => ({
 			id: typeof chapter.id === "string" && chapter.id ? chapter.id : randomUUID(),
 			title: typeof chapter.title === "string" ? chapter.title : "未命名章节",
 			summary: typeof chapter.summary === "string" ? chapter.summary : "",
 			pov: typeof chapter.pov === "string" ? chapter.pov : "",
+			// 指向已删卷的章不能凭空消失，也不能挂在一个不存在的卷下：清成不分卷。
+			volumeId:
+				typeof chapter.volumeId === "string" && volumeIds.has(chapter.volumeId) ? chapter.volumeId : "",
 			status: CHAPTER_STATUSES.includes(chapter.status) ? chapter.status : "planned",
 			targetWords: typeof chapter.targetWords === "number" && chapter.targetWords > 0 ? Math.floor(chapter.targetWords) : 0,
 			notes: typeof chapter.notes === "string" ? chapter.notes : "",
@@ -511,6 +575,7 @@ export function normalizeProject(raw: unknown): Project {
 		styleGuide: typeof input.styleGuide === "string" ? input.styleGuide : "",
 		targetWords: typeof input.targetWords === "number" && input.targetWords > 0 ? Math.floor(input.targetWords) : 0,
 		materials: [...migrated, ...materials],
+		volumes,
 		outline,
 		drafts,
 		notes: Array.isArray(input.notes)
@@ -542,6 +607,17 @@ export function projectStats(project: Project): ProjectStats {
 		draftedChapters: Object.keys(project.drafts).length,
 		openNotes: project.notes.filter((note) => note.status === "open").length,
 	};
+}
+
+/** 按 id 取卷。取不到返回 undefined —— 章可以指向已经被删掉的卷（归一化时会被清掉）。 */
+export function volumeById(project: Project, volumeId: string): Volume | undefined {
+	if (!volumeId) return undefined;
+	return project.volumes.find((volume) => volume.id === volumeId);
+}
+
+/** 卷名。分不清卷就返回空串，调用方据此决定要不要写卷名。 */
+export function volumeTitle(project: Project, volumeId: string): string {
+	return volumeById(project, volumeId)?.title ?? "";
 }
 
 /** 按种类分组，界面与提示词都用它。 */

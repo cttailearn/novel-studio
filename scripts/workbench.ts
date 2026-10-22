@@ -603,6 +603,68 @@ try {
 	check("连立两章不撞号", second.data.chapter.id !== made.data.chapter.id, `${made.data.chapter.id} / ${second.data.chapter.id}`);
 	check("只要标题也能立章", second.data.chapter.summary === "" && second.data.chapter.targetWords === 0);
 
+	// ---- 分卷：卷是独立对象，章挂不挂都行 ----
+	console.log("\n分卷");
+	const seedProject = (await req("GET", `/api/projects/${seedId}`)).data.project;
+	// 分卷之前写下的工程里没有卷，也没有章的 volumeId：得照样读得开。
+	check("老工程没有卷字段也读得开", Array.isArray(seedProject.volumes) && seedProject.volumes.length === 0, JSON.stringify(seedProject.volumes));
+	check("老章节的卷补成不分卷", seedProject.outline.every((c: any) => c.volumeId === ""), JSON.stringify(seedProject.outline.map((c: any) => c.volumeId)));
+
+	check("立卷缺卷名返回 400", (await req("POST", `/api/projects/${seedId}/volumes`, { summary: "只有要略" })).status === 400);
+	check("往不存在的作品立卷返回 404", (await req("POST", "/api/projects/nope/volumes", { title: "卷一" })).status === 404);
+
+	const volume = await req("POST", `/api/projects/${seedId}/volumes`, {
+		title: "卷一 · 黑水汊",
+		summary: "裴渡在野渡上讨生活，渐渐摸到夜航的门路。",
+		targetWords: 30000,
+	});
+	check("立卷返回 201", volume.status === 201, String(volume.status));
+	check("卷名与要略都存下了", volume.data.volume?.title === "卷一 · 黑水汊" && volume.data.volume.summary.includes("夜航"), JSON.stringify(volume.data.volume));
+	check("卷目标字数已存", volume.data.volume.targetWords === 30000, String(volume.data.volume.targetWords));
+
+	const chapterInVolume = await req("POST", `/api/projects/${seedId}/chapters`, {
+		title: "第五章 夜航",
+		volumeId: volume.data.volume.id,
+	});
+	check("立章可以带上卷", chapterInVolume.data.chapter.volumeId === volume.data.volume.id, String(chapterInVolume.data.chapter.volumeId));
+	check("不带卷的章归不分卷", made.data.chapter.volumeId === "", String(made.data.chapter.volumeId));
+
+	const renamedVolume = await req("PATCH", `/api/projects/${seedId}/volumes/${volume.data.volume.id}`, {
+		title: "卷一 · 夜航",
+		targetWords: 0,
+	});
+	check("改卷名返回 200", renamedVolume.status === 200 && renamedVolume.data.volume.title === "卷一 · 夜航", String(renamedVolume.status));
+	check("卷目标字数可以清零", renamedVolume.data.volume.targetWords === 0, String(renamedVolume.data.volume.targetWords));
+	check("改不存在的卷返回 404", (await req("PATCH", `/api/projects/${seedId}/volumes/ghost`, { title: "x" })).status === 404);
+
+	// 直接改章目：标题、要点、所属卷。改完不能把这一章的正文抖掉。
+	const rechapter = await req("PATCH", `/api/projects/${seedId}/outline/${made.data.chapter.id}`, {
+		title: "第三章 空渡（改）",
+		summary: "改过之后的要点。",
+		volumeId: volume.data.volume.id,
+	});
+	check("改章目返回 200", rechapter.status === 200, String(rechapter.status));
+	check("章目标题已改", rechapter.data.chapter.title === "第三章 空渡（改）", rechapter.data.chapter.title);
+	check("章目要点已改", rechapter.data.chapter.summary === "改过之后的要点。", rechapter.data.chapter.summary);
+	check("章目能改挂卷", rechapter.data.chapter.volumeId === volume.data.volume.id, rechapter.data.chapter.volumeId);
+	check("改章目空标题返回 400", (await req("PATCH", `/api/projects/${seedId}/outline/${made.data.chapter.id}`, { title: "  " })).status === 400);
+	check("改不存在的章节返回 404", (await req("PATCH", `/api/projects/${seedId}/outline/ghost`, { title: "x" })).status === 404);
+	const danglingVolume = await req("PATCH", `/api/projects/${seedId}/outline/${made.data.chapter.id}`, { volumeId: "v-not-exist" });
+	check("挂到不存在的卷等于不分卷", danglingVolume.data.chapter.volumeId === "", String(danglingVolume.data.chapter.volumeId));
+	await req("PATCH", `/api/projects/${seedId}/outline/${made.data.chapter.id}`, { volumeId: volume.data.volume.id });
+
+	// 删卷不删章：这一卷下的章归到不分卷，归了几章要报回来。
+	const beforeVolumeDelete = (await req("GET", `/api/projects/${seedId}`)).data.project;
+	const inVolume = beforeVolumeDelete.outline.filter((c: any) => c.volumeId === volume.data.volume.id).length;
+	const removedVolume = await req("DELETE", `/api/projects/${seedId}/volumes/${volume.data.volume.id}`);
+	check("删卷返回 200", removedVolume.status === 200, String(removedVolume.status));
+	check("删卷回报归到不分卷的章数", removedVolume.data.moved === inVolume && inVolume === 2, `${removedVolume.data.moved} / ${inVolume}`);
+	const afterVolumeDelete = (await req("GET", `/api/projects/${seedId}`)).data.project;
+	check("卷已不在作品里", !afterVolumeDelete.volumes.some((v: any) => v.id === volume.data.volume.id));
+	check("章没有陪着消失", afterVolumeDelete.outline.length === beforeVolumeDelete.outline.length, String(afterVolumeDelete.outline.length));
+	check("原属该卷的章都归了不分卷", afterVolumeDelete.outline.every((c: any) => c.volumeId === ""), JSON.stringify(afterVolumeDelete.outline.map((c: any) => c.volumeId)));
+	check("删不存在的卷返回 404", (await req("DELETE", `/api/projects/${seedId}/volumes/ghost`)).status === 404);
+
 	// ---- 导出 ----
 	// 导出的稿子要能直接带走：单章、整本、markdown 三种口径，外加中文文件名。
 	const draftText = "老周把船缆绕在桩上，等一个不来的客人。\n\n江面起了雾。";
@@ -851,6 +913,18 @@ try {
 		"种类表落盘用临时名 + rename",
 		kindsStore.includes(".tmp") && kindsStore.includes("rename("),
 	);
+
+	// 分卷：卷是章目之上的一层。章目里要看得出卷，章与卷都要能改，
+	// 而卷名会出现在稿面、作业条与右案大纲三处 —— 三处都得跟着走。
+	check("有分卷弹层", indexHtml.includes('id="volume-dialog"') && indexHtml.includes('id="volume-list"'));
+	check("章目里能立卷", indexHtml.includes('id="add-volume"') && appSource.includes("function openVolumeDialog"));
+	check("章目里插卷头", appSource.includes("function volumeHeader") && styleSource.includes(".chapter-volume"));
+	check("立章时能选卷", indexHtml.includes('id="chapter-volume"') && appSource.includes("function fillVolumeOptions"));
+	check(
+		"章目能改（标题、要点、所属卷）",
+		appSource.includes("editingChapterId") && appSource.includes("/outline/\" + encodeURIComponent("),
+	);
+	check("卷名出现在稿面与大纲里", styleSource.includes(".ms-volume") && appSource.includes("〔\" + volume.title + \"〕"));
 
 	// 高度链：桌面是 100vh 网格，里面每一级都得显式 min-height:0，
 	// 否则内容一长就把父级顶开，页面出现滚动条、输入框被推到屏幕外。

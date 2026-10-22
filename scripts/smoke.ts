@@ -415,8 +415,8 @@ try {
 		{ id: "m2", kind: "world", title: "湾区的雨", content: "内容", tags: [], usage: "用", status: "draft", chapterIds: [], source: "human", createdAt: 0, updatedAt: 0 },
 	);
 	board.outline.push(
-		{ id: "c1", title: "第一章", summary: "", pov: "", status: "planned", targetWords: 0, notes: "", materialIds: [] },
-		{ id: "c2", title: "第二章", summary: "", pov: "", status: "planned", targetWords: 0, notes: "", materialIds: [] },
+		{ id: "c1", title: "第一章", summary: "", pov: "", volumeId: "", status: "planned", targetWords: 0, notes: "", materialIds: [] },
+		{ id: "c2", title: "第二章", summary: "", pov: "", volumeId: "", status: "planned", targetWords: 0, notes: "", materialIds: [] },
 	);
 
 	const added = linkMaterials(board, "c1", ["m1", "ghost"], "add");
@@ -668,6 +668,7 @@ try {
 			title: "超长章号",
 			summary: "",
 			pov: "",
+			volumeId: "",
 			status: "planned",
 			targetWords: 0,
 			notes: "",

@@ -1273,6 +1273,48 @@ function matchesQuery(query, ...fields) {
 	return fields.some((field) => String(field ?? "").toLowerCase().includes(keyword));
 }
 
+/**
+ * 一个章属于哪一卷。没分卷、或者挂的卷已被删掉，都返回 null（等比于「不分卷」）。
+ */
+function volumeOf(chapter) {
+	const project = state.project;
+	if (!project || !chapter?.volumeId) return null;
+	return project.volumes.find((volume) => volume.id === chapter.volumeId) ?? null;
+}
+
+/**
+ * 章目里的一条卷头。
+ *
+ * 卷只在这一卷的**第一可见章**前面出现一次 —— 章的顺序还是大纲的顺序，
+ * 分卷只是在这条线上画层次，不重排。点卷头直接去改这一卷。
+ */
+function volumeHeader(volume, project) {
+	const chapters = project.outline.filter((chapter) => chapter.volumeId === volume.id);
+	const words = chapters.reduce((sum, chapter) => {
+		const draft = project.drafts[chapter.id];
+		return sum + (draft ? countWords(draft.content) : 0);
+	}, 0);
+	const head = el("li", "chapter-volume");
+	head.tabIndex = 0;
+	head.setAttribute("role", "button");
+	head.append(el("span", "cv-title", volume.title));
+	const meta = [];
+	if (chapters.length) meta.push(chapters.length + " 章");
+	if (words) meta.push(fmt(words) + " 字");
+	if (volume.targetWords) meta.push("目标 " + fmt(volume.targetWords) + " 字");
+	head.append(el("span", "cv-meta", meta.join(" · ") || "尚无章节"));
+	head.title = (volume.summary ? volume.summary + "\n" : "") + "点开改这一卷";
+	const open = () => openVolumeDialog({ edit: volume.id });
+	head.addEventListener("click", open);
+	head.addEventListener("keydown", (event) => {
+		if (event.key === "Enter" || event.key === " ") {
+			event.preventDefault();
+			open();
+		}
+	});
+	return head;
+}
+
 function renderChapters() {
 	const list = $("chapter-list");
 	list.replaceChildren();
@@ -1285,9 +1327,16 @@ function renderChapters() {
 	$("chapter-empty").classList.add("hidden");
 
 	let shown = 0;
+	const seenVolumes = new Set();
 	project.outline.forEach((chapter, index) => {
 		if (!matchesQuery(state.chapterQuery, chapter.title, chapter.summary, statusLabel(chapter.status))) return;
 		shown += 1;
+		// 卷头只在这一卷第一可见章之前出现：筛掉的章不留下空卷头。
+		const volume = volumeOf(chapter);
+		if (volume && !seenVolumes.has(volume.id)) {
+			seenVolumes.add(volume.id);
+			list.append(volumeHeader(volume, project));
+		}
 		const draft = project.drafts[chapter.id];
 		const words = draft ? countWords(draft.content) : 0;
 		const item = el("li", "chapter-item" + (chapter.id === state.chapterId ? " is-on" : ""));
@@ -2011,6 +2060,9 @@ function renderChapter(box, project) {
 
 	const page = el("div", "ms-page");
 	const head = el("div", "ms-head");
+	const volume = volumeOf(chapter);
+	// 分卷了就把卷名挂在「第三章」前面：稿面是作者唯一会盯很久的地方，卷次该在这里认得出。
+	if (volume) head.append(el("p", "ms-volume", volume.title));
 	head.append(el("p", "ms-kicker", "第" + toCn(index + 1) + "章" + (chapter.pov ? " · " + chapter.pov : "")));
 	head.append(el("h1", "ms-title", chapter.title));
 	head.append(el("div", "ms-rule"));
@@ -2129,6 +2181,9 @@ function chapterToolbar(chapter, index, content) {
 			bar.append(state_);
 		}
 	}
+
+	// 章名与所属卷也会写错：改题就在这里，不必绕去让智能体动手。
+	bar.append(button("改题", "btn btn-quiet btn-sm", () => openChapterDialog({ edit: chapter.id })));
 
 	// 成文动作在生文工作台里做，这里只负责把作者送过去。
 	bar.append(
@@ -3515,10 +3570,13 @@ function renderWriteActions(project, chapter) {
 		picker.append(placeholder);
 	}
 	chapters.forEach((item, index) => {
+		// 分卷的章，下拉里带上卷名 —— 几十章之后光看「第几章」认不出在哪一卷。
+		const volume = volumeOf(item);
 		const option = el(
 			"option",
 			"",
-			"第" + toCn(index + 1) + "章 · " + item.title + "（" + statusLabel(item.status) + "）",
+			"第" + toCn(index + 1) + "章 · " + item.title + "（" + statusLabel(item.status) + "）" +
+				(volume ? "　" + volume.title : ""),
 		);
 		option.value = item.id;
 		picker.append(option);
@@ -3691,12 +3749,51 @@ function materialGrid(materials, variant, locked = false) {
 	return grid;
 }
 
-/** 立一章的对话框。 */
-function openChapterDialog() {
+/** 所属卷的下拉：不分卷 + 现有的卷。 */
+function fillVolumeOptions(selected) {
+	const select = $("chapter-volume");
+	if (!select) return;
+	select.replaceChildren();
+	const none = el("option", "", "不分卷");
+	none.value = "";
+	select.append(none);
+	for (const volume of state.project?.volumes ?? []) {
+		const option = el("option", "", volume.title);
+		option.value = volume.id;
+		select.append(option);
+	}
+	select.value = selected ?? "";
+}
+
+/** 立一章 / 改一章共用同一个对话框：options.edit 传章节 id 就是改题。 */
+let editingChapterId = null;
+
+/** 立一章的对话框。传 edit 时变成改这一章（标题、要点、所属卷）。 */
+function openChapterDialog(options = {}) {
 	const form = $("chapter-form");
+	const project = state.project;
 	form.reset();
 	$("chapter-error").textContent = "";
-	form.elements.title.value = "第" + toCn((state.project?.outline.length ?? 0) + 1) + "章";
+	const chapter = options.edit ? project?.outline.find((item) => item.id === options.edit) : null;
+	if (chapter) {
+		editingChapterId = chapter.id;
+		form.elements.title.value = chapter.title;
+		form.elements.summary.value = chapter.summary;
+		form.elements.targetWords.value = chapter.targetWords ? String(chapter.targetWords) : "";
+		$("chapter-dialog-title").textContent = "改这一章";
+		$("chapter-dialog-hint").textContent = "标题、要点、所属卷都能改，正文一个字不动。";
+		$("chapter-submit").textContent = "存下";
+		fillVolumeOptions(chapter.volumeId);
+	} else {
+		editingChapterId = null;
+		form.elements.title.value = "第" + toCn((project?.outline.length ?? 0) + 1) + "章";
+		$("chapter-dialog-title").textContent = "立一章";
+		$("chapter-dialog-hint").textContent = "章节是装料的落点 —— 有了章，素材才有地方装。";
+		$("chapter-submit").textContent = "立章";
+		// 新章默认跟着当前这一章所在的卷走：接着往下写的人多半还在同一卷里。
+		const current = project?.outline.find((item) => item.id === state.chapterId);
+		fillVolumeOptions(current?.volumeId ?? "");
+	}
 	openDialog($("chapter-dialog"));
 	form.elements.title.select();
 }
@@ -3714,17 +3811,26 @@ $("chapter-form").addEventListener("submit", async (event) => {
 		return;
 	}
 	error.textContent = "";
-	const submit = form.querySelector("button[type=submit]");
+	const submit = $("chapter-submit");
 	submit.disabled = true;
+	const body = {
+		title,
+		summary: String(values.summary ?? "").trim(),
+		targetWords: values.targetWords ? Number(values.targetWords) : 0,
+		volumeId: String(values.volumeId ?? ""),
+	};
 	try {
-		const data = await api("/api/projects/" + state.projectId + "/chapters", {
-			method: "POST",
-			body: {
-				title,
-				summary: String(values.summary ?? "").trim(),
-				targetWords: values.targetWords ? Number(values.targetWords) : 0,
-			},
-		});
+		if (editingChapterId) {
+			await api("/api/projects/" + state.projectId + "/outline/" + encodeURIComponent(editingChapterId), {
+				method: "PATCH",
+				body,
+			});
+			closeDialog($("chapter-dialog"));
+			await reloadProject();
+			toast("章目已改", "ok", 1800);
+			return;
+		}
+		const data = await api("/api/projects/" + state.projectId + "/chapters", { method: "POST", body });
 		closeDialog($("chapter-dialog"));
 		// 立完就选中它并切到生文工作台：立章的目的就是接着装料。
 		state.chapterId = data.chapter?.id ?? null;
@@ -3738,7 +3844,180 @@ $("chapter-form").addEventListener("submit", async (event) => {
 	}
 });
 
-/** 一次性成文：服务端算好组装上下文，交给写作智能体流式落盘。 */
+// ═══════════════════════════════════════════════════ 分卷
+
+/** 正在改的那一卷；null 表示表单处在「立新卷」。 */
+let editingVolumeId = null;
+/** 只记一下「删」被点过一次的那一卷：第二下才真删。 */
+let pendingVolumeDelete = null;
+
+/** 把表单切回「立新卷」：刚存完、改到一半又想新立、或者开了对话框，都走这里。 */
+function resetVolumeForm() {
+	const form = $("volume-form");
+	editingVolumeId = null;
+	pendingVolumeDelete = null;
+	form.reset();
+	$("volume-error").textContent = "";
+	$("volume-submit").textContent = "立卷";
+	$("volume-reset").classList.add("hidden");
+	renderVolumeList();
+}
+
+function openVolumeDialog(options = {}) {
+	resetVolumeForm();
+	if (options.edit) editVolume(options.edit);
+	openDialog($("volume-dialog"), { focus: "#volume-form input[name=title]" });
+}
+
+/** 把某一卷填进表单，改成编辑态。 */
+function editVolume(volumeId) {
+	const volume = state.project?.volumes.find((item) => item.id === volumeId);
+	if (!volume) return;
+	const form = $("volume-form");
+	editingVolumeId = volume.id;
+	pendingVolumeDelete = null;
+	form.elements.title.value = volume.title;
+	form.elements.summary.value = volume.summary;
+	form.elements.targetWords.value = volume.targetWords ? String(volume.targetWords) : "";
+	$("volume-submit").textContent = "存下";
+	$("volume-reset").classList.remove("hidden");
+	$("volume-error").textContent = "";
+	renderVolumeList();
+	form.elements.title.focus();
+	form.elements.title.select();
+}
+
+/**
+ * 清单里的按钮。
+ *
+ * 和种类清单一样必须显式 type="button"：这些按钮都长在 #volume-form 里，
+ * <button> 默认是 submit，不写就点「删」顺手把表单也提交一遍。
+ */
+function volumeButton(label, className, onClick) {
+	const node = button(label, className, onClick);
+	node.type = "button";
+	return node;
+}
+
+function renderVolumeList() {
+	const list = $("volume-list");
+	list.replaceChildren();
+	const project = state.project;
+	const volumes = project?.volumes ?? [];
+	if (volumes.length === 0) {
+		list.append(el("li", "volume-empty", "还没有分卷。卷可有可无 —— 想给章目分层，就在上面立一卷。"));
+		return;
+	}
+	for (const volume of volumes) list.append(volumeRow(volume, project));
+}
+
+function volumeRow(volume, project) {
+	const chapters = project.outline.filter((chapter) => chapter.volumeId === volume.id);
+	const row = el("li", "volume-row" + (editingVolumeId === volume.id ? " is-editing" : ""));
+	const main = el("div", "volume-main");
+	main.append(el("span", "volume-name", volume.title));
+	const meta = [chapters.length ? chapters.length + " 章" : "尚无章节"];
+	if (volume.targetWords) meta.push("目标 " + fmt(volume.targetWords) + " 字");
+	main.append(el("span", "volume-meta", meta.join(" · ")));
+	if (volume.summary) main.append(el("span", "volume-summary", volume.summary));
+	row.append(main);
+
+	const acts = el("div", "volume-acts");
+	acts.append(volumeButton("改", "btn btn-quiet btn-xs", () => editVolume(volume.id)));
+	const confirming = pendingVolumeDelete === volume.id;
+	acts.append(
+		volumeButton(confirming ? "确认删" : "删", "btn btn-xs " + (confirming ? "btn-danger" : "btn-quiet"), () => {
+			void deleteVolume(volume);
+		}),
+	);
+	row.append(acts);
+	return row;
+}
+
+/**
+ * 删一卷。第一下只是把按钮变成「确认删」，第二下才真删。
+ *
+ * 删卷不删章 —— 那些章会回到不分卷。这件事要说在点数之前，
+ * 光一个「删」字点下去，人不会意识到章换了地方。
+ */
+async function deleteVolume(volume) {
+	const error = $("volume-error");
+	error.textContent = "";
+	if (pendingVolumeDelete !== volume.id) {
+		pendingVolumeDelete = volume.id;
+		const chapters = (state.project?.outline ?? []).filter((chapter) => chapter.volumeId === volume.id);
+		error.textContent = chapters.length
+			? "这一卷下还有 " + chapters.length + " 章；删卷不删章，它们会回到不分卷。再点一次确认。"
+			: "再点一次确认删除「" + volume.title + "」。";
+		renderVolumeList();
+		return;
+	}
+	pendingVolumeDelete = null;
+	try {
+		const data = await api("/api/projects/" + state.projectId + "/volumes/" + encodeURIComponent(volume.id), {
+			method: "DELETE",
+		});
+		if (editingVolumeId === volume.id) editingVolumeId = null;
+		await reloadProject();
+		resetVolumeForm();
+		toast(data.moved ? "卷已删，其中 " + data.moved + " 章回到不分卷" : "卷已删", "ok", 2600);
+	} catch (err) {
+		error.textContent = err.message;
+		renderVolumeList();
+	}
+}
+
+$("add-volume").addEventListener("click", () => openVolumeDialog());
+$("volume-cancel").addEventListener("click", () => closeDialog($("volume-dialog")));
+$("volume-reset").addEventListener("click", () => {
+	resetVolumeForm();
+	$("volume-form").elements.title.focus();
+});
+$("volume-dialog").addEventListener("close", () => {
+	editingVolumeId = null;
+	pendingVolumeDelete = null;
+});
+$("volume-form").addEventListener("submit", async (event) => {
+	event.preventDefault();
+	const form = event.currentTarget;
+	const error = $("volume-error");
+	const values = Object.fromEntries(new FormData(form).entries());
+	const title = String(values.title ?? "").trim();
+	if (!title) {
+		error.textContent = "先给这一卷起个名字。";
+		return;
+	}
+	error.textContent = "";
+	const submit = $("volume-submit");
+	submit.disabled = true;
+	const body = {
+		title,
+		summary: String(values.summary ?? "").trim(),
+		targetWords: values.targetWords ? Number(values.targetWords) : 0,
+	};
+	try {
+		if (editingVolumeId) {
+			await api("/api/projects/" + state.projectId + "/volumes/" + encodeURIComponent(editingVolumeId), {
+				method: "PATCH",
+				body,
+			});
+			await reloadProject();
+			resetVolumeForm();
+			toast("卷已改", "ok", 1800);
+		} else {
+			await api("/api/projects/" + state.projectId + "/volumes", { method: "POST", body });
+			await reloadProject();
+			resetVolumeForm();
+			toast("卷已立", "ok", 1800);
+		}
+		form.elements.title.focus();
+	} catch (err) {
+		error.textContent = err.message;
+	} finally {
+		submit.disabled = false;
+	}
+});
+
 /**
  * 装料成文 / 续写 / 重写。
  *
@@ -3867,7 +4146,8 @@ function renderBible() {
 			const card = el("div", "card");
 			card.tabIndex = 0;
 			card.setAttribute("role", "button");
-			card.append(el("h4", "", toCn(index + 1) + " · " + chapter.title));
+			const volume = volumeOf(chapter);
+			card.append(el("h4", "", toCn(index + 1) + " · " + chapter.title + (volume ? "　〔" + volume.title + "〕" : "")));
 			card.append(el("div", "tagline", chapter.summary || "（未写要略）"));
 			const meta = [statusLabel(chapter.status), chapter.pov];
 			if (words) meta.push(fmt(words) + " 字");

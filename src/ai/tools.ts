@@ -30,6 +30,23 @@ const nonEmpty = (description: string) => Type.String({ minLength: 1, descriptio
 const optionalText = (description: string) => Type.Optional(Type.String({ description }));
 
 /**
+ * 给新卷派个号：v01、v02 …
+ *
+ * 与章的 ch01 同一套路：号在人读的输出里稳定，作者也好认。
+ * 卷 id 撞了就往后挪，别让两卷共用一个号。
+ */
+function nextVolumeId(project: Project): string {
+	const taken = new Set(project.volumes.map((volume) => volume.id));
+	let n = project.volumes.length + 1;
+	let id = "v" + String(n).padStart(2, "0");
+	while (taken.has(id)) {
+		n += 1;
+		id = "v" + String(n).padStart(2, "0");
+	}
+	return id;
+}
+
+/**
  * 素材 kind 的枚举 schema。
  *
  * 每次建智能体时现取一次种类目录 —— 作者添了新门类，智能体立刻就能用，
@@ -216,15 +233,19 @@ function sharedTools(deps: NovelToolDeps): AgentTool<any>[] {
 			execute: async () => {
 				const p = getProject(deps);
 				if (p.outline.length === 0) return result("大纲还是空的，需要先用 update_outline 建立。", p.outline);
-				const body = lines(
+				const volumeName = (volumeId: string) =>
+					volumeId ? (p.volumes.find((volume) => volume.id === volumeId)?.title ?? "") : "";
+				const chapters = lines(
 					p.outline.map((chapter, index) => {
 						const draft = p.drafts[chapter.id];
 						const written = draft ? countWords(draft.content) : 0;
 						const pct = chapter.targetWords > 0 ? Math.min(100, Math.round((written / chapter.targetWords) * 100)) : 0;
 						const rev = draft ? " · 第" + draft.revision + "版" : "";
 						const mats = chapter.materialIds.length > 0 ? " · 装料" + chapter.materialIds.length + "条" : " · 未装料";
+						const volume = volumeName(chapter.volumeId);
 						return (
-							index + 1 + ". [" + chapter.id + "] " + chapter.title +
+							index + 1 + ". " + (volume ? "〔" + volume + "〕" : "") +
+							"[" + chapter.id + "] " + chapter.title +
 							"（" + chapter.status + "） 已写" + written + "字" +
 							(chapter.targetWords ? "/" + chapter.targetWords : "") +
 							(pct ? " " + pct + "%" : "") + rev + mats +
@@ -232,7 +253,22 @@ function sharedTools(deps: NovelToolDeps): AgentTool<any>[] {
 						);
 					}),
 				);
-				return result(body, { outline: p.outline, drafts: p.drafts });
+				// 有卷就先报卷：卷要略是"这一卷大致写什么"，比单章要略更早决定情节走向。
+				const volumes =
+					p.volumes.length > 0
+						? "卷：\n" +
+							lines(
+								p.volumes.map((volume) => {
+									const count = p.outline.filter((chapter) => chapter.volumeId === volume.id).length;
+									return (
+										"[" + volume.id + "] " + volume.title + "（" + count + "章" +
+										(volume.targetWords ? "，目标" + volume.targetWords + "字" : "") + "）" +
+										(volume.summary ? "：" + volume.summary : "")
+									);
+								}),
+							) + "\n\n章：\n"
+						: "";
+				return result(volumes + chapters, { outline: p.outline, drafts: p.drafts, volumes: p.volumes });
 			},
 		}),
 
@@ -423,9 +459,25 @@ function updateOutlineTool(deps: NovelToolDeps): AgentTool<any> {
 		description:
 			"新建或整体更新大纲。每个章节用 id 标识；已存在的 id 会被更新，新 id 则追加。" +
 			"chapterIds 是本章打算用的素材 id 列表：传了就整体替换该章的装料，不传则保持原样（只改标题不必重复传）。" +
-			"之后想单独增删就用 attach_materials。",
+			"之后想单独增删就用 attach_materials。" +
+			"卷是可选的：可以先用 volumes 立几卷（卷名、卷要略、卷目标字数），再在章上用 volume 写卷名把章挂进去；" +
+			"卷名在章上第一次出现时也会自动立卷。不传 volume 的章保持原来的卷，volume 传空串等于把这一章摘到不分卷。",
 		parameters: Type.Object(
 			{
+				volumes: Type.Optional(
+					Type.Array(
+						Type.Object(
+							{
+								id: optionalText("已有卷的 id；新卷留空"),
+								title: nonEmpty("卷名，例如「卷一 · 黑水汊」"),
+								summary: optionalText("卷要略：这一卷大致写什么，2-4 句"),
+								targetWords: Type.Optional(Type.Number({ description: "卷目标字数" })),
+							},
+							{ description: "卷条目" },
+						),
+						{ description: "卷的设置。不传就不动已有的卷；作者不打算分卷时整项省略即可" },
+					),
+				),
 				chapters: Type.Array(
 					Type.Object(
 						{
@@ -433,6 +485,9 @@ function updateOutlineTool(deps: NovelToolDeps): AgentTool<any> {
 							title: nonEmpty("标题"),
 							summary: nonEmpty("本章要点，2-4 句"),
 							pov: optionalText("视角人物"),
+							volume: optionalText(
+								"所属卷的卷名（与 volumes 里的 title 一致）。不传保持原样，传空串表示不分卷",
+							),
 							status: Type.Optional(
 								Type.Union(
 									[
@@ -460,7 +515,45 @@ function updateOutlineTool(deps: NovelToolDeps): AgentTool<any> {
 		execute: async (_toolCallId, params) => {
 			const known = new Set(getProject(deps).materials.map((m) => m.id));
 			const saved = deps.store.mutate(deps.projectId, (p) => {
+				// 先立卷：章上的 volume 写的是卷名，得先有这一卷才挂得上。
+				for (const item of params.volumes ?? []) {
+					const title = item.title.trim();
+					if (!title) continue;
+					const target = item.id
+						? p.volumes.find((volume) => volume.id === item.id)
+						: p.volumes.find((volume) => volume.title.trim() === title);
+					if (target) {
+						target.title = title;
+						if (typeof item.summary === "string") target.summary = item.summary;
+						if (typeof item.targetWords === "number" && item.targetWords >= 0) {
+							target.targetWords = Math.floor(item.targetWords);
+						}
+						continue;
+					}
+					p.volumes.push({
+						id: item.id && !p.volumes.some((volume) => volume.id === item.id) ? item.id : nextVolumeId(p),
+						title,
+						summary: item.summary ?? "",
+						targetWords:
+							typeof item.targetWords === "number" && item.targetWords > 0 ? Math.floor(item.targetWords) : 0,
+						notes: "",
+					});
+				}
+				// 卷名 → 卷 id。改卷名之后不必另建，这张表在挂章前重建。
+				const byTitle = new Map(p.volumes.map((volume) => [volume.title.trim(), volume.id] as const));
+				const volumeForTitle = (title: string): string => {
+					const key = title.trim();
+					if (!key) return "";
+					const hit = byTitle.get(key);
+					if (hit) return hit;
+					// 章上写了个没立过的卷名：顺手立一卷，别让这条信息掉在地上。
+					const id = nextVolumeId(p);
+					p.volumes.push({ id, title: key, summary: "", targetWords: 0, notes: "" });
+					byTitle.set(key, id);
+					return id;
+				};
 				for (const chapter of params.chapters) {
+					const volumeId = typeof chapter.volume === "string" ? volumeForTitle(chapter.volume) : undefined;
 					const index = p.outline.findIndex((item) => item.id === chapter.id);
 					const next = {
 						id: chapter.id,
@@ -476,9 +569,15 @@ function updateOutlineTool(deps: NovelToolDeps): AgentTool<any> {
 						// 只有显式传了 chapterIds 才动装配清单：
 						// 改个标题不该把这一章的料抖掉。
 						if (chapter.chapterIds) merged.materialIds = chapter.chapterIds.filter((id) => known.has(id));
+						// 卷同理：不传就保持原样。
+						if (volumeId !== undefined) merged.volumeId = volumeId;
 						p.outline[index] = merged;
 					} else {
-						p.outline.push({ ...next, materialIds: (chapter.chapterIds ?? []).filter((id) => known.has(id)) });
+						p.outline.push({
+							...next,
+							volumeId: volumeId ?? "",
+							materialIds: (chapter.chapterIds ?? []).filter((id) => known.has(id)),
+						});
 					}
 					// 反向同步素材的 chapterIds，让索引与素材卡上的"已装入"不说谎。
 					if (chapter.chapterIds) {
@@ -498,11 +597,21 @@ function updateOutlineTool(deps: NovelToolDeps): AgentTool<any> {
 			// 下一步才发现这一章没料可写，却不知道是哪个 id 写错了。
 			const requested = (params.chapters ?? []).flatMap((c) => c.chapterIds ?? []);
 			const missing = requested.filter((id) => !known.has(id));
+			const volumeName = new Map(saved.volumes.map((volume) => [volume.id, volume.title] as const));
 			return result(
-				"大纲已更新，当共 " + saved.outline.length + " 章：\n" +
-					lines(saved.outline.map((c) => "[" + c.id + "] " + c.title + "（" + c.status + "）装料" + c.materialIds.length + "条")) +
+				"大纲已更新，共 " + saved.outline.length + " 章" +
+					(saved.volumes.length > 0 ? "、" + saved.volumes.length + " 卷" : "") + "：\n" +
+					lines(
+						saved.outline.map((c) => {
+							const volume = c.volumeId ? volumeName.get(c.volumeId) : "";
+							return (
+								"[" + c.id + "] " + (volume ? "〔" + volume + "〕" : "") + c.title +
+								"（" + c.status + "）装料" + c.materialIds.length + "条"
+							);
+						}),
+					) +
 					(missing.length > 0 ? "\n\n以下素材 id 不存在，未装入（先 upsert_material 确认 id）：" + missing.join("、") : ""),
-				saved.outline,
+				{ outline: saved.outline, volumes: saved.volumes },
 			);
 		},
 	});
