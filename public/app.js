@@ -1421,11 +1421,17 @@ function renderHomeBench() {
 		groups.get(entry.kind).push(entry);
 	}
 	for (const [kind, entries] of groups) {
-		const head = el("div", "mat-group");
+		const group = el("div", "mat-group");
+		const head = el("div", "mat-group-head");
 		head.append(el("h3", "", kindLabel(kind)));
 		head.append(el("span", "count", entries.length + " 条"));
-		list.append(head);
-		for (const entry of entries) list.append(libraryCard(entry));
+		group.append(head);
+		// 组内单独一个 grid：分组标题是整行的，卡片才两列并排。
+		// 这一栏窄的时候卡片自己收成一列，宽度由 CSS 的容器查询按实测栏宽定。
+		const grid = el("div", "mat-grid");
+		for (const entry of entries) grid.append(libraryCard(entry));
+		group.append(grid);
+		list.append(group);
 	}
 }
 

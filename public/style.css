@@ -998,7 +998,8 @@ body::before {
 .mat-group-head h3 { margin: 0; font-family: var(--kai); font-size: 14px; font-weight: 600; letter-spacing: 0.1em; color: var(--ink); }
 .mat-group-head .count { font-size: 11px; color: var(--ink-4); }
 
-/* 素材库两列并排。列宽用 minmax(0,1fr)：不加 0 下限，长标题会把格子撑破。 */
+/* 素材库两列并排。列宽用 minmax(0,1fr)：不加 0 下限，长标题会把格子撑破。
+   列数由下面「素材卡按栏宽排布」一节的容器查询按实测栏宽定，这里给的是兜底。 */
 .mat-grid {
 	display: grid;
 	grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1420,6 +1421,11 @@ select { max-width: 230px; cursor: pointer; }
 	display: flex;
 	flex-direction: column;
 	overflow: hidden;
+	/* 容器查询的锚：这一栏有多宽，只有这里知道。
+	   栏宽是拖提手拖出来的，视口宽度量不着它。
+	   只含 inline-size（不含 paint），卡片浮起时的投影不会被裁掉。 */
+	container-type: inline-size;
+	container-name: pane;
 }
 .bench-pane + .bench-pane { border-left: 1px solid var(--rule); }
 /* 左栏自己滚：上传区、素材库、装配清单都可能很长 */
@@ -1526,7 +1532,6 @@ body.is-splitting * {
 
 /* 栏窄了，内容自己换排法。栏宽是拖出来的，媒体查询量的是视口，
    量不到「这一栏只剩一百七十像素」—— 所以由脚本按实测宽度挂类。 */
-.bench.has-split.is-a-narrow .mat-grid { grid-template-columns: minmax(0, 1fr); }
 .bench.has-split.is-a-narrow .bench-pane:not(.bench-talk) {
 	padding-left: var(--sp-3);
 	padding-right: var(--sp-3);
@@ -1562,6 +1567,44 @@ body.is-splitting * {
 .bench.has-split .thinking-body,
 .bench.has-split .tool-preview { overflow-wrap: anywhere; }
 
+/* ── 素材卡按栏宽排布 ────────────────────────────────────────
+   素材卡不该一张占满整栏：栏里横向排两列，栏拉宽了排三列，
+   窄到塞不下两张才收成一列。
+
+   量的是「这一栏有多宽」，不是视口有多宽 —— 栏宽是拖提手拖出来的，
+   媒体查询量不着它（同一节里 is-a-narrow 那些类就是干这事的）。
+   这里用容器查询直接量：拖一下提手，卡片立刻重排，不用等脚本挂类。 */
+
+@container pane (max-width: 299px) {
+	/* 两张卡并排至少要 ~150px 一张，再窄就一张一行吧。 */
+	.mat-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+@container pane (min-width: 300px) {
+	/* 两列是常态。手机上一栏铺满，容器查询照样管到 ——
+	   媒体查询那条「窄屏一列」写在前面，这里按栏宽把它顶回去。 */
+	.mat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@container pane (min-width: 560px) {
+	.mat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+/* 网格里的卡要有个「张」的形：单列时它是一条横线，两三列并排时
+   若还只是一条线，卡与卡之间没有界，看着像没排完。 */
+.mat-grid > .card.mat {
+	padding: 12px 13px 13px;
+	border: 1px solid var(--rule-soft);
+	border-radius: var(--r-2);
+}
+
+/* 卡一窄，字就得收一收：不然标题挤成两行、用得住的小字断成三截。 */
+@container pane (max-width: 430px) {
+	.mat-grid > .card.mat { padding: 10px 11px 11px; }
+	.mat-grid > .card.mat h4 { font-size: 14px; }
+	.card.mat .usage { font-size: 12px; }
+	.card.mat .mat-body { font-size: 13px; }
+}
 
 .pane-head {
 	flex: none;
