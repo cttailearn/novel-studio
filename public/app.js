@@ -3412,10 +3412,8 @@ function renderWritingBench() {
 
 	const assemblyBox = $("assembly-list");
 	const poolBox = $("pool-list");
-	const actions = $("write-actions");
 	assemblyBox.replaceChildren();
 	poolBox.replaceChildren();
-	actions.replaceChildren();
 
 	// 「库中可装」先定下这一轮的池子：库里还没装进本章的料。
 	// 检索与分类都作用在它身上，分类条上的数目也按它算 ——
@@ -3423,6 +3421,7 @@ function renderWritingBench() {
 	const chapter = project.outline.find((item) => item.id === state.chapterId);
 	const pool = project.materials.filter((material) => !chapter || !chapter.materialIds.includes(material.id));
 	renderPoolFilter(pool);
+	renderWriteActions(project, chapter);
 
 	if (!chapter) {
 		const hasChapters = project.outline.length > 0;
@@ -3433,7 +3432,7 @@ function renderWritingBench() {
 			el(
 				"div",
 				"bench-empty",
-				hasChapters ? "先在左栏点开一章，再装料。" : "这部作品还没有章节。先立一章，再把料装进去。",
+				hasChapters ? "还没选章节 —— 在执笔者那一栏选一章，再装料。" : "这部作品还没有章节。先立一章，再把料装进去。",
 			),
 		);
 		assemblyBox.append(button("＋ 立一章", "btn btn-ink btn-sm", () => openChapterDialog()));
@@ -3464,32 +3463,6 @@ function renderWritingBench() {
 		assemblyBox.append(materialGrid(assembled, "assembled"));
 	}
 
-	const modeSelect = document.createElement("select");
-	modeSelect.className = "mode-select";
-	for (const [value, label] of [["create", "从零写起"], ["rewrite", "整章重写"], ["continue", "续写下去"]]) {
-		const option = el("option", "", label);
-		option.value = value;
-		modeSelect.append(option);
-	}
-	modeSelect.value = state.writeMode;
-	modeSelect.addEventListener("change", () => {
-		state.writeMode = modeSelect.value;
-	});
-	actions.append(modeSelect);
-	// 「交代」在点按钮时才读：渲染一次就取值的话，作者打了一半的字会丢。
-	actions.append(
-		button("装料成文", "btn btn-ink btn-sm", () => void runWrite(modeSelect.value, $("writing-input").value.trim())),
-	);
-	actions.append(
-		el(
-			"span",
-			"actions-note",
-			assembled.length === 0
-				? "没有素材，写不出正文"
-				: "带 " + assembled.length + " 条料交给执笔者；下方输入框里的交代会一并附上",
-		),
-	);
-
 	const poolShown = pool.filter(poolMatches);
 	setPoolCount(pool.length, poolShown.length);
 	if (pool.length === 0) {
@@ -3507,6 +3480,122 @@ function renderWritingBench() {
 	} else {
 		poolBox.append(materialGrid(poolShown, "pool"));
 	}
+}
+
+/** 写法不同，按下去的那颗按钮也该叫得不一样 —— 让人一眼知道会得到什么。 */
+const WRITE_MODE_ACTIONS = { create: "装料成文", rewrite: "重写此章", continue: "接着写" };
+
+/**
+ * 写作作业条：选章 → 定写法 → 落笔。
+ *
+ * 它原先挂在左栏「装配」底下，可真正落笔的是右栏执笔者 —— 眼睛盯着一栏，
+ * 手要跑回另一栏按按钮。现在挪进执笔者栏、紧贴输入框：先在这儿选章，
+ * 再在下面的输入框里写交代，最后按这一颗。
+ *
+ * 交代一律在按下那一刻才读输入框：渲染时就取值的话，作者打了一半的字会丢。
+ */
+function renderWriteActions(project, chapter) {
+	const box = $("write-actions");
+	box.replaceChildren();
+	const chapters = project.outline;
+
+	if (chapters.length === 0) {
+		// 立章的入口在左栏装配区（那儿才看得见"装配落点"），这里只说一句。
+		box.append(el("span", "actions-note", "这部作品还没有章节 —— 立一章就能开写。"));
+		return;
+	}
+
+	const picker = document.createElement("select");
+	picker.className = "mode-select chapter-select";
+	picker.id = "write-chapter";
+	picker.setAttribute("aria-label", "要写哪一章");
+	if (!chapter) {
+		const placeholder = el("option", "", "选择章节…");
+		placeholder.value = "";
+		picker.append(placeholder);
+	}
+	chapters.forEach((item, index) => {
+		const option = el(
+			"option",
+			"",
+			"第" + toCn(index + 1) + "章 · " + item.title + "（" + statusLabel(item.status) + "）",
+		);
+		option.value = item.id;
+		picker.append(option);
+	});
+	picker.value = chapter ? chapter.id : "";
+	picker.addEventListener("change", () => setWriteChapter(picker.value));
+	box.append(picker);
+
+	// 没选章就没有「写哪一章」可谈：先让人把章选定，别把一颗按不动的按钮摆在那儿。
+	if (!chapter) {
+		box.append(el("span", "actions-note", "先选一章，再落笔。"));
+		return;
+	}
+
+	const modeSelect = document.createElement("select");
+	modeSelect.className = "mode-select";
+	modeSelect.id = "write-mode";
+	modeSelect.setAttribute("aria-label", "写法");
+	for (const [value, label] of [
+		["create", "从零写起"],
+		["rewrite", "整章重写"],
+		["continue", "续写下去"],
+	]) {
+		const option = el("option", "", label);
+		option.value = value;
+		modeSelect.append(option);
+	}
+	modeSelect.value = state.writeMode;
+	box.append(modeSelect);
+
+	const assembled = chapter.materialIds.map(materialById).filter(Boolean);
+	const go = button(WRITE_MODE_ACTIONS[state.writeMode] ?? "装料成文", "btn btn-ink btn-sm", () => {
+		void runWrite(modeSelect.value, $("writing-input").value.trim(), chapter.id);
+	});
+	go.type = "button";
+	go.dataset.writeGo = "1";
+	// 没装料就写不出来（服务端也会 409）—— 按钮先按不动，并说清该去哪儿装。
+	if (assembled.length === 0) {
+		go.disabled = true;
+		go.dataset.empty = "1";
+		go.title = "本章还没装料，写不出正文";
+	} else if (streamBusy("writing")) {
+		// 这一轮还没收笔：按钮先停着，等 setStreaming 收到落笔信号再放行。
+		go.disabled = true;
+	}
+	box.append(go);
+	modeSelect.addEventListener("change", () => {
+		state.writeMode = modeSelect.value;
+		go.textContent = WRITE_MODE_ACTIONS[modeSelect.value] ?? "装料成文";
+	});
+
+	box.append(
+		el(
+			"span",
+			"actions-note",
+			assembled.length === 0
+				? "这一章还没装料：先到左栏「库中可装」里挑几条。"
+				: "带 " + assembled.length + " 条料落笔；下面输入框里写的交代会一并附上。",
+		),
+	);
+}
+
+/**
+ * 在执笔者栏里直接换章。
+ *
+ * 走的是与章目点击同一套状态：换完章，左栏装配、右案、章目一起跟着换，
+ * 唯独视图停在这儿 —— 作者是来写字的，不是来翻稿子的。
+ */
+function setWriteChapter(chapterId) {
+	if (!state.project) return;
+	const next = state.project.outline.find((item) => item.id === chapterId);
+	if (!next) return;
+	state.chapterId = next.id;
+	// 写法跟着章走：有旧稿就该是「整章重写」，空白章才是「从零写起」。
+	state.writeMode = state.project.drafts[next.id] ? "rewrite" : "create";
+	writeStored(chapterKey(state.projectId), next.id);
+	renderAll();
 }
 
 /**
@@ -4310,6 +4399,10 @@ function setStreaming(pane, busy = true) {
 			submit.disabled = busy;
 			submit.textContent = busy ? "落笔中" : "呈上";
 		}
+		// 作业条上那颗「装料成文」也要跟着停：一轮还没落完，按了也发不出去。
+		// empty 标记留着 —— 没装料的章本来就不该写，收笔了也不能放行。
+		const go = talk.querySelector("[data-write-go]");
+		if (go) go.disabled = busy || go.dataset.empty === "1";
 		talk.querySelector("[data-abort]")?.classList.toggle("hidden", !busy);
 	}
 	// 收笔了就去补发那些生成途中被挡下的换笔请求。

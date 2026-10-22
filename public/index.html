@@ -431,7 +431,6 @@
 								<span id="assembly-chapter" class="pane-note"></span>
 							</header>
 							<div id="assembly-list" class="assembly-list"></div>
-							<div id="write-actions" class="write-actions"></div>
 
 							<header class="pane-head">
 								<h3>库中可装</h3>
@@ -451,12 +450,15 @@
 								</div>
 							</header>
 							<div id="writing-stream" class="stream"></div>
+							<!-- 写作作业条：先选章、再定写法，下面输入框里写交代，最后按它落笔。
+							     原先挂在左栏「装配」底下，可落笔的是这一栏 —— 眼睛在这儿，手要跑到那儿。 -->
+							<div id="write-actions" class="write-actions"></div>
 							<form id="writing-composer" class="composer">
 							<p class="drop-hint hidden"></p>
 								<textarea
 									id="writing-input"
 									rows="3"
-									placeholder="交代活计：写出这一章、把第二段改冷一点、让结尾再狠一些……（Enter 发送，Shift+Enter 换行）"
+									placeholder="交代活计：这一章要写什么、写到哪儿、语气偏冷还是偏狠……（写好了按上方按钮落笔；Enter 呈上，Shift+Enter 换行）"
 								></textarea>
 								<div class="composer-side">
 									<button type="submit" class="btn btn-ink">呈上</button>

@@ -983,6 +983,20 @@ try {
 	);
 	check("生文工作台复用素材工作台的检索样式", styleSource.includes(".mat-search") && styleSource.includes(".mat-filter"));
 
+	// 作业条（选章 / 写法 / 落笔）挂在执笔者栏里，夹在对话流与输入框之间 ——
+	// 原先它在左栏「装配」底下，落笔却要回头看右栏，手和眼睛不在同一处。
+	check(
+		"写作作业条在执笔者栏里",
+		indexHtml.lastIndexOf('id="write-actions"') > indexHtml.lastIndexOf('id="writing-stream"') &&
+			indexHtml.lastIndexOf('id="write-actions"') < indexHtml.lastIndexOf('id="writing-composer"'),
+	);
+	check(
+		"作业条能直接选章节",
+		appSource.includes("function renderWriteActions") &&
+			appSource.includes("function setWriteChapter") &&
+			appSource.includes('"write-chapter"'),
+	);
+
 	// ---- 昼夜 ----
 	// 暗色不是反相，而是把纸压成暖黑、把墨提成月白：两套令牌都要在，
 	// 且各自独立定义纸与墨，浓淡关系才不塌。

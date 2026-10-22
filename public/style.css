@@ -1537,6 +1537,7 @@ body.is-splitting * {
 	padding-right: var(--sp-3);
 }
 .bench.has-split.is-b-narrow .bench-talk .stream,
+.bench.has-split.is-b-narrow .bench-talk .write-actions,
 .bench.has-split.is-b-narrow .bench-talk .composer {
 	padding-left: var(--sp-4);
 	padding-right: var(--sp-4);
@@ -1844,15 +1845,22 @@ body.is-splitting * {
 .card.mat.is-compact { cursor: pointer; transition: color var(--wash); }
 .card.mat.is-compact:hover h4 { color: var(--cinnabar); }
 
+/* 写作作业条：选章 → 定写法 → 落笔。
+   它挂在执笔者栏、紧贴输入框之上 —— 眼睛在看这一栏，手就不该跑回左栏按按钮。
+   上下用细线跟对议区分开，但它自己不能撑高也不能缩：写在流里，栏矮时先压对话区。 */
 .write-actions {
 	display: flex;
 	align-items: center;
 	gap: 8px;
 	flex-wrap: wrap;
-	margin: 16px 0 4px;
-	padding: 13px 0;
+	flex: none;
+	margin: 0;
+	padding: 10px 26px;
 	border-top: 1px solid var(--rule-soft);
-	border-bottom: 1px solid var(--rule-soft);
+}
+.chapter-select {
+	/* 「第3章 · 核载二十人（已成稿）」这种长度，给个上限免得把写法挤下去 */
+	max-width: 22em;
 }
 .mode-select {
 	padding: 5px 8px;
@@ -3257,6 +3265,11 @@ body.focus-mode { background: var(--paper); }
 	.bench-talk .composer { padding: 10px 12px calc(10px + var(--safe-b)); }
 	.bench-talk .composer textarea { font-size: 16px; }
 	.bench-talk .stream { padding: 16px 14px 8px; }
+	/* 手机上章名一长就把「写法」和按钮挤到第二行，索性让它自己占一行 */
+	.bench-talk .write-actions { padding: 8px 12px; gap: 6px; }
+	.bench-talk .write-actions .chapter-select { flex: 1 1 100%; max-width: none; min-height: 38px; }
+	.bench-talk .write-actions select,
+	.bench-talk .write-actions .btn { min-height: 38px; }
 
 	/* 提示：躲开 Home Indicator，左右也留出边 */
 	.toast-stack {
