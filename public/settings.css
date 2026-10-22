@@ -356,7 +356,7 @@
 	border: 1px dashed var(--cinnabar);
 }
 
-/* ── 详情区：四层字号 ───────────────────────────────────────── */
+/* ── 详情区：四层字号 ──────────────────────────────────────── */
 
 .settings-detail {
 	padding: var(--sp-5, 24px) var(--sp-5, 24px) var(--sp-6, 32px);
@@ -446,6 +446,89 @@
 
 .settings-detail .field-row {
 	gap: var(--sp-3, 14px);
+}
+
+/* ── 字段网格：标签定宽，控件有上限 ──────────────────────────
+   详情栏能宽到七八百像素，控件跟着铺满就成了一条没边的长条：
+   读着费劲，扫起来更费劲。标签占一列固定宽、控件另起一列，
+   到 520 就收住 —— 一眼看过去是一列框，不是三段散纸。
+   模型卡片里的字段另有骨架（.model-field 是竖排），不掺和进来。 */
+.settings-detail .field:not(.model-field) {
+	display: grid;
+	grid-template-columns: 92px minmax(0, 1fr);
+	align-items: center;
+	column-gap: var(--sp-3, 14px);
+	row-gap: 3px;
+	margin-bottom: var(--sp-3, 14px);
+	max-width: 660px;
+}
+
+.settings-detail .field:not(.model-field) > label {
+	margin-bottom: 0;
+	line-height: 1.6;
+}
+
+/* 提示挂在控件下面那一列，别顶到标签列去 */
+.settings-detail .field:not(.model-field) > .hint {
+	grid-column: 2;
+	margin-top: 0;
+}
+
+.settings-detail .field:not(.model-field) > input,
+.settings-detail .field:not(.model-field) > select {
+	width: 100%;
+	max-width: 520px;
+	min-height: 38px;
+}
+
+/* Base URL 是长地址，比别的框宽一档。
+   选择器要带上同样的 :not(.model-field)，否则特异性比上面那条低，
+   这条会被盖掉，宽档等于白写。 */
+.settings-detail .field:not(.model-field).field--wide {
+	max-width: 760px;
+}
+
+.settings-detail .field:not(.model-field).field--wide > input {
+	max-width: 640px;
+}
+
+/* ── 细则折叠块 ──────────────────────────────────────────────
+   纯背景解释收进 details：默认收起，标题只留"有几处要留意"，
+   想细看的人点开，不必让说明一直占着版面。 */
+.fold {
+	margin: 0 0 var(--sp-3, 14px);
+	max-width: 660px;
+	border: 1px solid var(--rule-soft);
+	border-radius: var(--r-2, 4px);
+	background: var(--paper-hi);
+}
+
+.fold-head {
+	padding: 8px 12px;
+	font-size: var(--fs-xs, 11.5px);
+	letter-spacing: 0.08em;
+	color: var(--ink-3);
+	cursor: pointer;
+	list-style-position: inside;
+}
+
+.fold-head:hover {
+	color: var(--ink-2);
+}
+
+.fold-body {
+	padding: 2px 12px 10px;
+	font-size: var(--fs-xs, 11.5px);
+	line-height: 1.8;
+	color: var(--ink-3);
+}
+
+.fold-body p {
+	margin: 0 0 6px;
+}
+
+.fold-body p:last-child {
+	margin-bottom: 0;
 }
 
 .settings-detail .actions {
@@ -1204,6 +1287,36 @@
 		/* 安卓/iOS 上小于 16px 的输入框一聚焦就放大整页，视线全跑掉 */
 		font-size: 16px;
 		min-height: var(--tap-lg, 48px);
+	}
+
+	/* 手机上一列放不下标签 + 控件：改成标签在上、控件在下 */
+	.settings-detail .field:not(.model-field) {
+		grid-template-columns: minmax(0, 1fr);
+		row-gap: 4px;
+		max-width: none;
+	}
+
+	.settings-detail .field:not(.model-field) > .hint {
+		grid-column: 1;
+	}
+
+	.settings-detail .field:not(.model-field) > input,
+	.settings-detail .field:not(.model-field) > select {
+		max-width: none;
+		min-height: var(--tap-lg, 48px);
+		font-size: 16px;
+	}
+
+	.settings-detail .field:not(.model-field).field--wide {
+		max-width: none;
+	}
+
+	.settings-detail .field:not(.model-field).field--wide > input {
+		max-width: none;
+	}
+
+	.fold {
+		max-width: none;
 	}
 
 	.default-extra {

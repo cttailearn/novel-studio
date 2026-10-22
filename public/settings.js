@@ -9,18 +9,21 @@
 
 const $ = (id) => document.getElementById(id);
 
+// 接口格式的说明只留「怎么认」，一句话讲完。
+// 原来那句「如 vLLM、Ollama 兼容层、大部分中国厂商」是背景知识，
+// 看完也替用户做不了决定，只会把下拉底下那一行撑成两行。
 const API_FORMATS = [
-	{ value: "openai-completions", label: "OpenAI Chat Completions", hint: "支持 /v1/chat/completions 的服务，如 vLLM、Ollama 兼容层、大部分中国厂商" },
-	{ value: "openai-responses", label: "OpenAI Responses", hint: "支持 /v1/responses 的服务" },
-	{ value: "anthropic-messages", label: "Anthropic Messages", hint: "Anthropic 原生 /v1/messages 协议" },
-	{ value: "google-generative-ai", label: "Google Generative AI", hint: "Google 原生 /v1beta/models，模型名会自动去掉 models/ 前缀" },
+	{ value: "openai-completions", label: "OpenAI Chat Completions", hint: "兼容 /v1/chat/completions，多数厂商选这个" },
+	{ value: "openai-responses", label: "OpenAI Responses", hint: "走 /v1/responses" },
+	{ value: "anthropic-messages", label: "Anthropic Messages", hint: "Anthropic 原生 /v1/messages" },
+	{ value: "google-generative-ai", label: "Google Generative AI", hint: "Google 原生 /v1beta/models（自动去 models/ 前缀）" },
 ];
 
 const API_FORMAT_HINTS = {
-	"openai-completions": "支持 /v1/chat/completions 的服务，如 vLLM、Ollama 兼容层、大部分中国厂商",
-	"openai-responses": "支持 /v1/responses 的服务",
-	"anthropic-messages": "Anthropic 原生 /v1/messages 协议",
-	"google-generative-ai": "Google 原生 /v1beta/models，模型名会自动去掉 models/ 前缀",
+	"openai-completions": "兼容 /v1/chat/completions，多数厂商选这个",
+	"openai-responses": "走 /v1/responses",
+	"anthropic-messages": "Anthropic 原生 /v1/messages",
+	"google-generative-ai": "Google 原生 /v1beta/models（自动去 models/ 前缀）",
 };
 
 /**
@@ -602,6 +605,34 @@ let reasonSeq = 0;
 /** 只有表单控件才配得上 label for。 */
 const LABELABLE = new Set(["INPUT", "SELECT", "TEXTAREA"]);
 
+/**
+ * 一行小字说明。
+ *
+ * 屏幕上只留能指导操作的那半句；原文（数据存哪、什么情况下会失效）
+ * 收进 title —— 想看的人悬停就有，不看的人也不用被三行灰字挡住。
+ */
+function hintLine(short, full) {
+	const node = el("div", "hint", short);
+	if (full) node.title = full;
+	return node;
+}
+
+/**
+ * 「细则」折叠块：纯背景解释收进来，默认收起。
+ *
+ * 用原生 details/summary，键盘可达与读屏语义都是白送的，
+ * 不必自己造开关再补一套 aria。
+ */
+function foldBox(summaryText, ...paragraphs) {
+	const box = document.createElement("details");
+	box.className = "fold";
+	box.append(el("summary", "fold-head", summaryText));
+	const body = el("div", "fold-body");
+	for (const text of paragraphs) body.append(el("p", "", text));
+	box.append(body);
+	return box;
+}
+
 function field(labelText, control, hint) {
 	const wrap = el("div", "field");
 	const label = el("label", "", labelText);
@@ -612,7 +643,8 @@ function field(labelText, control, hint) {
 	}
 	wrap.append(label);
 	wrap.append(control);
-	if (hint) wrap.append(el("div", "hint", hint));
+	// 提示既可以是短句，也可以是 hintLine() 造好的节点（带 title 的那种）。
+	if (hint) wrap.append(typeof hint === "string" ? el("div", "hint", hint) : hint);
 	return wrap;
 }
 
@@ -705,17 +737,26 @@ function renderCustomDetail(box, provider, status) {
 	const left = field("名称", label);
 	const right = field("接口格式", apiSelect);
 	row.append(left, right);
-	box.append(row, field("Base URL", baseUrl, "填到版本路径即可，例如 https://api.deepseek.com/v1；服务端会自行补 /models"), hintBox);
+	box.append(row);
+
+	// Base URL 比别的字段宽一档：完整地址本来就长，压到 520 会天天折行。
+	const baseField = field("Base URL", baseUrl, "填到版本路径即可，服务端会补 /models");
+	baseField.classList.add("field--wide");
+	box.append(baseField, hintBox);
 
 	const keyInput = document.createElement("input");
 	keyInput.type = "password";
 	keyInput.placeholder = status?.authSource === "app" ? `已保存 ${status.maskedKey}，留空则不修改` : "粘贴 API Key";
-	const keyHint = el(
-		"div",
-		"hint",
-		"仅保存在本机 data/credentials.json。勾选下方开关后该字段可留空。",
+	box.append(
+		field(
+			"API Key",
+			keyInput,
+			hintLine(
+				"仅存本机；勾选下方开关后可留空",
+				"仅保存在本机 data/credentials.json。勾选「该服务不需要鉴权」后，此字段可留空。",
+			),
+		),
 	);
-	box.append(field("API Key", keyInput), keyHint);
 
 	const noAuth = document.createElement("input");
 	noAuth.type = "checkbox";
@@ -723,7 +764,12 @@ function renderCustomDetail(box, provider, status) {
 	const noAuthLabel = el("label", "switch");
 	noAuthLabel.append(noAuth, document.createTextNode("该服务不需要鉴权（本地 / 自建）"));
 	box.append(noAuthLabel);
-	box.append(el("div", "hint", "开启后不会因缺少 Key 而判定为未配置。部分服务会忽略 Authorization 头，部分会直接拒绝，遇到 401 可关掉此开关。"));
+	box.append(
+		hintLine(
+			"开启后缺 Key 也算已配置；遇 401 就关掉",
+			"开启后不会因缺少 Key 而判定为未配置。部分服务会忽略 Authorization 头，部分会直接拒绝，遇到 401 可关掉此开关。",
+		),
+	);
 
 	const actions = el("div", "actions");
 	const save = el("button", "btn btn-primary btn-sm", "保存供应商");
@@ -890,18 +936,28 @@ function renderModelZone(box, provider, editable) {
 	const stats = el("div", "model-stats");
 	stats.id = "model-stats";
 	head.append(stats);
+
+	// 「按上游回填」放进表头而不是另起一行：它改的就是这些数字本身。
+	if (editable) {
+		const backfill = el("button", "btn btn-sm", "按上游回填");
+		backfill.id = "model-backfill";
+		backfill.title = "从上游拉取模型并回填上下文与输出上限";
+		backfill.setAttribute("aria-label", "从上游拉取模型并回填上下文与输出上限");
+		backfill.addEventListener("click", () => void backfillFromUpstream(provider));
+		head.append(backfill);
+	}
 	zone.append(head);
 
 	// 「待核对」是什么意思，得说清楚：不然用户看到虚线框不知道该动还是不该动。
+	// 但整段说明不该一直杵在模型列表上方 —— 折起来，标题里只留"有几处待核对"。
 	const pendingCount = entries.filter((entry) => entry.placeholder).length;
 	if (editable && pendingCount > 0) {
 		const limits = defaultLimits();
 		zone.append(
-			el(
-				"div",
-				"notice model-note",
-				`带 ${formatTokens(limits.contextWindow)} / ${formatTokens(limits.maxTokens)} 的是默认占位值，不是探测结果。` +
-					"上游接口报了限制就用上游的（点「按上游回填」）；报不出来（OpenAI 兼容的 /models 只回 id）的模型需要你按实际规格核对，" +
+			foldBox(
+				`${pendingCount} 个模型的上下文 / 输出上限还是占位值（点开看说明）`,
+				`带 ${formatTokens(limits.contextWindow)} / ${formatTokens(limits.maxTokens)} 的是默认占位值，不是探测结果。`,
+				"上游接口报了限制就用上游的（点「按上游回填」）；报不出来（OpenAI 兼容的 /models 只回 id）的模型需要你按实际规格核对，" +
 					"否则超长的输入会被上游直接拒绝。",
 			),
 		);
@@ -936,12 +992,6 @@ function renderModelZone(box, provider, editable) {
 			renderDetail();
 		});
 		toolbar.append(batch);
-
-		const backfill = el("button", "btn btn-sm", "按上游回填");
-		backfill.id = "model-backfill";
-		backfill.setAttribute("aria-label", "从上游拉取模型并回填上下文与输出上限");
-		backfill.addEventListener("click", () => void backfillFromUpstream(provider));
-		toolbar.append(backfill);
 	}
 	zone.append(toolbar);
 

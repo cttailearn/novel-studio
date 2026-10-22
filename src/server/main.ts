@@ -302,12 +302,62 @@ async function streamNdjson(
 	}
 }
 
+/** 把耗时说成作者读得懂的话。报错里带上它，"网络慢"与"Key 废了"才分得清。 */
+function formatElapsed(ms: number): string {
+	const seconds = Math.max(0, Math.round(ms / 1000));
+	if (seconds < 60) return `${seconds} 秒`;
+	const minutes = Math.floor(seconds / 60);
+	return `${minutes} 分 ${seconds % 60} 秒`;
+}
+
+/**
+ * 本轮失败时给作者看的那一句话。
+ *
+ * 原始错误必须并进来：只说"断流了"分不清是超时、Key 失效还是模型名写错，
+ * 作者也就不知道该等、该换 Key 还是该换模型。耗时同理 —— 三分钟就断和
+ * 十分钟才断，处置方式完全不同。
+ * 已经产出过正文时不能静默：用户得知道写出来的内容停在哪儿、要不要重跑。
+ */
+function describeStreamFailure(detail: string, elapsedMs: number, sawText: boolean): string {
+	const waited = formatElapsed(elapsedMs);
+	if (sawText) {
+		return (
+			`本轮已经产出一部分正文，随后上游报错断流（等了 ${waited}，最后报错：${detail}）。` +
+			"已写出的内容不会自动回退，可先核对正文；反复失败时换一个模型或供应商再试。"
+		);
+	}
+	return (
+		`上游没有返回任何内容就断流了（等了 ${waited}，最后报错：${detail}）。` +
+		"常见原因：额度用尽、Key 失效、中转服务限流，或模型名不被上游接受。" +
+		"可到设置里换一个模型或供应商再试。"
+	);
+}
+
+/**
+ * 本轮是不是作者主动止笔。
+ *
+ * 不能只看 signal：会话「止笔」走的是 agent.abort()，流里的 signal 并没有置位。
+ * Agent 会把这次收尾标成 stopReason "aborted"（而不是 error），以它为准；
+ * signal 只覆盖客户端直接断开这一路。
+ */
+function wasAborted(agent: Agent, signal: { aborted: boolean }): boolean {
+	if (signal.aborted) return true;
+	for (let index = agent.state.messages.length - 1; index >= 0; index -= 1) {
+		const message = agent.state.messages[index];
+		if (message?.role === "assistant") return message.stopReason === "aborted";
+	}
+	return false;
+}
+
 /** 把 Agent 事件映射成前端可消费的 NDJSON 事件。 */
 function runAgentStream(agent: Agent, modelRef: string, input: string, emit: (event: unknown) => void, signal: { aborted: boolean }): Promise<void> {
+	const startedAt = Date.now();
 	const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, turns: 0 };
 	let thinking = false;
 	/** 本轮是否真的产出过正文，用来区分"写完了"与"空手而归"。 */
 	let sawText = false;
+	/** agent_end 已经收过尾时，prompt 的 catch 不再补第二组事件。 */
+	let ended = false;
 
 	const unsubscribe = agent.subscribe((event: AgentEvent) => {
 		switch (event.type) {
@@ -373,25 +423,30 @@ function runAgentStream(agent: Agent, modelRef: string, input: string, emit: (ev
 					tools: event.toolResults.length,
 				});
 				break;
-			case "agent_end":
+			case "agent_end": {
+				ended = true;
+				// 会话「止笔」走 agent.abort()，此时 signal 不会置位，只能看收尾状态。
+				const aborted = wasAborted(agent, signal);
 				// 上游常把错误塞在 200 响应体里（额度用尽、限流都会这样），
-				// 适配器只看得到"没有 finish_reason"。空手而归时补一句人话，
-				// 否则界面上只有一句无从下手的 Stream ended without finish_reason。
-				if (agent.state.errorMessage && !signal.aborted && !sawText) {
+				// 适配器只看得到"没有 finish_reason"。补一句人话，并带上原始错误与
+				// 已经等了多久 —— 只报"断流了"分不清是超时、Key 失效还是模型名写错。
+				if (agent.state.errorMessage && !aborted) {
 					emit({
 						type: "error",
-						message:
-							"上游没有返回任何内容就断流了。常见原因：额度用尽、Key 失效、中转服务限流，或模型名不被上游接受。" +
-							"可到设置里换一个模型或供应商再试。",
+						message: describeStreamFailure(agent.state.errorMessage, Date.now() - startedAt, sawText),
 					});
 				}
 				emit({
 					type: "run_end",
-					aborted: signal.aborted,
+					aborted,
 					usage: { ...usage, cacheRead: usage.cacheRead || undefined, cacheWrite: usage.cacheWrite || undefined },
-					error: agent.state.errorMessage,
+					// 错误已经在上面那条「error」里说过一次；这里再带一遍，前端会
+					// 追加第二条「讹误」。止笔时的 "Request was aborted" 同理：
+					// 那不是错误，不该被渲染成红字。
+					error: undefined,
 				});
 				break;
+			}
 			default:
 				break;
 		}
@@ -401,8 +456,27 @@ function runAgentStream(agent: Agent, modelRef: string, input: string, emit: (ev
 		try {
 			await agent.prompt(input);
 		} catch (error) {
-			emit({ type: "error", message: error instanceof Error ? error.message : String(error) });
-			emit({ type: "run_end", aborted: signal.aborted, usage, error: agent.state.errorMessage });
+			// 正常的上游错误会被 Agent 变成一条 error 状态的助手消息、走 agent_end；
+			// 走到这个 catch 说明会话或事件循环自己出了意外。agent_end 已经收过尾时
+			// 不再补第二组事件，否则同一轮会出现两条「讹误」。
+			if (!ended) {
+				ended = true;
+				const detail = error instanceof Error ? error.message : String(error);
+				const aborted = signal.aborted || (error instanceof Error && error.name === "AbortError");
+				if (!aborted) {
+					emit({
+						type: "error",
+						message: `这一轮没有跑完（等了 ${formatElapsed(Date.now() - startedAt)}）：${detail}`,
+					});
+				}
+				emit({
+					type: "run_end",
+					aborted,
+					usage,
+					// 同上：原始错误已经在人话里，这里再带一次会重复。
+					error: undefined,
+				});
+			}
 		} finally {
 			unsubscribe();
 		}

@@ -838,6 +838,182 @@ window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (ev
 
 $("theme-toggle").addEventListener("click", () => toggleTheme());
 
+// ═══════════════════════════════════════════════════ 分栏
+
+/**
+ * 料 / 文两栏之间那条分界，改成能拖的提手。
+ *
+ * 宽度记在容器的 --bench-a 上，不直接写栅格尺寸：两栏本来就是 grid，
+ * 一个百分比就能让它自己重算。窗口缩放时百分比天然跟着走，不必再听 resize。
+ * 提手绝对定位、不占栅格轨道 —— 它要是占一格，两栏就成了三栏。
+ */
+const SPLIT_MIN = 26;
+const SPLIT_MAX = 74;
+const SPLIT_DEFAULT = 50;
+const SPLIT_STEP = 2;
+/** 栏宽（不是视口宽）小于这两个值就收留白、并单列：媒体查询量不到它。 */
+const SPLIT_A_NARROW = 440;
+const SPLIT_B_NARROW = 480;
+
+/** 两个工作台各记各的：键由视图 id 派生，如 novel-studio/split/materials。 */
+function splitKey(bench) {
+	const view = bench.closest("section.view");
+	return "novel-studio/split/" + (view ? view.id.replace(/^view-/, "") : "bench");
+}
+
+function readSplit(key) {
+	const value = Number.parseFloat(readStored(key, ""));
+	return Number.isFinite(value) && value >= SPLIT_MIN && value <= SPLIT_MAX ? value : SPLIT_DEFAULT;
+}
+
+/** 提手的结构与无障碍语义。role="separator" 让它有滑块语义，读屏会报当前百分比。 */
+function buildSplitHandle() {
+	const handle = el("div", "bench-split");
+	handle.setAttribute("role", "separator");
+	handle.tabIndex = 0;
+	handle.setAttribute("aria-orientation", "vertical");
+	handle.setAttribute("aria-label", "拖动调整两栏宽度");
+	handle.setAttribute("aria-valuemin", String(SPLIT_MIN));
+	handle.setAttribute("aria-valuemax", String(SPLIT_MAX));
+	handle.append(el("span", "bench-split-grip"));
+	return handle;
+}
+
+function bindSplit(bench, handle, key) {
+	let ratio = readSplit(key);
+	let dragging = false;
+
+	const apply = (value) => {
+		ratio = Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, value));
+		bench.style.setProperty("--bench-a", ratio + "%");
+		handle.setAttribute("aria-valuenow", String(Math.round(ratio)));
+		handle.setAttribute("aria-valuetext", Math.round(ratio) + "%");
+	};
+	// 百分比不必逐位存；留一位小数，刷新回来手不跳。
+	const commit = () => writeStored(key, String(Math.round(ratio * 10) / 10));
+
+	const ratioAt = (clientX) => {
+		const rect = bench.getBoundingClientRect();
+		return rect.width ? ((clientX - rect.left) / rect.width) * 100 : ratio;
+	};
+
+	handle.addEventListener("pointerdown", (event) => {
+		if (event.pointerType === "mouse" && event.button !== 0) return;
+		// 视图还藏着时没有可拖的宽度，别把 capture 挂上去
+		if (!bench.getBoundingClientRect().width) return;
+		event.preventDefault();
+		dragging = true;
+		handle.focus({ preventScroll: true });
+		handle.classList.add("is-dragging");
+		document.body.classList.add("is-splitting");
+		if (handle.setPointerCapture) handle.setPointerCapture(event.pointerId);
+	});
+
+	handle.addEventListener("pointermove", (event) => {
+		if (!dragging) return;
+		apply(ratioAt(event.clientX));
+	});
+
+	// pointercancel / lostpointercapture 都会来：窗口失焦、系统手势把指针收走时
+	// 收不到 pointerup，不收尾的话整页会一直停在「拖动中」。
+	const finish = (event) => {
+		if (!dragging) return;
+		dragging = false;
+		handle.classList.remove("is-dragging");
+		document.body.classList.remove("is-splitting");
+		if (
+			handle.hasPointerCapture &&
+			event.pointerId !== undefined &&
+			handle.hasPointerCapture(event.pointerId)
+		) {
+			handle.releasePointerCapture(event.pointerId);
+		}
+		commit();
+	};
+	handle.addEventListener("pointerup", finish);
+	handle.addEventListener("pointercancel", finish);
+	handle.addEventListener("lostpointercapture", finish);
+
+	// 键盘：← → 每次 2%，Home / End 回中。焦点就在提手上，方向键不该滚页面。
+	handle.addEventListener("keydown", (event) => {
+		let next;
+		if (event.key === "ArrowLeft") next = ratio - SPLIT_STEP;
+		else if (event.key === "ArrowRight") next = ratio + SPLIT_STEP;
+		else if (event.key === "Home" || event.key === "End") next = SPLIT_DEFAULT;
+		else return;
+		event.preventDefault();
+		apply(next);
+		commit();
+	});
+
+	handle.addEventListener("dblclick", (event) => {
+		event.preventDefault();
+		apply(SPLIT_DEFAULT);
+		commit();
+	});
+
+	apply(ratio);
+}
+
+/**
+ * 按实测栏宽挂窄栏类。视图藏着时两栏都是 0 宽，直接返回：
+ * 等它显示出来后再量，别把两栏都标成窄。
+ */
+function syncSplitNarrow(bench) {
+	const panes = bench.querySelectorAll(":scope > .bench-pane");
+	if (panes.length !== 2) return;
+	const left = panes[0].getBoundingClientRect().width;
+	const right = panes[1].getBoundingClientRect().width;
+	if (!left || !right) return;
+	bench.classList.toggle("is-a-narrow", left < SPLIT_A_NARROW);
+	bench.classList.toggle("is-b-narrow", right < SPLIT_B_NARROW);
+}
+
+/** 视图切出来、窗口变宽窄之后补量一次。切页后等一帧：那一刻栏才拿到宽度。 */
+function scheduleSplitNarrow() {
+	requestAnimationFrame(() => {
+		for (const bench of document.querySelectorAll(".bench.has-split")) syncSplitNarrow(bench);
+	});
+}
+
+/**
+ * 给每个两栏工作台插提手。
+ *
+ * 观察两栏而不是视口：栏宽既受窗口影响，也受拖动影响，ResizeObserver
+ * 两种都报，比在 pointermove 里反复量便宜。
+ */
+function initBenchSplits() {
+	const benches = [...document.querySelectorAll(".bench:not(.bench-three)")].filter(
+		(bench) => bench.querySelectorAll(":scope > .bench-pane").length === 2,
+	);
+	if (!benches.length) return;
+
+	const observer =
+		typeof ResizeObserver === "function"
+			? new ResizeObserver((entries) => {
+					const touched = new Set();
+					for (const entry of entries) {
+						const bench = entry.target.closest(".bench.has-split");
+						if (bench) touched.add(bench);
+					}
+					for (const bench of touched) syncSplitNarrow(bench);
+				})
+			: null;
+
+	for (const bench of benches) {
+		const panes = [...bench.querySelectorAll(":scope > .bench-pane")];
+		const handle = buildSplitHandle();
+		bench.insertBefore(handle, panes[1]);
+		bench.classList.add("has-split");
+		bindSplit(bench, handle, splitKey(bench));
+		if (observer) for (const pane of panes) observer.observe(pane);
+		syncSplitNarrow(bench);
+	}
+
+	// 没有 ResizeObserver 的老浏览器靠这一条；有的话它是第二道保险，不贵。
+	window.addEventListener("resize", scheduleSplitNarrow, { passive: true });
+}
+
 // ═══════════════════════════════════════════════════ 启动
 
 /**
@@ -1066,6 +1242,8 @@ function switchViewNow(view) {
 	$("view-writing").classList.toggle("is-on", view === "writing");
 	applyMode();
 	renderView();
+	// 新视图刚从 display:none 里出来，两栏这一帧才有宽度：补量一次窄栏类。
+	scheduleSplitNarrow();
 }
 
 /** 只渲染当前视图。几个视图共用顶部工具条，一起渲染会互相覆盖。 */
@@ -3096,6 +3274,8 @@ async function runWrite(mode, note) {
 			if (!streamStale(epoch)) appendMessage("writing", "assistant", "已止笔。", epoch);
 		} else if (!streamStale(epoch)) {
 			appendMessage("writing", "error", error.message);
+			// 这一笔没落成，把交代还给作者；止笔是他自己要停，不还。
+			restoreComposer("writing", note);
 		}
 	} finally {
 		dismissWaiting(waiting);
@@ -3646,6 +3826,22 @@ async function ensureSession(role) {
 	return data.sessionId;
 }
 
+/**
+ * 把没送出去的话还回输入框。
+ *
+ * 提交那一刻就清了输入框（按下去立刻有反应，作者才敢确认已经发出），
+ * 可这一轮要是断在上游，那句话就没着落了 —— 报错已经够糟，不该再让人
+ * 照着自己刚写过的东西重打一遍。只在输入框还空着时还：他已经另写了新话，
+ * 就别拿旧话盖掉。
+ */
+function restoreComposer(pane, text) {
+	const node = $(PANES[pane].input);
+	if (!node || !text || node.value.trim()) return;
+	node.value = text;
+	// 走一遍 input 事件，把「输入中」那档按钮态一起点亮。
+	node.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
 async function sendMessage(pane, text) {
 	if (state.streaming) return;
 	if (pane === "writing" && !state.chapterId) {
@@ -3683,6 +3879,7 @@ async function sendMessage(pane, text) {
 			} else {
 				appendMessage(pane, "error", error.message);
 			}
+			restoreComposer(pane, text);
 		}
 	} finally {
 		dismissWaiting(waiting);
@@ -4492,6 +4689,8 @@ window.addEventListener("beforeunload", (event) => {
 
 bindSettings();
 loadTypography();
+// 提手要先于 bootstrap：起手失败时工作台也该能拖，不该等接口回来才装配。
+initBenchSplits();
 const beamKbd = document.querySelector(".beam-kbd");
 if (beamKbd) beamKbd.textContent = PALETTE_MOD + " K";
 bootstrap()

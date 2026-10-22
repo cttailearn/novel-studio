@@ -46,6 +46,41 @@ const MAX_TOOL_RESULTS = 24;
 const TOOL_ROLES = new Set(["toolResult"]);
 
 /**
+ * 单次上游请求的兜底超时。
+ *
+ * 三分钟：正常成文时首字几秒内就到，等不到多半是中转站挂起了；
+ * 让作者对着一个已经死掉的连接干等 SDK 默认的十分钟，是最坏的体验。
+ * 每三分钟收一次手并重来，才能把"偶发挂起"和"Key/额度真的废了"区分开。
+ */
+const STREAM_TIMEOUT_MS = 180_000;
+
+/**
+ * 超时/连接失败后的兜底重试次数。
+ *
+ * 两次：偶发 5xx、限流、连接没建起来，这个量级足够自愈；
+ * 再多也不会让失效的 Key 变好，只会把一次明显的失败拖成更长的空等。
+ */
+const STREAM_MAX_RETRIES = 2;
+
+/**
+ * 给 Agent 用的流函数补上超时与重试。
+ *
+ * Agent 循环调用 streamFn 时会把 apiKey、signal 等一起塞进 options，
+ * 这里只填缺省值，调用方显式给了就以调用方为准 —— 尤其 signal 必须原样
+ * 传下去，"止笔"靠它中断上游请求。直接 bind(models.streamSimple) 的话，
+ * 适配器在 options.timeoutMs 缺省时不设 HTTP 超时、maxRetries 也会被
+ * 显式写成 0，一次挂起就要空等十分钟且不会自愈。
+ */
+function withStreamDefaults(models: Models): Models["streamSimple"] {
+	return (model, context, options) =>
+		models.streamSimple(model, context, {
+			...options,
+			timeoutMs: options?.timeoutMs ?? STREAM_TIMEOUT_MS,
+			maxRetries: options?.maxRetries ?? STREAM_MAX_RETRIES,
+		});
+}
+
+/**
  * 创建写作智能体。
  *
  * 两个角色共享工具定义的只读部分，但提示词与工具集完全分开：
@@ -54,6 +89,7 @@ const TOOL_ROLES = new Set(["toolResult"]);
  */
 export function createNovelAgent(options: NovelAgentOptions): Agent {
 	const { store, projectId, model, models, config, sessionId, role } = options;
+	const streamFn = withStreamDefaults(models);
 
 	// 库作用域：没有工程也没有章节，projectId 在这一支是空的。
 	// 提示词、工具集、状态快照三者都要换，不是只换工具 ——
@@ -66,7 +102,7 @@ export function createNovelAgent(options: NovelAgentOptions): Agent {
 				thinkingLevel: options.thinkingLevel ?? config.defaultThinkingLevel,
 				tools: createLibraryTools({ library: options.library }),
 			},
-			streamFn: models.streamSimple.bind(models),
+			streamFn,
 			sessionId,
 			// 与另外两个角色同理：工具会写数据，不能并行。
 			toolExecution: "sequential",
@@ -105,7 +141,7 @@ export function createNovelAgent(options: NovelAgentOptions): Agent {
 			thinkingLevel: options.thinkingLevel ?? config.defaultThinkingLevel,
 			tools: role === "material" ? createMaterialTools(deps) : createWritingTools(deps),
 		},
-		streamFn: models.streamSimple.bind(models),
+		streamFn,
 		sessionId,
 		// 工具会写数据，并行执行可能丢失更新，因此统一串行。
 		toolExecution: "sequential",

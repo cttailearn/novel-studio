@@ -1041,6 +1041,9 @@ body::before {
 }
 .composer textarea {
 	flex: 1;
+	/* textarea 默认 20 列，min-content 宽能有一百多像素；栏拖窄后
+	   它会顶着侧边按钮把整条输入区挤出行外 */
+	min-width: 0;
 	min-height: 62px;
 	max-height: 220px;
 	resize: vertical;
@@ -1403,7 +1406,10 @@ select { max-width: 230px; cursor: pointer; }
 	flex: 1;
 	min-height: 0;
 	display: grid;
-	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+	/* 左栏宽度由拖提手写下的 --bench-a 决定（见下面「分栏提手」一节）。
+	   没拖过时退回 1fr，与原来的两等分一致；minmax(0, …) 不能省，
+	   否则长 URL / 代码会把栅格顶爆。 */
+	grid-template-columns: minmax(0, var(--bench-a, 1fr)) minmax(0, 1fr);
 }
 /* 案头是三栏：卷宗、通用素材库、库的设定官。工作台仍是两栏。
    必须写在 .bench 之后 —— 同特异性下后写者胜，放前面会被两栏盖掉。 */
@@ -1418,6 +1424,144 @@ select { max-width: 230px; cursor: pointer; }
 .bench-pane + .bench-pane { border-left: 1px solid var(--rule); }
 /* 左栏自己滚：上传区、素材库、装配清单都可能很长 */
 .bench-pane:not(.bench-talk) { overflow-y: auto; padding: 0 20px 44px; }
+
+/* ── 分栏提手：料 / 文两栏可拖宽窄 ─────────────────────────── */
+
+/* 左栏占比记在 --bench-a 上；--bench-hit 是提手的命中宽度。
+   两个都只是尺度，不随昼夜变，所以挂在这个选择器上，不进令牌块。
+   26%–74% 的夹取在脚本里做；这里只负责把百分比变成栅格轨道。 */
+.bench.has-split {
+	position: relative;
+	--bench-a: 50%;
+	--bench-hit: 14px;
+}
+
+/* 提手插进两栏之间后，`.bench-pane + .bench-pane` 那条相邻分界线就不再命中，
+   右边这栏的左边框得在这里补回来。第一条留着兜底：提手没插进来时仍然有分界。 */
+.bench.has-split > .bench-pane + .bench-pane,
+.bench.has-split > .bench-split + .bench-pane { border-left: 1px solid var(--rule); }
+
+/* 提手绝对定位，压在原来那条 1px 分界线上，左右各探出半个命中区。
+   它不占栅格轨道 —— 插成一个栅格项，两栏就成了三栏，右栏还会被挤掉一缝。 */
+.bench-split {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: var(--bench-a, 50%);
+	z-index: 4;
+	width: var(--bench-hit);
+	transform: translateX(-50%);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	cursor: col-resize;
+	/* 平板上手势先到先得：不写这条，拖动会被滚动 / 双击缩放抢走 */
+	touch-action: none;
+	-webkit-tap-highlight-color: transparent;
+	outline: none;
+}
+
+/* 界格：一条赭金细线，平时只比原有边框略亮一点 */
+.bench-split::before {
+	content: "";
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: 50%;
+	width: 1px;
+	margin-left: -0.5px;
+	background: var(--gold-line);
+	opacity: 0.75;
+	transition: width var(--brush), margin-left var(--brush), background var(--brush), opacity var(--brush);
+}
+
+/* 提手本身：2×14 的短竖条，像界格上一枚没写完的记号。
+   外面套一圈纸色描边，压在正文或栏头上时也认得出边界。 */
+.bench-split-grip {
+	position: relative;
+	width: 2px;
+	height: 14px;
+	border-radius: 1px;
+	background: var(--gold-line);
+	box-shadow: 0 0 0 2px var(--paper);
+	transition: width var(--brush), height var(--brush), background var(--brush), box-shadow var(--brush);
+}
+
+/* 指向、键盘聚焦、拖动中：点成朱砂，线也加宽一档 —— 让「现在能扯」看得见 */
+.bench-split:hover::before,
+.bench-split:focus-visible::before,
+.bench-split.is-dragging::before {
+	width: 2px;
+	margin-left: -1px;
+	background: var(--cinnabar);
+	opacity: 1;
+}
+.bench-split:hover .bench-split-grip,
+.bench-split:focus-visible .bench-split-grip,
+.bench-split.is-dragging .bench-split-grip {
+	width: 3px;
+	height: 20px;
+	background: var(--cinnabar);
+	box-shadow: 0 0 0 2px var(--paper), 0 0 10px var(--cinnabar-glow);
+}
+.bench-split:focus-visible {
+	background: var(--cinnabar-wash);
+	outline: 1px solid var(--cinnabar-edge);
+	outline-offset: -1px;
+}
+
+/* 拖动时整页换成「左右拉」的指针，正文也不能被顺手选蓝 */
+body.is-splitting,
+body.is-splitting * {
+	cursor: col-resize !important;
+	user-select: none;
+	-webkit-user-select: none;
+}
+
+/* 手指没有 1px 的精度：命中区撑到 24px，提手也大一号 */
+@media (pointer: coarse) {
+	.bench.has-split { --bench-hit: 24px; }
+	.bench-split-grip { width: 3px; height: 22px; }
+}
+
+/* 栏窄了，内容自己换排法。栏宽是拖出来的，媒体查询量的是视口，
+   量不到「这一栏只剩一百七十像素」—— 所以由脚本按实测宽度挂类。 */
+.bench.has-split.is-a-narrow .mat-grid { grid-template-columns: minmax(0, 1fr); }
+.bench.has-split.is-a-narrow .bench-pane:not(.bench-talk) {
+	padding-left: var(--sp-3);
+	padding-right: var(--sp-3);
+}
+.bench.has-split.is-b-narrow .bench-talk .stream,
+.bench.has-split.is-b-narrow .bench-talk .composer {
+	padding-left: var(--sp-4);
+	padding-right: var(--sp-4);
+}
+.bench.has-split.is-b-narrow .bench-talk .pane-head {
+	padding-left: var(--sp-4);
+	padding-right: var(--sp-4);
+	/* 栏头是「题签 + 注 + 按钮」一行，窄到 26% 时宁可让按钮换行，也别挤出界 */
+	flex-wrap: wrap;
+}
+.bench.has-split.is-b-narrow .picked-bar {
+	margin-left: var(--sp-4);
+	margin-right: var(--sp-4);
+}
+
+/* 窄栏里的长串：URL、代码、没有空格的英文名，不能把卡片与栅格顶爆。
+   只收工作台两栏；案头三栏与右案保持原样。 */
+.bench.has-split .mat-head h4,
+.bench.has-split .mat-group-head h3,
+.bench.has-split .card.mat .usage,
+.bench.has-split .card.mat .mat-body,
+.bench.has-split .chip,
+.bench.has-split .tagline,
+.bench.has-split .dropzone p,
+.bench.has-split .upload-note,
+.bench.has-split .upload-preview,
+.bench.has-split .picked-chip,
+.bench.has-split .thinking-body,
+.bench.has-split .tool-preview { overflow-wrap: anywhere; }
+
 
 .pane-head {
 	flex: none;
@@ -1684,7 +1828,8 @@ select { max-width: 230px; cursor: pointer; }
 .bench-talk .stream { padding: 22px 26px 8px; gap: 20px; }
 .bench-talk .composer { padding: 12px 26px 18px; }
 .bench-talk .composer textarea { min-height: 56px; font-size: 14px; }
-.bench-talk .msg, .bench-talk .msg-foot { max-width: 46em; }
+/* 46em 是舒适阅读宽，但栏被拖窄时它不能大过栏本身，否则正文会横向溢出 */
+.bench-talk .msg, .bench-talk .msg-foot { max-width: min(46em, 100%); }
 .bench-talk .msg.assistant .msg-body { font-size: 15px; line-height: 1.95; }
 
 .actions-center { justify-content: center; padding: 18px 0 0; margin: 0; }
@@ -1723,6 +1868,11 @@ select { max-width: 230px; cursor: pointer; }
 	   结果窄屏下三栏继续并排，每栏只剩一百来像素。 */
 	.bench.bench-three { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr); }
 	.bench-pane + .bench-pane { border-left: 0; border-top: 1px solid var(--rule); }
+	/* 堆叠成一列后没有左右可拖，提手收掉。这一节在「分栏提手」之后，
+	   同特异性下后写者胜，能盖掉前面 .bench-split 的 display:flex。 */
+	.bench-split { display: none; }
+	/* 提手夹在两栏之间，相邻选择器断了一环，横的分界线得单独补回来 */
+	.bench.has-split > .bench-split + .bench-pane { border-left: 0; border-top: 1px solid var(--rule); }
 	.desk.is-bench { grid-template-columns: minmax(0, 1fr); grid-template-areas: "beam" "alert" "stage"; }
 	.desk.is-bench .rail { display: none; }
 }
