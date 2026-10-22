@@ -311,26 +311,105 @@ function formatElapsed(ms: number): string {
 }
 
 /**
+ * 上游的错属于哪一类。
+ *
+ * 分了类才知道该让作者等、该换 Key，还是该换模型 —— 一句"断流了"，
+ * 作者只能自己猜。类别尤其重要：上游限流时最该做的是稍后重试，
+ * 让作者去换模型反而是把他引到错的地方。
+ */
+type UpstreamFault = "overload" | "quota" | "auth" | "model" | "timeout" | "other" | "silent";
+
+/** 每一类错，作者该做什么。 */
+const FAULT_ADVICE: Record<UpstreamFault, string> = {
+	overload:
+		"这是上游自己忙（限流或集群满载），过一会儿再试就行，不必改设置 —— " +
+		"点「再试一次」就能把原来那句话原样重发。",
+	quota: "多半是额度或余额见底了：去供应商那边充值，或换一个 Key 再试。",
+	auth: "多半是上游没认这个 Key：到设置里核对 API Key 与 Base URL。",
+	model: "多半是上游不认这个模型名：到设置里换一个模型。",
+	timeout: "这么久还没一个字，多半是上游慢或者链路堵了：先点「再试一次」；老是这样就换一个更快的模型。",
+	other: "拿不准是哪一环出了问题：先点「再试一次」原句重发，还是不行就到设置里换一个模型或供应商。",
+	silent:
+		"多半是上游正忙或者链路不通：先点「再试一次」；" +
+		"老是这样就到设置里换一个模型或供应商。",
+};
+
+/**
+ * 把上游的错从 SDK 的壳里剥出来。
+ *
+ * OpenAI SDK 会把上游的错裹成 `429: {"error":{"message":"…","code":2064}}`。
+ * 满屏 JSON 括号作者读不出重点，只要里头那句正经话。
+ */
+function cleanUpstreamDetail(detail: string): string {
+	const text = (detail || "").trim();
+	const match = /^\d{3}:\s*(\{[\s\S]*\})$/.exec(text);
+	if (!match) return text;
+	try {
+		const parsed = JSON.parse(match[1] ?? "{}") as { error?: { message?: string }; message?: string };
+		const inner = parsed.error?.message ?? parsed.message;
+		if (typeof inner === "string" && inner.trim()) return inner.trim();
+	} catch {
+		/* 不是 JSON，就照原样留着。 */
+	}
+	return text;
+}
+
+/**
+ * 从上游的原始报错里认出是哪一类。
+ *
+ * 上游常把错误塞在 200 响应体里（限流、额度用尽、Key 失效都会这样），
+ * 适配器只看得到"没有 finish_reason"。认错了类别，给的处置建议就是错的。
+ */
+function classifyUpstreamFault(detail: string): UpstreamFault {
+	const text = (detail || "").toLowerCase();
+	if (!text) return "silent";
+	if (/timed out|timeout|etimedout|超时/.test(text)) return "timeout";
+	if (
+		/负载|繁忙|拥塞|限流|稍后重试|请稍后|请重试|熔断|过载|too many requests|rate[ _-]?limit|overload|capacity|busy|service unavailable|bad gateway|gateway timeout|\b429\b|\b500\b|\b502\b|\b503\b/.test(
+			text,
+		)
+	)
+		return "overload";
+	if (/额度|余额|欠费|配额|quota|billing|insufficient|payment|credit balance/.test(text)) return "quota";
+	if (/api[ _-]?key|apikey|密钥|鉴权|认证|未授权|unauthorized|invalid[ _-]?key|\b401\b|\b403\b/.test(text)) return "auth";
+	if (/模型|model/.test(text) && /not found|不存在|不认|不识别|unknown|invalid|unsupported|no such|\b404\b/.test(text))
+		return "model";
+	return "other";
+}
+
+/**
  * 本轮失败时给作者看的那一句话。
  *
  * 原始错误必须并进来：只说"断流了"分不清是超时、Key 失效还是模型名写错，
  * 作者也就不知道该等、该换 Key 还是该换模型。耗时同理 —— 三分钟就断和
  * 十分钟才断，处置方式完全不同。
  * 已经产出过正文时不能静默：用户得知道写出来的内容停在哪儿、要不要重跑。
+ *
+ * 上游**回话了**却把它说成"没有返回任何内容"，是作者看着最迷惑的一种错 ——
+ * 上游明明把原因说了，我们却替它编了一个不相干的"常见原因"清单。
  */
 function describeStreamFailure(detail: string, elapsedMs: number, sawText: boolean): string {
 	const waited = formatElapsed(elapsedMs);
+	// 分类看原始报错（带状态码与完整 JSON，认类更准），显示看剥出来的正经话。
+	const fault = classifyUpstreamFault(detail);
+	const advice = FAULT_ADVICE[fault];
+	// 上游的原文自带句号，末尾再补一个就成了「。。」。
+	const clean = cleanUpstreamDetail(detail).replace(/[。.！!]+$/, "");
 	if (sawText) {
 		return (
-			`本轮已经产出一部分正文，随后上游报错断流（等了 ${waited}，最后报错：${detail}）。` +
-			"已写出的内容不会自动回退，可先核对正文；反复失败时换一个模型或供应商再试。"
+			`本轮已经产出一部分正文，随后上游报错断流。等了 ${waited}` +
+			(clean ? `，最后报错：${clean}` : "") +
+			"。已写出的内容不会自动回退，可先核对正文。" +
+			advice
 		);
 	}
-	return (
-		`上游没有返回任何内容就断流了（等了 ${waited}，最后报错：${detail}）。` +
-		"常见原因：额度用尽、Key 失效、中转服务限流，或模型名不被上游接受。" +
-		"可到设置里换一个模型或供应商再试。"
-	);
+	if (fault === "timeout") {
+		return `等了 ${waited}，上游一个字也没回。` + (clean ? `最后报错：${clean}。` : "") + advice;
+	}
+	if (clean) {
+		return `上游回话了，回的却是错：${clean}。` + advice;
+	}
+	return `等了 ${waited}，上游连一个字也没回就断了。` + advice;
 }
 
 /**

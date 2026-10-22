@@ -3235,9 +3235,16 @@ $("chapter-form").addEventListener("submit", async (event) => {
 });
 
 /** 一次性成文：服务端算好组装上下文，交给写作智能体流式落盘。 */
-async function runWrite(mode, note) {
+/**
+ * 装料成文 / 续写 / 重写。
+ *
+ * chapterOverride：重试时写回**原来那一章**。作者按的是「刚才那次」的按钮，
+ *   不是「现在这一章」—— 中间切了章也不能改写去处。
+ * options.repeat：这一轮是重试，对话里留一行「再写一遍」而不是重抄一遍。
+ */
+async function runWrite(mode, note, chapterOverride, options = {}) {
 	if (state.streaming) return;
-	const chapterId = state.chapterId;
+	const chapterId = chapterOverride ?? state.chapterId;
 	if (!chapterId || !state.project) return;
 
 	if (state.project.materials.length === 0) {
@@ -3250,7 +3257,11 @@ async function runWrite(mode, note) {
 	state.writeAbort = new AbortController();
 	// 与对议同一条路：这一轮先钉在自己的会话上，作者中途切章也不会把半截丢在错的面板里。
 	beginStream("writing");
-	appendMessage("writing", "user", label + "《" + (chapter ? chapter.title : chapterId) + "》" + (note ? "：" + note : ""));
+	appendMessage(
+		"writing",
+		"user",
+		(options.repeat ? "再写一遍" : label) + "《" + (chapter ? chapter.title : chapterId) + "》" + (note ? "：" + note : ""),
+	);
 	const waiting = showWaiting("writing");
 	setStreaming("writing");
 	const epoch = state.streamEpoch;
@@ -3273,13 +3284,17 @@ async function runWrite(mode, note) {
 			const data = await res.json().catch(() => ({}));
 			throw new Error(data.error || "请求失败 (" + res.status + ")");
 		}
-		await pumpStream(res, "writing", epoch, waiting);
+		await pumpStream(res, "writing", epoch, waiting, {
+			retry: () => retryWrite(mode, note, chapterId),
+		});
 	} catch (error) {
 		dismissWaiting(waiting);
 		if (error.name === "AbortError") {
 			if (!streamStale(epoch)) appendMessage("writing", "assistant", "已止笔。", epoch);
 		} else if (!streamStale(epoch)) {
-			appendMessage("writing", "error", error.message);
+			appendMessage("writing", "error", error.message, epoch, {
+				actions: retryActions(() => retryWrite(mode, note, chapterId)),
+			});
 			// 这一笔没落成，把交代还给作者；止笔是他自己要停，不还。
 			restoreComposer("writing", note);
 		}
@@ -3292,6 +3307,20 @@ async function runWrite(mode, note) {
 			await reloadProjectSafely("writing", "落笔已毕，但右案与章目没能同步刷新");
 		}
 	}
+}
+
+/**
+ * 再写一遍：同一章、同一句交代，原样重来。
+ *
+ * 返回值：发出去没有。按钮据此决定自己是「已重发」还是留在原处。
+ */
+function retryWrite(mode, note, chapterId) {
+	if (state.streaming) {
+		toast("这一轮还没收完，稍等片刻再试。", "warn");
+		return false;
+	}
+	void runWrite(mode, note, chapterId, { repeat: true });
+	return true;
 }
 
 // ═══════════════════════════════════════════════════ 右案
@@ -3690,13 +3719,36 @@ function endStream() {
 function streamStale(epoch) {
 	return epoch !== state.streamEpoch;
 }
-function appendMessage(pane, role, text, epoch) {
+/**
+ * 往面板里放一条消息。
+ *
+ * options.actions：消息下头挂一排小动作（失败时的「再试一次」就是它）。
+ * options.writing：这条消息还在写 —— 名字后头点一枚呼吸的墨点，
+ *   从 assistant 消息建起来到第一个字到达之间，作者得看见它还在忙。
+ */
+function appendMessage(pane, role, text, epoch, options = {}) {
 	const wrap = el("div", "msg " + role);
 	wrap.append(
 		el("div", "msg-role", role === "user" ? "书者" : role === "error" ? "讹误" : PANES[pane].assistant),
 	);
 	const body = el("div", "msg-body", text);
 	wrap.append(body);
+	if (options.writing) wrap.classList.add("is-writing");
+	if (options.actions && options.actions.length) {
+		const actions = el("div", "msg-actions");
+		for (const action of options.actions) {
+			// 动作回调要拿到按钮自己（按下之后要把它按成「已重发」），
+			// 所以这里包一层，把按钮递进去；事件仍旧给作者。
+			const node = button(
+				action.label,
+				"btn btn-sm btn-quiet" + (action.className ? " " + action.className : ""),
+				(event) => action.run(node, event),
+			);
+			node.type = "button";
+			actions.append(node);
+		}
+		wrap.append(actions);
+	}
 	streamNode(pane, epoch).append(wrap);
 	scrollToBottom(pane, epoch);
 	return { wrap, body };
@@ -3728,19 +3780,38 @@ function scrollToBottom(pane, epoch) {
 /**
  * 上游思考与首 token 之间可能空好几十秒。没有占位，界面看起来就是死了。
  * 这里放一条会走秒的「正在落笔」，首字到达即撤。
+ *
+ * 三点墨依次晕开 —— 转圈的齿轮太像工具了，蘸墨点纸才对味。
  */
 function showWaiting(pane) {
 	const node = el("div", "msg waiting");
-	node.append(el("span", "waiting-dots"), el("span", "waiting-text", "正在落笔…"));
+	const dots = el("span", "waiting-dots");
+	dots.append(el("i"), el("i"), el("i"));
+	node.append(dots, el("span", "waiting-text", "正在落笔…"));
 	streamNode(pane).append(node);
 	const started = Date.now();
+	node.waitingStarted = started;
+	node.waitingPhase = "正在落笔…";
 	node.waitingTimer = setInterval(() => {
 		const text = node.querySelector(".waiting-text");
-		if (text) text.textContent = "正在落笔… " + Math.floor((Date.now() - started) / 1000) + " 秒";
+		if (text) text.textContent = node.waitingPhase + " " + Math.floor((Date.now() - started) / 1000) + " 秒";
 	}, 1000);
 	scrollToBottom(pane);
 	currentWaiting = node;
 	return node;
+}
+
+/**
+ * 等待占位换个说法。
+ *
+ * 模型在想、在调工具、在等首字，是三件事：界面上都该说清它卡在哪一步，
+ * 否则作者只看见"没反应"，以为死了。
+ */
+function setWaitingPhase(node, phase) {
+	if (!node) return;
+	node.waitingPhase = phase;
+	const text = node.querySelector(".waiting-text");
+	if (text) text.textContent = phase + " " + Math.floor((Date.now() - node.waitingStarted) / 1000) + " 秒";
 }
 
 function dismissWaiting(node = currentWaiting) {
@@ -3848,17 +3919,51 @@ function restoreComposer(pane, text) {
 	node.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
-async function sendMessage(pane, text) {
+/**
+ * 失败之后给一排小动作，目前只有「再试一次」。
+ *
+ * 上游抽风是常事，让作者把长指令重敲一遍既费事又容易走样。
+ * 原样重发才是他要的 —— 这条按钮就是那一下。
+ *
+ * retry 返回真才把按钮按成「已重发」：返回假说明这一轮还没收完，
+ * 按钮得留在原处等人再按。
+ */
+function retryActions(retry) {
+	if (!retry) return [];
+	return [
+		{
+			label: "再试一次",
+			run: (node) => {
+				if (!retry()) return;
+				node.disabled = true;
+				node.textContent = "已重发";
+			},
+		},
+	];
+}
+
+/**
+ * 往某个面板发一句话。
+ *
+ * options.repeat：这是重试，别再把作者那句话重抄一遍（原文还在上面那条里）。
+ * options.outgoing：真正发出去的内容。素材工作台那句会带上装料说明，
+ *   重试时必须发**当时**那一份，不能拿现在的装料重新拼 —— 作者按的
+ *   是刚才那个「再试一次」，不是「按现在的装料再写一遍」。
+ */
+async function sendMessage(pane, text, options = {}) {
 	if (state.streaming) return;
 	if (pane === "writing" && !state.chapterId) {
 		appendMessage("writing", "error", "先在左栏点开一章。");
 		return;
 	}
 	// 素材工作台：选中了素材就把「改哪几条」拼进指令；作者看到的仍是他自己的原话。
-	const outgoing = pane === "material" ? withPickedMaterials(text) : text;
+	const outgoing = options.outgoing ?? (pane === "material" ? withPickedMaterials(text) : text);
 	// 先把这一轮钉在它自己的会话上，再落笔：此后作者切章切面板都不影响 token 往哪写。
 	beginStream(pane);
-	appendMessage(pane, "user", text);
+	// 重试不重抄那句话 —— 原文就在上面那条里。
+	// 但要在对话里留一行「再试一次」，否则作者看见的是自己没说过的话凭空有了回答。
+	if (options.repeat) appendMessage(pane, "user", "再试一次");
+	else appendMessage(pane, "user", text);
 	const waiting = showWaiting(pane);
 	setStreaming(pane);
 	const epoch = state.streamEpoch;
@@ -3873,7 +3978,11 @@ async function sendMessage(pane, text) {
 			const data = await res.json().catch(() => ({}));
 			throw new Error(data.error || "请求失败 (" + res.status + ")");
 		}
-		await pumpStream(res, pane, epoch, waiting);
+		await pumpStream(res, pane, epoch, waiting, {
+			text,
+			outgoing,
+			retry: () => retryRound(pane, text, outgoing),
+		});
 	} catch (error) {
 		dismissWaiting(waiting);
 		if (!streamStale(epoch)) {
@@ -3883,7 +3992,9 @@ async function sendMessage(pane, text) {
 				state.sessions.delete(activeKey(pane));
 				toast("会话已过期，已自动重开一席，请再发一次。", "warn", 5200);
 			} else {
-				appendMessage(pane, "error", error.message);
+				appendMessage(pane, "error", error.message, epoch, {
+					actions: retryActions(() => retryRound(pane, text, outgoing)),
+				});
 			}
 			restoreComposer(pane, text);
 		}
@@ -3898,6 +4009,23 @@ async function sendMessage(pane, text) {
 			else await reloadProjectSafely(pane, "这一轮已完成，但右案与素材库没能同步刷新");
 		}
 	}
+}
+
+/**
+ * 重来一遍：把刚才那句话原样再发一次。
+ *
+ * 作者不该为了上游一次抽风就把整句话重敲一遍 —— 尤其长指令，
+ * 重敲一遍十有八九要走样。原样重发才是他要的。
+ *
+ * 返回值：发出去没有。按钮据此决定自己是"已重发"还是留在原处。
+ */
+function retryRound(pane, text, outgoing) {
+	if (state.streaming) {
+		toast("这一轮还没收完，稍等片刻再试。", "warn");
+		return false;
+	}
+	void sendMessage(pane, text, { repeat: true, outgoing });
+	return true;
 }
 
 /**
@@ -3930,7 +4058,7 @@ async function reloadLibrarySafely(pane, note) {
  * epoch 是发起这一轮时的流代次：中途换了卷，这一轮就作废了，
  * 剩下的 token 不许再往界面上写 —— 那是另一部作品的面板了。
  */
-async function pumpStream(res, pane, epoch = state.streamEpoch, waiting = null) {
+async function pumpStream(res, pane, epoch = state.streamEpoch, waiting = null, context = {}) {
 	const reader = res.body.getReader();
 	const decoder = new TextDecoder();
 	let buffer = "";
@@ -3939,6 +4067,36 @@ async function pumpStream(res, pane, epoch = state.streamEpoch, waiting = null) 
 	let thinkingText = null;
 	let usage = null;
 	let cursor = null;
+
+	/**
+	 * 占位让位。
+	 *
+	 * 只在"真的开始出活"时撤：出了字、开始想了。
+	 * 只调工具还没出字时，占位留着，只是换个说法（见 setWaitingPhase）——
+	 * 那是作者唯一能看见的"还在动"。
+	 */
+	const handOver = () => {
+		if (!waiting) return;
+		dismissWaiting(waiting);
+		waiting = null;
+	};
+
+	/**
+	 * 助手的消息框。没有就建一个，建的时候标上"还在写"。
+	 * 那枚呼吸的墨点从建框起挂到第一个字到达为止 —— 中间可能几十秒，
+	 * 作者得看见它还在忙，而不是以为卡死了。
+	 */
+	const ensureMessage = () => {
+		if (!message) {
+			message = appendMessage(pane, "assistant", "", epoch, { writing: true });
+			message.body.classList.add("cursor");
+			// 单独挂一个文本节点：逐 token 往它尾巴上追加，
+			// 比每个 token 重写整段 textContent 少一次全文重排。
+			cursor = document.createTextNode("");
+			message.body.append(cursor);
+		}
+		return message;
+	};
 
 	while (true) {
 		const chunk = await reader.read();
@@ -3960,33 +4118,21 @@ async function pumpStream(res, pane, epoch = state.streamEpoch, waiting = null) 
 			} catch {
 				continue;
 			}
-			// 第一条事件落地，占位就该让位给真正的输出。
-			if (waiting) {
-				dismissWaiting(waiting);
-				waiting = null;
-			}
 			switch (event.type) {
-				case "text":
-					if (!message) {
-						message = appendMessage(pane, "assistant", "", epoch);
-						message.body.classList.add("cursor");
-						// 单独挂一个文本节点：逐 token 往它尾巴上追加，
-						// 比每个 token 重写整段 textContent 少一次全文重排。
-						cursor = document.createTextNode("");
-						message.body.append(cursor);
-					}
-					if (!cursor) {
-						// 先来了一段思考才轮到正文：此时消息框已经有了，补一个尾巴节点。
-						cursor = document.createTextNode("");
-						message.body.append(cursor);
-					}
+				case "text": {
+					ensureMessage();
+					// 第一个字到了：墨点收工，往后由光标表示"正在写"。
+					message.wrap.classList.remove("is-writing");
+					handOver();
 					thinkingBox = null;
 					thinkingText = null;
 					cursor.appendData(event.delta);
 					scrollToBottom(pane, epoch);
 					break;
+				}
 				case "thinking_start":
-					if (!message) message = appendMessage(pane, "assistant", "", epoch);
+					ensureMessage();
+					handOver();
 					// 思考默认收起：想看再点开，免得把正文挤下去。
 					thinkingBox = el("details", "thinking");
 					thinkingBox.append(el("summary", "thinking-head", "思考过程"));
@@ -4006,6 +4152,9 @@ async function pumpStream(res, pane, epoch = state.streamEpoch, waiting = null) 
 					break;
 				}
 				case "tool_start": {
+					// 只调工具、还没出字：助手那一栏还是空的，占位接着报进度。
+					// 这时候不撤占位 —— 它是作者唯一看得见的"还在动"。
+					setWaitingPhase(waiting, "正在行笔…");
 					const wrap = appendTool(pane, event.name, "行笔中…", false, epoch);
 					wrap.dataset.pending = "1";
 					break;
@@ -4029,11 +4178,14 @@ async function pumpStream(res, pane, epoch = state.streamEpoch, waiting = null) 
 				}
 				case "run_end":
 					usage = event.usage;
-					if (message) message.body.classList.remove("cursor");
-					if (event.error) appendMessage(pane, "error", event.error, epoch);
+					if (message) {
+						message.body.classList.remove("cursor");
+						message.wrap.classList.remove("is-writing");
+					}
+					if (event.error) appendMessage(pane, "error", event.error, epoch, { actions: retryActions(context.retry) });
 					break;
 				case "error":
-					appendMessage(pane, "error", event.message, epoch);
+					appendMessage(pane, "error", event.message, epoch, { actions: retryActions(context.retry) });
 					break;
 				default:
 					break;
@@ -4041,7 +4193,16 @@ async function pumpStream(res, pane, epoch = state.streamEpoch, waiting = null) 
 		}
 	}
 
-	if (message) message.body.classList.remove("cursor");
+	if (message) {
+		message.body.classList.remove("cursor");
+		message.wrap.classList.remove("is-writing");
+		// 一轮失败在开口之前：这个框只剩个名字、里头是空的 ——
+		// 摆在报错前面像出了故障。想过东西就留着（那也是内容），否则撤掉。
+		const thought = message.wrap.querySelector(".thinking-body");
+		if (!message.body.textContent.trim() && !(thought && thought.textContent.trim())) {
+			message.wrap.remove();
+		}
+	}
 	if (waiting) dismissWaiting(waiting);
 	if (usage) {
 		streamNode(pane, epoch).append(
