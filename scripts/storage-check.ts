@@ -19,6 +19,8 @@ import path from "node:path";
 import { gunzipSync } from "node:zlib";
 import { ProjectStore, encodeFileName, projectStats, type ChapterDraft } from "../src/store/project.ts";
 import { createWritingTools } from "../src/ai/tools.ts";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { RECORDS_KEEP, RecordStore } from "../src/server/records.ts";
 
 let failed = 0;
 function check(label: string, ok: boolean, detail = ""): void {
@@ -286,6 +288,87 @@ const full = await callTool("read_chapter", { chapterId: "ch0001" });
 const tail = await callTool("read_chapter", { chapterId: "ch0001", part: "tail", chars: 200 });
 check("分段取只给一段", tail.length < full.length, tail.length + " vs " + full.length);
 check("尾段是结尾而不是开头", tail.includes("雨落在铁皮棚上"), tail.slice(0, 60));
+
+// ───────────────────────────────────────────── 7. 生成记录
+console.log("\n生成记录");
+const recordsDir = await mkdtemp(path.join(tmpdir(), "novel-records-"));
+const records = await RecordStore.open(recordsDir);
+const panel = { role: "writing" as const, projectId: "book-a", chapterId: "ch01" };
+const opening = await records.create({ ...panel, title: "《第一章》· 从零写起" });
+// 一轮里既有用户的交代，也有助手的收尾；preview 只该摘助手那句。
+const roundMessages = [
+	{ role: "user", content: "这一章写雨夜追车，别让裴渡先开口。" },
+	{ role: "assistant", content: [{ type: "text", text: "雨刷把挡风玻璃推出一道亮缝。" }] },
+] as unknown as AgentMessage[];
+await records.saveMessages(opening.id, roundMessages);
+const afterFirstRound = records.list(panel);
+check("新建的记录能列出来", afterFirstRound.length === 1, String(afterFirstRound.length));
+check(
+	"messageCount 数的是写进去的消息",
+	afterFirstRound[0]?.messageCount === roundMessages.length,
+	String(afterFirstRound[0]?.messageCount),
+);
+check(
+	"preview 摘的是最后一条助手的话",
+	String(afterFirstRound[0]?.preview ?? "").includes("雨刷把挡风玻璃推出一道亮缝"),
+	String(afterFirstRound[0]?.preview),
+);
+
+// 每块面板只留最近 10 条：第 11 条落盘时最老的那条被挤掉。
+const capPanel = { role: "writing" as const, projectId: "book-cap", chapterId: "ch-cap" };
+const cappedIds: string[] = [];
+for (let index = 0; index < RECORDS_KEEP + 1; index++) {
+	const created = await records.create({ ...capPanel, title: "第 " + (index + 1) + " 条" });
+	cappedIds.push(created.id);
+	// 拉开时间戳先后，裁剪顺序才是确定的。
+	await new Promise((resolve) => setTimeout(resolve, 2));
+}
+const cappedList = records.list(capPanel);
+check("同一块面板最多留 10 条", cappedList.length === RECORDS_KEEP, String(cappedList.length));
+check(
+	"最老的一条被挤出去",
+	!cappedList.some((record) => record.id === cappedIds[0]!),
+	cappedList.map((record) => record.title).join(","),
+);
+check("被挤掉的记录也取不到了", records.get(cappedIds[0]!) === undefined);
+
+// 不同面板各自计额：另一章的记录不该被这一章的裁剪带走。
+const siblingPanel = { role: "writing" as const, projectId: "book-cap", chapterId: "ch-other" };
+const sibling = await records.create({ ...siblingPanel, title: "另一块面板的一条" });
+check("不同章的记录落在另一块面板", records.list(siblingPanel).length === 1, String(records.list(siblingPanel).length));
+check(
+	"另一块面板的记录不会被这块面板的裁剪带走",
+	records.get(sibling.id) !== undefined && records.list(capPanel).length === RECORDS_KEEP,
+	String(records.list(capPanel).length),
+);
+
+check("remove 一条存在的记录返回 true", (await records.remove(opening.id)) === true);
+check("remove 之后列表少了一条", records.list(panel).length === 0, String(records.list(panel).length));
+check("remove 不存在的 id 返回 false", (await records.remove("ghost-record")) === false);
+
+// 落盘要真的读得回来：重新打开同一个目录，条数与内容都对得上。
+const latestId = cappedIds[RECORDS_KEEP]!;
+await records.saveMessages(latestId, roundMessages);
+const beforeReopen = records.list(capPanel);
+const reopened = await RecordStore.open(recordsDir);
+const afterReopen = reopened.list(capPanel);
+check("重新打开同一目录读回全部 10 条", afterReopen.length === RECORDS_KEEP, String(afterReopen.length));
+check(
+	"读回的记录 id 与落盘前一致",
+	afterReopen.map((record) => record.id).sort().join(",") === beforeReopen.map((record) => record.id).sort().join(","),
+);
+check(
+	"读回的记录带着消息",
+	reopened.get(latestId)?.messages.length === roundMessages.length,
+	String(reopened.get(latestId)?.messages.length),
+);
+const recordsRaw = JSON.parse(await readFile(path.join(recordsDir, "records.json"), "utf8")) as { version?: number; records?: unknown };
+check(
+	"records.json 是 version 1 的记录文件",
+	recordsRaw.version === 1 && Array.isArray(recordsRaw.records),
+	JSON.stringify(recordsRaw).slice(0, 80),
+);
+await rm(recordsDir, { recursive: true, force: true });
 
 await rm(dir, { recursive: true, force: true });
 

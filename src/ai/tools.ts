@@ -15,6 +15,7 @@ import {
 	type ProjectStore,
 } from "../store/project.ts";
 import type { LibraryMaterial, MaterialLibrary } from "../store/library.ts";
+import type { AskBroker } from "./ask.ts";
 
 /** 工具执行结果：content 是模型看到的文本，details 给前端展示。 */
 function result(text: string, details: unknown = undefined): AgentToolResult<unknown> {
@@ -87,6 +88,11 @@ function defineTool<TParams extends TSchema>(spec: ToolSpec<TParams>): AgentTool
 export interface NovelToolDeps {
 	store: ProjectStore;
 	projectId: string;
+	/**
+	 * 提问通道。给了才有 ask_user 工具 ——
+	 * 给模型一个问不出去的工具，比不给更糟。
+	 */
+	ask?: AskBroker;
 }
 
 function getProject(deps: NovelToolDeps): Project {
@@ -199,6 +205,45 @@ function renderHit(hit: MaterialHit): string {
 	return `【${kindLabel(hit.material.kind)} · ${hit.material.title}】第 ${hit.from + 1}-${hit.to + 1} 行\n${body}`;
 }
 // ═══════════════════════════════════════════════════════════ 两套智能体共用的工具
+
+/**
+ * 向作者提问。
+ *
+ * 这一支工具的形状和别的工具不同：它不立刻返回，而是挂在那里等作者作答。
+ * 答案到手后作为工具结果回到对话里，智能体在同一轮里接着往下做。
+ * 问错了地方比不问更糟，所以只给有提问通道的场合装这一支。
+ */
+function askUserTool(ask: AskBroker): AgentTool<any> {
+	return defineTool({
+		name: "ask_user",
+		label: "向作者提问",
+		description:
+			"向作者提一个具体的问题，等他回答。只有作者能拍板的事才问：素材和已有正文里查不到、只有作者作得了主的时候。" +
+			"调用之后这一轮会停下等作者回答；作者的回答（或\"没回答\"）会作为工具结果回来，你在这一轮接着干活。",
+		parameters: Type.Object(
+			{
+				question: nonEmpty("要问作者的问题，一句具体的中文提问"),
+				options: Type.Optional(stringArray("可选的候选答案，给作者点选用；没有明确几种选择就别给")),
+			},
+			{ description: "向作者提一个问题" },
+		),
+		execute: async (_toolCallId, params: { question: string; options?: string[] }, signal) => {
+			const answer = await ask.ask({ question: params.question, options: params.options }, signal);
+			if (!answer.trim()) {
+				// 没回答也是一种回答：作者不想答。按自己的判断往下走，别替他编。
+				return result("作者没回答这个问题。按你自己的判断继续，不要替作者编造回答。", {
+					question: params.question,
+					answered: false,
+				});
+			}
+			return result("作者的回答：" + answer, {
+				question: params.question,
+				answered: true,
+				answer,
+			});
+		},
+	});
+}
 
 /** get_project_brief / list_chapters / read_chapter / list_materials / search_materials / add_note / list_notes / resolve_note */
 function sharedTools(deps: NovelToolDeps): AgentTool<any>[] {
@@ -514,6 +559,9 @@ function sharedTools(deps: NovelToolDeps): AgentTool<any>[] {
 				return result(hits.map(renderHit).join("\n\n"), hits);
 			},
 		}),
+
+		// 有提问通道才装这一支：问不出去的工具比没有更糟。
+		...(deps.ask ? [askUserTool(deps.ask)] : []),
 	];
 }
 
@@ -923,14 +971,102 @@ function writeChapterTool(deps: NovelToolDeps): AgentTool<any> {
 }
 
 /**
+ * 改一段：在现有正文里换掉一处原文。
+ *
+ * 整章重写的代价与风险都不对等：作者只嫌一句冷，模型却要重交全章，
+ * 一次手滑就是整章截断。局部修改让"改动量"对上"交代量"。
+ *
+ * 定位用逐字原文，不用行号也不用模糊匹配：正文里"她笑了笑"可能出现好几处，
+ * 指错地方比不改更糟。宁可让它报错重来 —— 报错时模型手里就有 read_chapter
+ * 给的原文，重试一次就对上了。
+ */
+function reviseChapterTool(deps: NovelToolDeps): AgentTool<any> {
+	return defineTool({
+		name: "revise_chapter",
+		label: "改写章节里的一段",
+		description:
+			"把章节正文里的一处原文换成新写法，其余一字不动。只改作者点名的那几处时用它，" +
+			"不要用 write_chapter 整章覆盖。" +
+			"find 必须与 read_chapter 返回的正文逐字一致（含标点、空格、换行），而且要能在正文里唯一定位 —— " +
+			"同一段话出现多次时，前后各多带一句。replace 是替换成的新文字，留空字符串表示删掉这一段。" +
+			"每改一处调用一次；改完把改了哪几处告诉作者即可，不必复述全文。",
+		parameters: Type.Object(
+			{
+				chapterId: nonEmpty("章节 id"),
+				find: nonEmpty("要被替换掉的原文：逐字复制 read_chapter 返回的那一段，含标点"),
+				replace: Type.String({ description: "换成什么。留空字符串表示删掉这一段" }),
+				summary: Type.Optional(
+					Type.String({
+						description: "改过之后这一章实际讲了什么（2-4 句）。留空则沿用上一版的小结。",
+					}),
+				),
+			},
+			{ description: "局部修改章节" },
+		),
+		execute: async (_toolCallId, params) => {
+			const project = getProject(deps);
+			const planned = project.outline.find((chapter) => chapter.id === params.chapterId);
+			if (!planned) {
+				throw new Error(
+					"章节 " + params.chapterId + " 不在本章目里，不能凭空改；先用 list_chapters 确认 id。",
+				);
+			}
+			const meta = project.drafts[params.chapterId];
+			if (!meta) {
+				return result(
+					"《" + planned.title + "》还没有正文，没有可改的原文；从零写起请用 write_chapter。",
+				);
+			}
+			const find = params.find;
+			// 加锁：改正文与整章写入走同一把锁，不然两次改动会互相覆盖。
+			const revised = await deps.store.withChapterLock(deps.projectId, params.chapterId, async () => {
+				const body = await deps.store.readDraftBody(deps.projectId, params.chapterId);
+				const content = body?.content ?? "";
+				const at = content.indexOf(find);
+				if (at < 0) {
+					throw new Error(
+						"正文里找不到这段原文，没改。把 read_chapter 读到的原文逐字复制进 find（标点、空格、换行都要一致）再试一次；" +
+							"要改的那段没读全，就带上它前后各一句。",
+					);
+				}
+				if (content.indexOf(find, at + find.length) >= 0) {
+					throw new Error(
+						"这段原文在正文里不止一处，指不准该改哪儿，没改。前后各多带一句让它唯一，再试一次。",
+					);
+				}
+				const next = content.slice(0, at) + params.replace + content.slice(at + find.length);
+				return deps.store.saveDraftBody(deps.projectId, params.chapterId, {
+					title: meta.title,
+					content: next,
+					// 小结没交就沿用旧的：局部改动通常不改变这一章"讲了什么"。
+					summary: params.summary ?? meta.summary,
+					materialIds: meta.materialIds,
+					mode: "patch",
+					keepHistory: true,
+				});
+			});
+			const delta = params.replace.length - find.length;
+			return result(
+				"已改《" + revised.title + "》：第 " + revised.revision + " 版，" + revised.words + " 字。" +
+					"这次换掉 " + find.length + " 字、补进 " + params.replace.length + " 字（" +
+					(delta >= 0 ? "+" : "") + delta + " 字），其余一字未动。还有别处要改就继续调用。",
+				{ ...revised, find, replace: params.replace },
+			);
+		},
+	});
+}
+
+/**
  * 组装智能体的工具集。
  *
- * 写入类工具只有 write_chapter；素材只能读不能改 —— 料由素材智能体负责。
+ * 两个写入工具各管一件事：write_chapter 整章落地，revise_chapter 只换点名的几段。
+ * 素材只能读不能改 —— 料由素材智能体负责。
  */
 export function createWritingTools(deps: NovelToolDeps): AgentTool<any>[] {
 	return [
 		...sharedTools(deps),
 		writeChapterTool(deps),
+		reviseChapterTool(deps),
 	];
 }
 
@@ -946,6 +1082,11 @@ export function createWritingTools(deps: NovelToolDeps): AgentTool<any>[] {
  */
 export interface LibraryToolDeps {
 	library: MaterialLibrary;
+	/**
+	 * 提问通道。给了才有 ask_user 工具 ——
+	 * 给模型一个问不出去的工具，比不给更糟。
+	 */
+	ask?: AskBroker;
 }
 
 /** 库条目的一行摘要。与作品素材同格式，但不带"已装入"——库里没有章节。 */
@@ -1061,6 +1202,9 @@ export function createLibraryTools(deps: LibraryToolDeps): AgentTool<any>[] {
 				);
 			},
 		}),
+
+		// 库作用域同样可以问作者 —— 提示词里也放行了这一支。
+		...(deps.ask ? [askUserTool(deps.ask)] : []),
 	];
 }
 

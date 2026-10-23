@@ -102,6 +102,13 @@ const state = {
 	pendingDelete: null,
 	/** 生文工作台选定的作业性质，重渲染不该把它抖掉。 */
 	writeMode: "create",
+	/** 执笔者「接着写」的那条记录：下一轮 /write 会把它带上，接在那段对话后面。 */
+	writeRecordId: null,
+	/** 那条记录属于哪一章、已经写了几轮：换章清理与小条上的轮数都看这两样。 */
+	writeRecordChapterId: null,
+	writeRecordTurns: 0,
+	/** 记录抽屉此刻开着的是哪块面板（material / writing）；null 表示合着。 */
+	recordsPane: null,
 	/** 通用素材库。每条带 usedBy，由服务端从各作品现算，所以不会两边不一致。 */
 	library: [],
 	/**
@@ -243,6 +250,7 @@ const REVISION_MODE_LABELS = {
 	create: "首次成文",
 	rewrite: "整章重写",
 	continue: "续写",
+	patch: "局部修改",
 	autosave: "自动存稿",
 };
 const revisionModeLabel = (mode) => REVISION_MODE_LABELS[mode] || mode || "自动存稿";
@@ -301,12 +309,54 @@ function button(label, className, onClick) {
 	return node;
 }
 
+/**
+ * 浏览器断线时只会丢一句英文过来。
+ *
+ * 请求根本没发出去是 "Failed to fetch"（Chrome）/"Load failed"（Safari），
+ * 流读到一半断了是 "network error"。作者看不懂这些，更不知道该重试还是该
+ * 去翻配置 —— 统一翻成一句人话，并在错误上打一个 network 标记：
+ * 上层据此决定要不要重试、要不要把同一场故障再报一遍。
+ */
+function isNetworkFailure(error) {
+	if (!error) return false;
+	if (error.network === true) return true;
+	const message = String(error.message ?? "");
+	return /failed to fetch|network ?error|load failed|fetch failed|network connection was lost|err_internet|err_connection|terminated/i.test(
+		message,
+	);
+}
+
+/**
+ * 把失败翻成作者读得懂的话。
+ *
+ * options.retry 为假时不带"点再试一次"那句：调用处自己会说下一步怎么办。
+ */
+function describeFailure(error, options = {}) {
+	if (isNetworkFailure(error)) {
+		const said = "服务没接上（可能刚重启，或网络断了）。";
+		// 断流不等于没写成：服务那头常常已经把稿子落了盘，只是结尾那几行没送到眼前。
+		// 先叫作者看一眼右案，别再诱他重发一遍 —— 重发是会再写一版的。
+		return options.retry === false ? said : said + "这一轮没走完：先看右案有没有新东西，没写进去再点「再试一次」原样重发。";
+	}
+	const message = String((error && error.message) || "").trim();
+	return message || "出了点意外，这一轮没跑成。";
+}
+
 async function api(path, options = {}) {
-	const res = await fetch(path, {
-		headers: { "content-type": "application/json" },
-		...options,
-		body: options.body ? JSON.stringify(options.body) : undefined,
-	});
+	let res;
+	try {
+		res = await fetch(path, {
+			headers: { "content-type": "application/json" },
+			...options,
+			body: options.body ? JSON.stringify(options.body) : undefined,
+		});
+	} catch (error) {
+		// 在这里翻一次，全站各处 catch 就不用各译一遍浏览器原文。
+		const failure = new Error("服务没接上（可能刚重启，或网络断了）。");
+		failure.network = true;
+		failure.cause = error;
+		throw failure;
+	}
 	const data = await res.json().catch(() => ({}));
 	if (!res.ok) throw new Error(data.error || "请求失败 (" + res.status + ")");
 	return data;
@@ -460,8 +510,9 @@ async function ensureBody(chapterId, options = {}) {
 		state.bodyError = null;
 		return chapter;
 	} catch (error) {
-		state.bodyError = { chapterId, message: error.message };
-		toast("取稿失败：" + error.message, "error", 6000);
+		const said = describeFailure(error, { retry: false });
+		state.bodyError = { chapterId, message: said };
+		toast("取稿失败：" + said, "error", 6000);
 		return null;
 	}
 }
@@ -1681,6 +1732,8 @@ function openChapter(chapterId) {
 
 function openChapterNow(chapterId) {
 	clearEditorState();
+	// 换章就放掉上一条「接着写」：记录是分章的，跟着走会接错对话。
+	if (state.chapterId !== chapterId) clearWriteRecord({ rerender: false });
 	state.chapterId = chapterId;
 	state.editing = false;
 	// 这章写成过没有，看元数据就够（hasDraft），不必把正文取回来才敢判断。
@@ -1923,6 +1976,7 @@ async function deleteProject(project) {
 	state.project = null;
 	state.stats = null;
 	state.chapterId = null;
+	clearWriteRecord({ rerender: false });
 	resetProjectSessions();
 	state.uploads = [];
 	$(PANES.material.stream).replaceChildren();
@@ -2219,6 +2273,8 @@ function renderChapter(box, project) {
 	const chapter = project.outline[index];
 	if (!chapter) {
 		state.chapterId = null;
+		// 选中的那一章不在了（多半被删了）：那条「接着写」也跟着断。
+		clearWriteRecord({ rerender: false });
 		renderFrontMatter(box, project);
 		return;
 	}
@@ -2244,6 +2300,8 @@ function renderChapter(box, project) {
 				clearEditorState();
 				state.editing = false;
 				state.chapterId = null;
+				// 回到总目就是离开了这一章：不再替那条记录接话。
+				clearWriteRecord({ rerender: false });
 				writeStored(chapterKey(state.projectId), "");
 				renderAll();
 			})();
@@ -2546,7 +2604,7 @@ async function autoSaveNow() {
 			if (state.editorDirty) scheduleAutosave();
 			return true;
 		} catch (error) {
-			toast("自动存稿失败：" + error.message + "。改动还在编辑框里，可再点「存稿」。", "error", 7000);
+			toast("自动存稿失败：" + describeFailure(error, { retry: false }) + "改动还在编辑框里，可再点「存稿」。", "error", 7000);
 			return false;
 		} finally {
 			state.editorSaving = false;
@@ -2661,8 +2719,9 @@ async function exportProject(chapterId, format = "txt") {
 		toast("已导出：" + name, "ok", 3200);
 		return true;
 	} catch (error) {
-		toast("导出失败：" + error.message, "error", 6000);
-		$("export-error").textContent = "导出失败：" + error.message;
+		const said = describeFailure(error, { retry: false });
+		toast("导出失败：" + said, "error", 6000);
+		$("export-error").textContent = "导出失败：" + said;
 		return false;
 	}
 }
@@ -2817,7 +2876,7 @@ async function restoreRevision(chapterId, revisionNumber) {
 		renderAll();
 		toast("已恢复到第 " + revisionNumber + " 稿；恢复前的稿已存档。", "ok", 4200);
 	} catch (error) {
-		$("history-error").textContent = "恢复失败：" + error.message;
+		$("history-error").textContent = "恢复失败：" + describeFailure(error, { retry: false });
 	}
 }
 
@@ -3826,19 +3885,28 @@ function renderWritingBench() {
 	}
 }
 
-/** 写法不同，按下去的那颗按钮也该叫得不一样 —— 让人一眼知道会得到什么。 */
-const WRITE_MODE_ACTIONS = { create: "装料成文", rewrite: "重写此章", continue: "接着写" };
+/**
+ * 四种写法的中文名。
+ *
+ * 从前作业条上另有一组动作按钮（装料成文 / 重写此章 / 接着写 / 改这几处），
+ * 同一个意思要认两个名字；现在落笔只走输入框里那颗「呈上」，中文名只留给
+ * 下拉、记录标题与提示语，收成一份，免得三处各写一套、改一处漏两处。
+ */
+const WRITE_MODE_LABELS = { create: "从零写起", rewrite: "整章重写", continue: "续写下去", patch: "局部修改" };
 
 /**
- * 写作作业条：选章 → 定写法 → 落笔。
+ * 写作作业条：选章 → 定写法。
  *
- * 它原先挂在左栏「装配」底下，可真正落笔的是右栏执笔者 —— 眼睛盯着一栏，
- * 手要跑回另一栏按按钮。现在挪进执笔者栏、紧贴输入框：先在这儿选章，
- * 再在下面的输入框里写交代，最后按这一颗。
+ * 它原先挂着四颗动作按钮，点了才生成。可落笔时十有八九还要附一句交代 ——
+ * 「这几处别动」「写到他们进门为止」—— 作者得在按钮和输入框之间来回看。
+ * 现在只剩两个下拉，落笔统一走输入框的「呈上」：交代与写法在同一次动作里，
+ * 空着呈上就是「照当前写法写这一章，没别的交代」。
  *
- * 交代一律在按下那一刻才读输入框：渲染时就取值的话，作者打了一半的字会丢。
+ * 交代一律在提交那一刻才读输入框：渲染时就取值的话，作者打了一半的字会丢。
  */
 function renderWriteActions(project, chapter) {
+	// 换过章之后旧记录的「接着写」标记就不作数了：小条不该跟到别的章去。
+	if (state.writeRecordId && state.writeRecordChapterId !== chapter?.id) clearWriteRecord({ rerender: false });
 	const box = $("write-actions");
 	box.replaceChildren();
 	const chapters = project.outline;
@@ -3874,7 +3942,7 @@ function renderWriteActions(project, chapter) {
 	picker.addEventListener("change", () => setWriteChapter(picker.value));
 	box.append(picker);
 
-	// 没选章就没有「写哪一章」可谈：先让人把章选定，别把一颗按不动的按钮摆在那儿。
+	// 没选章就没有「写哪一章」可谈：先让人把章选定。
 	if (!chapter) {
 		box.append(el("span", "actions-note", "先选一章，再落笔。"));
 		return;
@@ -3884,11 +3952,7 @@ function renderWriteActions(project, chapter) {
 	modeSelect.className = "mode-select";
 	modeSelect.id = "write-mode";
 	modeSelect.setAttribute("aria-label", "写法");
-	for (const [value, label] of [
-		["create", "从零写起"],
-		["rewrite", "整章重写"],
-		["continue", "续写下去"],
-	]) {
+	for (const [value, label] of Object.entries(WRITE_MODE_LABELS)) {
 		const option = el("option", "", label);
 		option.value = value;
 		modeSelect.append(option);
@@ -3897,35 +3961,82 @@ function renderWriteActions(project, chapter) {
 	box.append(modeSelect);
 
 	const assembled = chapter.materialIds.map(materialById).filter(Boolean);
-	const go = button(WRITE_MODE_ACTIONS[state.writeMode] ?? "装料成文", "btn btn-ink btn-sm", () => {
-		void runWrite(modeSelect.value, $("writing-input").value.trim(), chapter.id);
-	});
-	go.type = "button";
-	go.dataset.writeGo = "1";
-	// 没装料就写不出来（服务端也会 409）—— 按钮先按不动，并说清该去哪儿装。
-	if (assembled.length === 0) {
-		go.disabled = true;
-		go.dataset.empty = "1";
-		go.title = "本章还没装料，写不出正文";
-	} else if (streamBusy("writing")) {
-		// 这一轮还没收笔：按钮先停着，等 setStreaming 收到落笔信号再放行。
-		go.disabled = true;
-	}
-	box.append(go);
+	// 这一章有没有旧稿：patch 改的就是它，没有正文就没有可改的地方。
+	const hasBody = Boolean(chapterMeta(project.drafts[chapter.id])?.hasDraft);
+	const modeNote = el("span", "actions-note", "");
+
+	/**
+	 * 按写法重算旁边那句话。
+	 *
+	 * 拦截在提交时做（见 submitWriting），这里只管把「这一档会得到什么」说清楚，
+	 * 别把「能不能按」写死在按钮上 —— 按钮已经不在这儿了。
+	 */
+	const syncModeNote = () => {
+		const mode = state.writeMode;
+		if (mode === "patch") {
+			modeNote.textContent = hasBody
+				? "只动你在下面点名的地方，其余一字不改。"
+				: "这一章还没有正文：先按「从零写起」写一遍，再来局部改。";
+		} else if (assembled.length === 0) {
+			modeNote.textContent = "这一章还没装料：先到左栏「库中可装」里挑几条。";
+		} else {
+			modeNote.textContent = "带 " + assembled.length + " 条料落笔；下面输入框里写的交代会一并附上。";
+		}
+	};
+
 	modeSelect.addEventListener("change", () => {
 		state.writeMode = modeSelect.value;
-		go.textContent = WRITE_MODE_ACTIONS[modeSelect.value] ?? "装料成文";
+		syncModeNote();
 	});
+	box.append(modeNote);
+	syncModeNote();
+	// 「接着写」小条：接的是哪条记录、第几轮，以及一个随时放手的 ×。
+	appendWriteRecordBar(box, chapter.id);
+}
 
-	box.append(
-		el(
-			"span",
-			"actions-note",
-			assembled.length === 0
-				? "这一章还没装料：先到左栏「库中可装」里挑几条。"
-				: "带 " + assembled.length + " 条料落笔；下面输入框里写的交代会一并附上。",
-		),
-	);
+/**
+ * 只重画作业条。换章、弃席、清掉「接着写」之后用得上 —— 不必为了两颗下拉重渲染整页。
+ */
+function refreshWriteActions() {
+	if (!state.project) return;
+	const chapter = state.project.outline.find((item) => item.id === state.chapterId);
+	renderWriteActions(state.project, chapter);
+}
+
+/**
+ * 作业条上的「接着第 N 轮写」小条。
+ *
+ * 它只是下一轮 /write 的把手，不是会话：作者点 × 就回到「另起一条记录」，
+ * 屏上的对话照旧留着。真正把 recordId 送出去的是 runWrite。
+ */
+function appendWriteRecordBar(box, chapterId) {
+	if (!state.writeRecordId) return;
+	if (state.writeRecordChapterId !== chapterId) {
+		clearWriteRecord({ rerender: false });
+		return;
+	}
+	const bar = el("div", "write-record-bar");
+	bar.append(el("span", "write-record-text", "接着第 " + Math.max(1, state.writeRecordTurns) + " 轮写"));
+	const close = button("×", "btn btn-quiet btn-sm icon-btn", () => clearWriteRecord());
+	close.type = "button";
+	close.title = "不再接着这一轮写";
+	close.setAttribute("aria-label", "不再接着这一轮写");
+	bar.append(close);
+	box.append(bar);
+}
+
+/**
+ * 放掉「接着写」：下一轮呈上会另开一条记录。
+ *
+ * rerender 为假时只改状态 —— 调用方通常紧接着就要整页重渲染，
+ * 在渲染途中再画一次作业条只会白费一遍。
+ */
+function clearWriteRecord(options = {}) {
+	if (!state.writeRecordId) return;
+	state.writeRecordId = null;
+	state.writeRecordChapterId = null;
+	state.writeRecordTurns = 0;
+	if (options.rerender !== false) refreshWriteActions();
 }
 
 /**
@@ -3938,6 +4049,7 @@ function setWriteChapter(chapterId) {
 	if (!state.project) return;
 	const next = state.project.outline.find((item) => item.id === chapterId);
 	if (!next) return;
+	if (state.chapterId !== next.id) clearWriteRecord({ rerender: false });
 	state.chapterId = next.id;
 	// 写法跟着章走：有旧稿就该是「整章重写」，空白章才是「从零写起」。
 	state.writeMode = chapterMeta(state.project.drafts[next.id])?.hasDraft ? "rewrite" : "create";
@@ -4308,7 +4420,7 @@ $("volume-form").addEventListener("submit", async (event) => {
 });
 
 /**
- * 装料成文 / 续写 / 重写。
+ * 装料成文 / 续写 / 重写 / 局部修改。
  *
  * chapterOverride：重试时写回**原来那一章**。作者按的是「刚才那次」的按钮，
  *   不是「现在这一章」—— 中间切了章也不能改写去处。
@@ -4320,13 +4432,16 @@ async function runWrite(mode, note, chapterOverride, options = {}) {
 	const chapterId = chapterOverride ?? state.chapterId;
 	if (!chapterId || !state.project) return;
 
-	if (state.project.materials.length === 0) {
+	// 局部修改改的是已有正文，素材库空不空与它无关 —— 别拿「写」的前提拦「改」。
+	if (mode !== "patch" && state.project.materials.length === 0) {
 		appendMessage("writing", "error", "素材库还是空的。先到「料」上传资料或让设定官备料。");
 		return;
 	}
 	const chapter = state.project.outline.find((item) => item.id === chapterId);
-	const label = mode === "rewrite" ? "重写" : mode === "continue" ? "续写" : "成文";
+	const label = mode === "rewrite" ? "重写" : mode === "continue" ? "续写" : mode === "patch" ? "改" : "成文";
 	if (note) $("writing-input").value = "";
+	// 接着上一轮写：只有记录还属于这一章才作数 —— 换过章就自动放下，免得接错对话。
+	const resumeRecordId = state.writeRecordId && state.writeRecordChapterId === chapterId ? state.writeRecordId : null;
 	state.writeAbort = new AbortController();
 	// 与对议同一条路：这一轮先钉在自己的会话上，作者中途切章也不会把半截丢在错的面板里。
 	beginStream("writing");
@@ -4338,6 +4453,11 @@ async function runWrite(mode, note, chapterOverride, options = {}) {
 	const waiting = showWaiting("writing");
 	setStreaming("writing");
 	const epoch = streamSlot("writing").epoch;
+	// 这一笔成没成、是不是断在网上：收尾重载的说法与是否再报红字都看它。
+	let failed = false;
+	let networkDown = false;
+	// 作者按了「止笔」：这一轮不算成，轮数不该 +1。
+	let stopped = false;
 	try {
 		const res = await fetch(
 			"/api/projects/" + state.projectId + "/chapters/" + encodeURIComponent(chapterId) + "/write",
@@ -4350,6 +4470,8 @@ async function runWrite(mode, note, chapterOverride, options = {}) {
 					thinkingLevel: $("thinking-select").value,
 					mode,
 					...(note ? { note } : {}),
+					// 接在同一条记录后面：后端会把那段对话塞回这一轮，写进同一条记录。
+					...(resumeRecordId ? { recordId: resumeRecordId } : {}),
 				}),
 			},
 		);
@@ -4363,9 +4485,16 @@ async function runWrite(mode, note, chapterOverride, options = {}) {
 	} catch (error) {
 		dismissWaiting("writing", waiting);
 		if (error.name === "AbortError") {
+			stopped = true;
 			if (!streamStale("writing", epoch)) appendMessage("writing", "assistant", "已止笔。", epoch);
 		} else if (!streamStale("writing", epoch)) {
-			appendMessage("writing", "error", error.message, epoch, {
+			failed = true;
+			networkDown = isNetworkFailure(error);
+			// 这条记录被别人删了（或不属于这一章）：这一笔接不上，下一轮别再带它。
+			if (resumeRecordId && /这条记录不在了|已被删除|属于别的章节|不属于执笔者/.test(error.message)) {
+				clearWriteRecord();
+			}
+			appendMessage("writing", "error", describeFailure(error), epoch, {
 				actions: retryActions(() => retryWrite(mode, note, chapterId)),
 			});
 			// 这一笔没落成，把交代还给作者；止笔是他自己要停，不还。
@@ -4377,7 +4506,15 @@ async function runWrite(mode, note, chapterOverride, options = {}) {
 		if (!streamStale("writing", epoch)) {
 			endStream("writing");
 			setStreaming("writing", false);
-			await reloadProjectSafely("writing", "落笔已毕，但右案与章目没能同步刷新");
+			await reloadProjectSafely(
+				"writing",
+				failed ? "这一笔没能收尾，右案与章目没能同步刷新" : "落笔已毕，但右案与章目没能同步刷新",
+				networkDown ? { quiet: true } : {},
+			);
+			// 一轮真的写完（没报错、没止笔）：接着写的那条记录多了一轮，小条与作业条跟着换。
+			if (!failed && !stopped && resumeRecordId) state.writeRecordTurns += 1;
+			refreshWriteActions();
+			if (state.recordsPane) void refreshRecords(state.recordsPane);
 		}
 	}
 }
@@ -4394,6 +4531,388 @@ function retryWrite(mode, note, chapterId) {
 	}
 	void runWrite(mode, note, chapterId, { repeat: true });
 	return true;
+}
+
+/**
+ * 执笔者「呈上」：把写法与交代一起送进 /write。
+ *
+ * 从前这条提交发的是对议，成文要另按作业条上的按钮；同一件事分两处按，
+ * 作者说一句「只改这两段」还得再去找按钮。现在一次动作只发一种请求：
+ * 交代空着也算数 —— 那就是「照当前写法写这一章，没别的交代」。
+ *
+ * 拦截一律用 toast，不禁用输入框：禁用会让人不知道自己在等什么，
+ * 说清楚缺什么，作者补上就能发。
+ */
+function submitWriting(text) {
+	const note = String(text ?? "").trim();
+	const project = state.project;
+	const chapterId = state.chapterId;
+	if (!project || !chapterId) {
+		toast("先在左栏点开一章。", "warn");
+		return;
+	}
+	if (streamBusy("writing")) {
+		toast("这一席还在落笔，等它收笔再发。", "warn");
+		return;
+	}
+	const chapter = project.outline.find((item) => item.id === chapterId);
+	if (!chapter) {
+		toast("先在左栏点开一章。", "warn");
+		return;
+	}
+	const mode = state.writeMode;
+	const hasBody = Boolean(chapterMeta(project.drafts[chapter.id])?.hasDraft);
+	if (mode === "patch" && !hasBody) {
+		toast("这一章还没有正文：先按「从零写起」写一遍，再来局部改。", "warn");
+		return;
+	}
+	const assembled = chapter.materialIds.map(materialById).filter(Boolean);
+	if (mode !== "patch" && assembled.length === 0) {
+		toast("本章还没装料，写不出正文。", "warn");
+		return;
+	}
+	const input = $("writing-input");
+	input.value = "";
+	input.dispatchEvent(new Event("input", { bubbles: true }));
+	void runWrite(mode, note, chapterId);
+}
+
+// ═══════════════════════════════════════════════════ 生成记录
+
+/** 抽屉一次列多少条：与服务端 records.ts 的 RECORDS_KEEP 一致（再要也只留十条）。 */
+const RECORDS_LIMIT = 10;
+
+/** 两块面板的记录，口吻各随其主。 */
+const RECORD_PANES = {
+	material: { title: "设定官的记录", empty: "这一席还没有留下记录：聊过一轮，这里就有账可查。" },
+	writing: { title: "执笔者的记录", empty: "这一章还没有留下记录：写过一轮，这里就有账可查。" },
+};
+
+/** 抽屉此刻列着的记录；只给下面这几个函数用，不放进 state。 */
+let recordsItems = [];
+/** 拉列表的序号：连点两下时只认最新那一次，旧响应回来了也不许盖。 */
+let recordsSeq = 0;
+/** 开抽屉的那颗按钮：关上之后焦点该回到它身上。 */
+let recordsTrigger = null;
+
+/**
+ * 记录行上的时间：近的说「刚刚 / N 分钟前 / N 小时前」，远的照旧写月日时分。
+ *
+ * 「3 天前」这种说法会逼人去翻日历；过了今天，不如直接给日子。
+ */
+function relativeTime(stamp) {
+	const time = Date.parse(stamp ?? "");
+	if (!Number.isFinite(time)) return "";
+	const diff = Date.now() - time;
+	if (diff < 60 * 1000) return "刚刚";
+	if (diff < 60 * 60 * 1000) return Math.max(1, Math.floor(diff / 60000)) + " 分钟前";
+	if (diff < 24 * 60 * 60 * 1000) return Math.max(1, Math.floor(diff / 3600000)) + " 小时前";
+	return fmtTime(stamp);
+}
+
+/** 一条 pi-ai 消息里的正文：user 原样，assistant 只取文本段，工具结果不算话。 */
+function recordMessageText(message) {
+	if (typeof message?.content === "string") return message.content;
+	if (!Array.isArray(message?.content)) return "";
+	return message.content
+		.filter((part) => part && part.type === "text" && typeof part.text === "string")
+		.map((part) => part.text)
+		.join("");
+}
+
+/** 没有正文、只有工具调用时的占位：告诉作者这一轮确实动过手。 */
+function recordToolNote(message) {
+	if (typeof message?.content === "string" && message.content.trim()) return null;
+	const parts = Array.isArray(message?.content) ? message.content : [];
+	if (parts.some((part) => part && part.type === "text" && String(part.text || "").trim())) return null;
+	// pi-ai 的工具调用可能挂在 message.tool_calls 上，也可能作为 content 里的一段；
+	// 两种都要认，否则「只调了工具」的那一轮会整条消失。
+	const hasToolPart = parts.some((part) => part && /^tool/i.test(String(part.type || "")));
+	const hasToolCalls = Array.isArray(message?.tool_calls) && message.tool_calls.length > 0;
+	return hasToolPart || hasToolCalls ? "（调用了 write_chapter / revise_chapter 等工具）" : null;
+}
+
+/** 这条记录里 assistant 说过几轮 —— 「接着第 N 轮写」的 N 从这儿数起。 */
+function countRecordRounds(messages) {
+	return (messages ?? []).filter((message) => message?.role === "assistant").length;
+}
+
+/**
+ * 把一条记录的对话搬回面板。
+ *
+ * 走的是流式那套外壳（beginStream/endStream）：面板本来就按会话键存着快照，
+ * 直接写 innerHTML 会在切章时被旧快照盖回去。这里先清掉这条快照，再逐条
+ * appendMessage —— user 显示正文，assistant 取文字，toolResult 跳过。
+ */
+function renderRecordMessages(pane, messages) {
+	const key = activeKey(pane);
+	state.transcripts.delete(key);
+	beginStream(pane);
+	const epoch = streamSlot(pane).epoch;
+	$(PANES[pane].stream).replaceChildren();
+	for (const message of messages ?? []) {
+		if (!message || message.role === "toolResult") continue;
+		if (message.role !== "user" && message.role !== "assistant") continue;
+		const text = recordMessageText(message);
+		if (text.trim()) {
+			appendMessage(pane, message.role, text, epoch);
+			continue;
+		}
+		const note = recordToolNote(message);
+		if (note) appendMessage(pane, message.role, note, epoch).body.classList.add("is-toolnote");
+	}
+	endStream(pane);
+}
+
+/** 这块面板该列哪十条记录。执笔者按章分账，设定官按卷分账。 */
+function recordsUrl(pane) {
+	if (pane === "writing") {
+		if (!state.projectId || !state.chapterId) return null;
+		return (
+			"/api/records?role=writing&projectId=" +
+			encodeURIComponent(state.projectId) +
+			"&chapterId=" +
+			encodeURIComponent(state.chapterId) +
+			"&limit=" +
+			RECORDS_LIMIT
+		);
+	}
+	if (!state.projectId) return null;
+	return (
+		"/api/records?role=material&projectId=" + encodeURIComponent(state.projectId) + "&limit=" + RECORDS_LIMIT
+	);
+}
+
+/** 记录抽屉的壳：只建一次，之后开关只动 hidden。 */
+function ensureRecordsEls() {
+	const existing = document.getElementById("records-layer");
+	if (existing) return existing;
+
+	const layer = el("div", "records-layer");
+	layer.id = "records-layer";
+	layer.hidden = true;
+	const scrim = el("div", "records-scrim");
+	scrim.addEventListener("click", () => closeRecords());
+	const sheet = el("section", "records-sheet");
+	sheet.setAttribute("role", "dialog");
+	sheet.setAttribute("aria-modal", "true");
+	sheet.setAttribute("aria-labelledby", "records-title");
+	const head = el("header", "records-head");
+	const titles = el("div", "records-titles");
+	const title = el("h3", "records-title", "");
+	title.id = "records-title";
+	const sub = el("span", "records-sub", "");
+	titles.append(title, sub);
+	const close = button("×", "btn btn-quiet btn-sm icon-btn", () => closeRecords());
+	close.type = "button";
+	close.setAttribute("aria-label", "收起记录");
+	head.append(titles, close);
+	const body = el("div", "records-body");
+	sheet.append(head, body);
+	layer.append(scrim, sheet);
+	document.body.append(layer);
+	return layer;
+}
+
+/** 抽屉里的正文：列表、空账、出错三选一。 */
+function renderRecordsList(pane) {
+	const layer = ensureRecordsEls();
+	const body = layer.querySelector(".records-body");
+	body.replaceChildren();
+	const spec = RECORD_PANES[pane];
+	if (!spec) return;
+	if (!recordsItems.length) {
+		body.append(el("p", "records-empty", spec.empty));
+		return;
+	}
+	const list = el("div", "records-list");
+	for (const record of recordsItems) list.append(renderRecordItem(pane, record));
+	body.append(list);
+}
+
+/** 一条记录：标题、相对时间、一句预览、条数，外加「接着写 / 删」。 */
+function renderRecordItem(pane, record) {
+	const item = el("article", "records-item");
+	const head = el("div", "records-item-head");
+	const title = el("h4", "records-item-title", record.title || "（未命名的一席）");
+	const when = el("span", "records-when", relativeTime(record.updatedAt || record.createdAt));
+	head.append(title, when);
+	if (pane === "writing" && state.writeRecordId === record.id) {
+		head.append(el("span", "records-flag", "接着这条"));
+	}
+	item.append(head);
+	if (record.preview) item.append(el("p", "records-preview", record.preview));
+	const meta = el("div", "records-meta");
+	meta.append(el("span", "records-count", (record.messageCount || 0) + " 条消息"));
+	const actions = el("div", "records-actions");
+	const resume = button(pane === "writing" ? "接着写" : "接着聊", "btn btn-quiet btn-xs", () => {
+		void resumeRecord(pane, record);
+	});
+	resume.type = "button";
+	const remove = button("删", "btn btn-quiet btn-xs is-danger", () => {
+		void deleteRecord(pane, record);
+	});
+	remove.type = "button";
+	remove.setAttribute("aria-label", "删掉这条记录");
+	actions.append(resume, remove);
+	meta.append(actions);
+	item.append(meta);
+	return item;
+}
+
+/** 列表拉失败：说清楚，再给一次机会。 */
+function renderRecordsError(error) {
+	const layer = ensureRecordsEls();
+	const body = layer.querySelector(".records-body");
+	body.replaceChildren();
+	const box = el("div", "records-empty records-error");
+	box.append(el("p", "", describeFailure(error, { retry: false })));
+	const retry = button("再试一次", "btn btn-quiet btn-sm", () => {
+		if (state.recordsPane) void refreshRecords(state.recordsPane);
+	});
+	retry.type = "button";
+	box.append(retry);
+	body.append(box);
+}
+
+/**
+ * 现拉一次列表。抽屉开着时，一轮生成结束后也走它。
+ *
+ * 序号挡串号：作者连点两下、或收尾那次比手点那次先回来，只认最新一次。
+ */
+async function refreshRecords(pane) {
+	const url = recordsUrl(pane);
+	const layer = ensureRecordsEls();
+	if (!url) {
+		recordsItems = [];
+		renderRecordsList(pane);
+		return;
+	}
+	const seq = ++recordsSeq;
+	// 第一下拉列表时先给一句「正在取」，别让人对着一块空白等。
+	if (!recordsItems.length && !layer.querySelector(".records-list")) {
+		const body = layer.querySelector(".records-body");
+		body.replaceChildren(el("p", "records-empty", "正在取这一席的记录…"));
+	}
+	try {
+		const data = await api(url);
+		if (seq !== recordsSeq) return;
+		recordsItems = Array.isArray(data.records) ? data.records : [];
+	} catch (error) {
+		if (seq !== recordsSeq) return;
+		recordsItems = [];
+		renderRecordsError(error);
+		return;
+	}
+	renderRecordsList(pane);
+}
+
+/** 开抽屉：现拉一次列表，记下是谁开的（关上时焦点回原地）。 */
+function openRecords(pane) {
+	const spec = RECORD_PANES[pane];
+	if (!spec) return;
+	if (!state.projectId) return;
+	if (pane === "writing" && !state.chapterId) {
+		toast("先在左栏点开一章，再看这一章的记录。", "warn");
+		return;
+	}
+	const layer = ensureRecordsEls();
+	if (state.recordsPane === pane && !layer.hidden) return;
+	if (state.recordsPane) closeRecords();
+	state.recordsPane = pane;
+	recordsTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+	recordsItems = [];
+	layer.querySelector(".records-title").textContent = spec.title;
+	layer.querySelector(".records-sub").textContent = "最近 " + RECORDS_LIMIT + " 条 · 新的在前";
+	layer.hidden = false;
+	layer.classList.add("is-open");
+	openLayer("records:" + pane, () => closeRecords({ consumeHistory: false }));
+	renderRecordsList(pane);
+	void refreshRecords(pane);
+	layer.querySelector(".records-head .icon-btn")?.focus();
+}
+
+/** 关抽屉：点 ×、点遮罩、Esc、手机返回键都走这一条。 */
+function closeRecords(options = {}) {
+	const pane = state.recordsPane;
+	const layer = document.getElementById("records-layer");
+	if (!pane || !layer) return;
+	state.recordsPane = null;
+	layer.hidden = true;
+	layer.classList.remove("is-open");
+	if (recordsTrigger && recordsTrigger.isConnected) recordsTrigger.focus();
+	recordsTrigger = null;
+	if (options.consumeHistory !== false) closeLayer("records:" + pane);
+}
+
+/** 「接着这一席往下聊」：设定官这边要真开一席，把那段对话接上。 */
+async function resumeRecord(pane, record) {
+	if (streamBusy(pane)) {
+		toast("这一席还在落笔，等它收笔再发。", "warn");
+		return;
+	}
+	let full;
+	try {
+		const data = await api("/api/records/" + encodeURIComponent(record.id));
+		full = data.record;
+	} catch (error) {
+		toast(describeFailure(error, { retry: false }), "error");
+		return;
+	}
+	if (!full) return;
+	if (pane === "writing") {
+		if (!state.chapterId || full.chapterId !== state.chapterId) {
+			toast("这条记录属于别的章节：先切到那一章再接着写。", "warn");
+			return;
+		}
+		// 不建会话：只记下这条记录，下一轮「呈上」在 /write 的 body 里带上它。
+		state.writeRecordId = full.id;
+		state.writeRecordChapterId = full.chapterId ?? state.chapterId;
+		// 「接着第 N 轮写」里的 N 是**下一轮**的序号：已经说过几轮，就从下一轮接。
+		state.writeRecordTurns = countRecordRounds(full.messages) + 1;
+		renderRecordMessages("writing", full.messages);
+		refreshWriteActions();
+		closeRecords();
+		toast("接着这一条往下写；交代照旧写在下面，按「呈上」。", "ok");
+		return;
+	}
+
+	// 设定官这边得真开一席：缓存那一席接的是另一段对话，接不上这条记录。
+	const key = activeKey(pane);
+	const previous = state.sessions.get(key);
+	try {
+		const sessionId = await ensureSession(pane, { recordId: full.id });
+		// 旧席换下来就顺手删掉：它挂在服务端白占内存，直到 TTL 才回收。
+		if (previous && previous !== sessionId) {
+			fetch("/api/sessions/" + encodeURIComponent(previous), { method: "DELETE" }).catch(() => {});
+		}
+	} catch (error) {
+		toast(describeFailure(error, { retry: false }), "error");
+		return;
+	}
+	renderRecordMessages(pane, full.messages);
+	closeRecords();
+	toast("接着这一席往下聊。", "ok");
+}
+
+/** 删一条记录。删掉的若正是手里接着的那条，顺手把「接着写」也放下。 */
+async function deleteRecord(pane, record) {
+	if (streamBusy(pane)) {
+		toast("这一席还在落笔，等它收笔再动记录。", "warn");
+		return;
+	}
+	try {
+		await api("/api/records/" + encodeURIComponent(record.id), { method: "DELETE" });
+	} catch (error) {
+		toast(describeFailure(error, { retry: false }), "error");
+		return;
+	}
+	recordsItems = recordsItems.filter((item) => item.id !== record.id);
+	renderRecordsList(pane);
+	if (state.writeRecordId === record.id) {
+		clearWriteRecord();
+		toast("这条记录已删除。", "ok");
+	}
 }
 
 // ═══════════════════════════════════════════════════ 右案
@@ -4501,6 +5020,8 @@ async function selectProject(id) {
 	invalidateAllStreams();
 	resetProjectSessions();
 	state.chapterId = null;
+	// 换了卷，上一条「接着写」也就不作数了：它属于上一卷的某一章。
+	clearWriteRecord({ rerender: false });
 	state.editing = false;
 	clearEditorState();
 	state.uploads = [];
@@ -4619,6 +5140,8 @@ async function reloadProject() {
 	syncBodies();
 	if (state.chapterId && !state.project.outline.some((chapter) => chapter.id === state.chapterId)) {
 		state.chapterId = null;
+		// 章没了，接在这章上的「接着写」也没有落脚处了。
+		clearWriteRecord({ rerender: false });
 	}
 	renderAll();
 }
@@ -4895,6 +5418,203 @@ function scrollToBottom(pane, epoch) {
 	box.scrollTop = box.scrollHeight;
 }
 
+// ═══════════════════════════════════════════════════ 智能体提问
+
+/**
+ * 提问卡登记表：question id → 卡片元素。
+ *
+ * 关闭事件（超时 / 中止）未必带着原来的 epoch —— 那时这一轮可能已经换代次。
+ * 按 id 找卡比按面板找稳。
+ */
+const askCards = new Map();
+
+/**
+ * 渲染一张提问卡。
+ *
+ * 模型在行笔途中问作者一件事，服务端把提问顺着 NDJSON 流推过来
+ * （type: "question"），流不收 —— 它正阻塞着等作者回话。
+ * 作者一回答，同一轮就接着往下写，所以回答不走流，走另一个接口。
+ *
+ * 结构：
+ *   .ask-card[data-ask-id]
+ *     .ask-head     谁在问你
+ *     .ask-text     问什么
+ *     .ask-options  候选项（可能没有）
+ *     .ask-form     .ask-input ＋ .ask-send「回答」＋ .ask-skip「跳过」
+ *     .ask-note     回话结果 / 出错的话
+ *
+ * 卡片与 .tool 卡片同级，挂在这一轮内容的末尾 —— 不塞进 .msg 气泡里：
+ * 那是正文的地盘，提问不是正文。
+ */
+function renderQuestionCard(pane, event, epoch, waiting) {
+	const id = String(event.id ?? "");
+	if (!id) return null;
+	// 同一条提问推了两遍（重连后重放）：沿用旧卡，别摞两张。
+	const existing = askCards.get(id);
+	if (existing) return existing;
+
+	const card = el("div", "ask-card");
+	card.dataset.askId = id;
+	card.dataset.askPane = pane;
+
+	// 输入框先建出来：候选项要点一下把它填进去。
+	const input = el("input", "ask-input");
+	input.type = "text";
+	input.placeholder = "在这里回话…";
+	input.setAttribute("aria-label", "回话");
+
+	card.append(el("div", "ask-head", (PANES[pane]?.assistant ?? "智能体") + " 要问你"));
+	card.append(el("div", "ask-text", String(event.question ?? "")));
+
+	// 候选项：点一下把话填进框里，不直接交 —— 作者多半还要改。
+	const options = Array.isArray(event.options) ? event.options : [];
+	if (options.length) {
+		const box = el("div", "ask-options");
+		for (const option of options) {
+			const text = String(option ?? "");
+			const chip = button(text, "ask-option", () => {
+				input.value = text;
+				input.focus();
+			});
+			chip.type = "button";
+			box.append(chip);
+		}
+		card.append(box);
+	}
+
+	const form = el("div", "ask-form");
+	const send = button("回答", "btn btn-sm btn-ink ask-send", () => void submitAnswer(card, input.value));
+	const skip = button("跳过", "btn btn-sm btn-quiet ask-skip", () => void submitAnswer(card, ""));
+	send.type = "button";
+	skip.type = "button";
+	form.append(input, send, skip);
+	card.append(form);
+
+	card.append(el("div", "ask-note"));
+
+	// 回车即回答：作者的手不必离开键盘。
+	input.addEventListener("keydown", (event) => {
+		if (event.key === "Enter" && !event.shiftKey) {
+			event.preventDefault();
+			void submitAnswer(card, input.value);
+		}
+	});
+
+	askCards.set(id, card);
+	streamNode(pane, epoch).append(card);
+	scrollToBottom(pane, epoch);
+	// 占位还在的话让它改口：此刻不是在想，是在等作者。
+	setWaitingPhase(waiting, "等你回话…");
+	return card;
+}
+
+/**
+ * 把作者的回答送回服务端。
+ *
+ * POST /api/questions/<id>/answer，体是 {"answer": "作者写的内容"}；
+ * 空串表示作者跳过。
+ *
+ * 送出去之后这一轮就松开了：智能体在同一轮里接着写。
+ * 所以成功后不能把卡片撤掉 —— 那是这一轮的一部分，抹了作者就看不见自己答过什么。
+ */
+async function submitAnswer(card, raw) {
+	if (!card || card.dataset.askBusy === "1") return;
+	const id = String(card.dataset.askId ?? "");
+	if (!id) return;
+	const value = String(raw ?? "").trim();
+
+	card.dataset.askBusy = "1";
+	card.classList.add("is-sending");
+	setAskEnabled(card, false);
+	const note = card.querySelector(".ask-note");
+	if (note) note.textContent = "正在送出…";
+	try {
+		const res = await fetch("/api/questions/" + encodeURIComponent(id) + "/answer", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ answer: value }),
+		});
+		if (res.status === 404) {
+			// 问题不存在或已经结束（超时 / 中止 / 已答过）：没什么可答的了。
+			markAskClosed(card, "is-closed", "这个问题已经结束了");
+			return;
+		}
+		if (!res.ok) {
+			const data = await res.json().catch(() => ({}));
+			throw new Error(data.error || "请求失败 (" + res.status + ")");
+		}
+		markAskAnswered(card, value);
+	} catch (error) {
+		// 送不出去不是作者的错：卡片留着，让他再按一次。
+		card.dataset.askBusy = "";
+		card.classList.remove("is-sending");
+		setAskEnabled(card, true);
+		if (note) note.textContent = "没送出去：" + describeFailure(error, { retry: false }) + "可以再试一次。";
+	}
+}
+
+/**
+ * 提问被关掉了：超时、作者中止，或已经答过。
+ *
+ * 这一条未必带着原来的 epoch，所以按 id 找卡：先问登记表，再问文档，
+ * 最后问这块面板的流节点（作者切过章时卡片寄放在游离容器里，文档里找不到）。
+ */
+function closeQuestionCard(pane, event) {
+	const id = String(event.id ?? "");
+	if (!id) return;
+	let card = askCards.get(id);
+	if (!card || !card.isConnected) {
+		const found = document.querySelector(askSelector(id));
+		if (found) card = found;
+	}
+	if (!card) {
+		const node = streamNode(pane);
+		const found = node?.querySelector?.(askSelector(id));
+		if (found) card = found;
+	}
+	if (!card) return;
+	const reason = String(event.reason ?? "");
+	if (reason === "answered") markAskAnswered(card, card.dataset.askAnswer ?? "");
+	else if (reason === "timeout") markAskClosed(card, "is-timeout", "作者没回答，这个问题已经超时");
+	else markAskClosed(card, "is-closed", "作者中止了这一轮");
+	askCards.delete(id);
+}
+
+/** 按 id 找提问卡的选择器。id 是 uuid，但仍旧走一层转义，不拿它拼裸选择器。 */
+function askSelector(id) {
+	const safe = window.CSS && typeof CSS.escape === "function" ? CSS.escape(id) : id.replace(/["\\]/g, "\\$&");
+	return '[data-ask-id="' + safe + '"]';
+}
+
+/** 禁 / 启提问卡的输入框与按钮。 */
+function setAskEnabled(card, enabled) {
+	const input = card.querySelector(".ask-input");
+	if (input) input.disabled = !enabled;
+	for (const node of card.querySelectorAll(".ask-option, .ask-send, .ask-skip")) node.disabled = !enabled;
+}
+
+/** 回答送到了：卡片封存，把作者写的话留在面上。 */
+function markAskAnswered(card, value) {
+	card.classList.remove("is-sending");
+	card.classList.add("is-answered");
+	card.dataset.askAnswer = value ?? "";
+	setAskEnabled(card, false);
+	const note = card.querySelector(".ask-note");
+	if (note) note.textContent = value ? "已回话：" + value : "已跳过";
+	// 问完了，占位改回「正在落笔」—— 这一轮还没收笔。
+	const pane = card.dataset.askPane;
+	if (pane) setWaitingPhase(streamSlot(pane).waiting, "正在落笔…");
+}
+
+/** 提问没法再答了：封存卡片，说清为什么。 */
+function markAskClosed(card, className, text) {
+	card.classList.remove("is-sending");
+	card.classList.add(className);
+	setAskEnabled(card, false);
+	const note = card.querySelector(".ask-note");
+	if (note) note.textContent = text;
+}
+
 // ═══════════════════════════════════════════════════ 等待占位
 
 /**
@@ -4976,10 +5696,6 @@ function setStreaming(pane, busy = true) {
 			submit.disabled = busy;
 			submit.textContent = busy ? "落笔中" : "呈上";
 		}
-		// 作业条上那颗「装料成文」也要跟着停：一轮还没落完，按了也发不出去。
-		// empty 标记留着 —— 没装料的章本来就不该写，收笔了也不能放行。
-		const go = talk.querySelector("[data-write-go]");
-		if (go) go.disabled = busy || go.dataset.empty === "1";
 		talk.querySelector("[data-abort]")?.classList.toggle("hidden", !busy);
 	}
 	// 收笔了就去补发那些生成途中被挡下的换笔请求。
@@ -5019,7 +5735,7 @@ async function sendModelSwitch(sessionId, key) {
 	} catch (error) {
 		// 网络抽风也一样要留痕：静默吞掉的话，作者要到下一轮跑出旧笔的字才会发现。
 		state.pendingModelSwitch.set(sessionId, key);
-		toast("换笔没能送到：" + error.message + "，收笔后会再试。", "warn", 5200);
+		toast("换笔没能送到：" + describeFailure(error, { retry: false }) + "收笔后会再试。", "warn", 5200);
 	}
 }
 
@@ -5067,6 +5783,9 @@ async function startNewChat(pane) {
 	}
 	state.pendingNewChat = null;
 
+	// 弃席就是不再接着那条记录。小条跟着收掉，下一轮「呈上」另开一条记录。
+	if (pane === "writing") clearWriteRecord();
+
 	// 正在跑的那一轮挂在这个会话上，会话没了就该收手 ——
 	// 先作废代次再收尾，否则它会把半截内容写回快照。
 	// 只作废自己这一块：邻栏跑着的那一轮跟这次弃席毫无关系。
@@ -5101,10 +5820,11 @@ function renderNewChatButtons() {
 	}
 }
 
-async function ensureSession(role) {
+async function ensureSession(role, options = {}) {
 	const key = activeKey(role);
 	const cached = state.sessions.get(key);
-	if (cached) return cached;
+	// 接着聊必须新开一席：缓存那席接的是另一段对话，接不上这条记录。
+	if (cached && !options.recordId) return cached;
 	const modelRef = $("model-select").value;
 	if (!modelRef) throw new Error("请先到设置里备好笔墨");
 	// 库作用域不传 projectId：那时作者可能一部书都还没建，
@@ -5114,6 +5834,8 @@ async function ensureSession(role) {
 			? { scope: "library", role: "material", modelRef, thinkingLevel: $("thinking-select").value }
 			: { projectId: state.projectId, role, modelRef, thinkingLevel: $("thinking-select").value };
 	if (role === "writing") body.chapterId = state.chapterId;
+	// 带着记录开席：服务端会把那段对话塞回新会话，接着往下聊。
+	if (options.recordId) body.recordId = options.recordId;
 	const data = await api("/api/sessions", { method: "POST", body });
 	state.sessions.set(key, data.sessionId);
 	return data.sessionId;
@@ -5182,11 +5904,19 @@ async function sendMessage(pane, text, options = {}) {
 	beginStream(pane);
 	// 重试不重抄那句话 —— 原文就在上面那条里。
 	// 但要在对话里留一行「再试一次」，否则作者看见的是自己没说过的话凭空有了回答。
-	if (options.repeat) appendMessage(pane, "user", "再试一次");
-	else appendMessage(pane, "user", text);
+	// options.echo 为假时连这一行也不留：自动补发的场合，上面那条原话还在。
+	if (options.echo !== false) {
+		if (options.repeat) appendMessage(pane, "user", "再试一次");
+		else appendMessage(pane, "user", text);
+	}
 	const waiting = showWaiting(pane);
 	setStreaming(pane);
 	const epoch = streamSlot(pane).epoch;
+	// 这一轮成没成、是不是断在网上：收尾那句话怎么说、要不要再报一条红字，都看它们。
+	let failed = false;
+	let networkDown = false;
+	// 会话随服务重启没了：收尾之后自动重开一席，把这句话再送一次。
+	let reopen = false;
 	try {
 		const sessionId = await ensureSession(pane);
 		const res = await fetch("/api/sessions/" + sessionId + "/messages", {
@@ -5210,13 +5940,23 @@ async function sendMessage(pane, text, options = {}) {
 			// 自动丢掉它，下一次「呈上」就会开一席新的 —— 而不是让作者先去点两次“另起一席”。
 			if (/会话/.test(error.message) && /(不存在|过期)/.test(error.message)) {
 				state.sessions.delete(activeKey(pane));
-				toast("会话已过期，已自动重开一席，请再发一次。", "warn", 5200);
+				// 作者点的是「再试一次」，不是「再打一遍」：自动换一席把这句话送出去。
+				// 只自动补一次 —— 新席还报"不存在"，那就是别的问题了，得让人看见。
+				if (!options.reopened) {
+					reopen = true;
+					toast("这一席随服务重启没了，已另开一席，正在重发…", "warn", 5200);
+				} else {
+					toast("会话已过期，已自动重开一席，请再发一次。", "warn", 5200);
+				}
 			} else {
-				appendMessage(pane, "error", error.message, epoch, {
+				failed = true;
+				networkDown = isNetworkFailure(error);
+				appendMessage(pane, "error", describeFailure(error), epoch, {
 					actions: retryActions(() => retryRound(pane, text, outgoing)),
 				});
 			}
-			restoreComposer(pane, text);
+			// 要自动补发就别把原话塞回输入框：那会变成同一句话说两遍。
+			if (!reopen) restoreComposer(pane, text);
 		}
 	} finally {
 		dismissWaiting(pane, waiting);
@@ -5225,10 +5965,18 @@ async function sendMessage(pane, text, options = {}) {
 			setStreaming(pane, false);
 			// 设定官这一轮可能新建或改了素材：重载让素材库与生文工作台同步跟上。
 			// 库面板尤其要紧 —— 它写的正是库本身，不重载就看不见刚备好的料。
-			if (pane === "library") await reloadLibrarySafely(pane, "这一轮已完成，但通用素材库没能刷新");
-			else await reloadProjectSafely(pane, "这一轮已完成，但右案与素材库没能同步刷新");
+			// 网络已经断过就静默重载：同一场故障不必在红字里说两遍。
+			const quiet = networkDown ? { quiet: true } : {};
+			if (pane === "library") {
+				await reloadLibrarySafely(pane, failed ? "这一轮没能收尾，通用素材库没能刷新" : "这一轮已完成，但通用素材库没能刷新", quiet);
+			} else {
+				await reloadProjectSafely(pane, failed ? "这一轮没能收尾，右案与素材库没能同步刷新" : "这一轮已完成，但右案与素材库没能同步刷新", quiet);
+			}
 		}
 	}
+	// 这一轮已落进记录：抽屉开着就悄悄换一页，不必让作者自己再点开一次。
+	if (state.recordsPane) void refreshRecords(state.recordsPane);
+	if (reopen) void sendMessage(pane, text, { outgoing, echo: false, reopened: true });
 }
 
 /**
@@ -5252,24 +6000,60 @@ function retryRound(pane, text, outgoing) {
  * 收尾重载。裸 await 在 finally 里抛出去就是一条没人接的 rejection：
  * 右案、素材库、章目全停在旧状态，界面看着正常其实已经过期。
  * 至少要让作者看见一句话。
+ *
+ * 断线时不立刻认输：服务重启通常一两秒就好，多敲几次门，
+ * 端口一回来就把右案补上 —— 作者只该看见一条红字，而不是第二条
+ * "右案没能同步刷新"。那本来就不是新故障，是同一个故障的第二句话。
+ *
+ * options.quiet：这一轮已经因为断网报过一次了。重试到底仍接不上就闭嘴，
+ * 免得同一场故障说两遍。
  */
-async function reloadProjectSafely(pane, note) {
-	try {
-		await reloadProject();
-	} catch (error) {
-		appendMessage(pane, "error", note + "：" + error.message);
+const RELOAD_RETRY_DELAYS = [400, 900, 1800, 2600];
+
+function sleep(ms) {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function reloadWithRetries(task) {
+	let attempts = 0;
+	let lastError = null;
+	for (const delay of [0, ...RELOAD_RETRY_DELAYS]) {
+		if (delay) await sleep(delay);
+		attempts += 1;
+		try {
+			await task();
+			return { ok: true, attempts };
+		} catch (error) {
+			lastError = error;
+			// 只有网络层故障值得再敲一次门；接口自己回了错，再试也是一样的错。
+			if (!isNetworkFailure(error)) return { ok: false, attempts, error, network: false };
+		}
 	}
+	return { ok: false, attempts, error: lastError, network: true };
+}
+
+/** 重试过才回来：说明刚才断了线，补一句轻提示把界面上的话说圆。 */
+function noteReconnected(what, attempts) {
+	if (attempts > 1) toast("连线断过一次，" + what + "已重新同步。", "info", 4200);
+}
+
+async function reloadProjectSafely(pane, note, options = {}) {
+	const result = await reloadWithRetries(reloadProject);
+	if (result.ok) return noteReconnected("右案与素材库", result.attempts);
+	if (options.quiet && result.network) return;
+	appendMessage(pane, "error", note + "：" + describeFailure(result.error, { retry: false }));
 }
 
 /** 库面板的收尾重载。与作品那支同理：失败要让作者看见，不能静默过期。 */
-async function reloadLibrarySafely(pane, note) {
-	try {
+async function reloadLibrarySafely(pane, note, options = {}) {
+	// 库面板写的就是库本身，重载完必须重绘，否则刚备好的料不在屏上。
+	const result = await reloadWithRetries(async () => {
 		await reloadLibrary();
-		// 库面板写的就是库本身，重载完必须重绘，否则刚备好的料不在屏上。
 		renderView();
-	} catch (error) {
-		appendMessage(pane, "error", note + "：" + error.message);
-	}
+	});
+	if (result.ok) return noteReconnected("素材库", result.attempts);
+	if (options.quiet && result.network) return;
+	appendMessage(pane, "error", note + "：" + describeFailure(result.error, { retry: false }));
 }
 
 /**
@@ -5394,6 +6178,18 @@ async function pumpStream(res, pane, epoch = streamSlot(pane).epoch, waiting = n
 						appendTool(pane, event.name, event.preview, event.isError, epoch);
 					}
 					scrollToBottom(pane, epoch);
+					break;
+				}
+				case "question": {
+					// 模型在行笔途中问作者一件事。卡片自带输入框：
+					// 主输入框这一轮是禁的（setStreaming），复用不了。
+					renderQuestionCard(pane, event, epoch, waiting);
+					break;
+				}
+				case "question_closed": {
+					// 超时、作者中止，或已答。关闭事件未必带原来的 epoch，
+					// 卡片按 id 找。
+					closeQuestionCard(pane, event);
 					break;
 				}
 				case "run_end":
@@ -5665,6 +6461,11 @@ document.addEventListener("keydown", (event) => {
 		// 有弹层在，Esc 的活归 dialog 的 cancel 事件（见「层管理」）——
 		// 那里同样走一遍层管理器，历史才收得干净，也不会一次关两层。
 		if (document.querySelector("dialog[open]")) return;
+		// 记录抽屉是自建的浮层，不归 dialog 的 cancel 管：它先关，再轮到别的层。
+		if (state.recordsPane) {
+			closeRecords();
+			return;
+		}
 		if (document.querySelector(".desk.is-rail-open")) {
 			closeRailDrawer();
 			return;
@@ -5712,6 +6513,12 @@ for (const [pane, ids] of Object.entries(PANES)) {
 	form.addEventListener("submit", (event) => {
 		event.preventDefault();
 		const text = $(ids.input).value.trim();
+		// 执笔者这颗「呈上」发的是成文请求：交代可空，写法看作业条上的下拉。
+		// 空着呈上就是「照当前写法写这一章，没别的交代」—— 原来那颗「装料成文」。
+		if (pane === "writing") {
+			submitWriting(text);
+			return;
+		}
 		// 库面板不绑作品，不能拿 projectId 当门槛 —— 那会让它在案头上永远发不出去。
 		const needsProject = pane !== "library";
 		if (!text || streamBusy(pane) || (needsProject && !state.projectId)) return;
@@ -5749,6 +6556,18 @@ for (const [pane, ids] of Object.entries(PANES)) {
 // 另起一席：三个面板共用一套接线，靠 data-newchat 区分。
 for (const btn of document.querySelectorAll("[data-newchat]")) {
 	btn.addEventListener("click", () => void startNewChat(btn.dataset.newchat));
+}
+
+// 生成记录：执笔者与设定官的头部各开一扇。库面板这次不做。
+for (const pane of ["material", "writing"]) {
+	const newchat = document.querySelector('[data-newchat="' + pane + '"]');
+	const tools = newchat?.closest(".pane-tools");
+	if (!tools) continue;
+	const btn = button("记录", "btn btn-quiet btn-sm", () => openRecords(pane));
+	btn.type = "button";
+	btn.dataset.records = pane;
+	btn.title = pane === "writing" ? "这一章的生成记录" : "这一卷的设定记录";
+	tools.insertBefore(btn, newchat);
 }
 
 // 上传：点选 + 拖放

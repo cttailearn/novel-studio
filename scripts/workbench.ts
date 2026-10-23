@@ -69,21 +69,48 @@ const base = `http://127.0.0.1:${port}`;
 // 客户端断开要真的把上游请求掐掉，而真实模型需要 Key 与网络。这里起一个
 // OpenAI Chat Completions 兼容的本地假上游：回一段持续输出的 SSE，
 // 只要消费者断开，服务端那侧的连接就会关掉 —— 正好用来断言"中止真的传到了上游"。
+//
+// 假上游有四种说话方式：
+//   stream —— 持续吐字，不给 finish_reason，也不结束流（默认，用来测中止）。
+//   ask    —— 先回一个 ask_user 工具调用；收到带着工具结果的第二轮请求时
+//              再回一句话，把整轮收干净（用来测"智能体向作者提问"）。
+//   write  —— 第一轮回一个 write_chapter 工具调用（固定正文），第二轮收尾；
+//              用来在不碰真模型的前提下落下一版可被局部修改的正文。
+//   patch  —— 第一轮回一个 revise_chapter 工具调用（只换 patchTarget 指的那一处），
+//              第二轮收尾；用来端到端验证"只改几处，其余一字不动"。
 const mockPort = await freePort();
 let upstreamHits = 0;
+const upstreamBodies: string[] = [];
+let mockMode: "stream" | "ask" | "write" | "patch" = "stream";
 let resolveUpstreamClosed: () => void = () => undefined;
 const upstreamClosed = new Promise<void>((resolve) => {
 	resolveUpstreamClosed = resolve;
 });
+const ASK_QUESTION = "主角叫什么，出身如何？";
+const ASK_OPTIONS = ["沈砚，寒门", "陆昭，世家"];
+// 成文与局部修改共用的固定正文：留一段唯一好认的原文，才能断言"只动了这一处"。
+const WRITE_BODY = [
+	"裴渡在渡口数人头，数到第十九个就停了。",
+	"老周把船缆绕在桩上，等一个不来的客人。",
+	"江面起了雾，雾里没有第二条船。",
+].join("\n\n");
+const PATCH_FIND = "数到第十九个就停了。";
+const PATCH_REPLACE = "数到第二十个才停。";
+// 局部修改可以指向别的章（比如没装料的空渡章），所以目标由用例在发请求前设定。
+let patchTarget = { chapterId: "ch01", find: PATCH_FIND, replace: PATCH_REPLACE };
 const mockServer = createServer((req, res) => {
 	if (req.method !== "POST" || !String(req.url ?? "").endsWith("/chat/completions")) {
 		res.writeHead(404).end();
 		return;
 	}
-	req.resume();
 	upstreamHits += 1;
-	res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", connection: "keep-alive" });
-	const send = (delta: Record<string, unknown>) => {
+	// 连接一断就报上去：客户端关页时，服务端那侧的请求必须跟着断。
+	let timer: NodeJS.Timeout | undefined;
+	res.on("close", () => {
+		if (timer) clearInterval(timer);
+		resolveUpstreamClosed();
+	});
+	const send = (delta: Record<string, unknown>, finishReason: string | null = null) => {
 		if (res.writableEnded) return;
 		res.write(
 			"data: " +
@@ -92,18 +119,114 @@ const mockServer = createServer((req, res) => {
 					object: "chat.completion.chunk",
 					created: Date.now(),
 					model: "mock",
-					choices: [{ index: 0, delta, finish_reason: null }],
+					choices: [{ index: 0, delta, finish_reason: finishReason }],
 				}) +
 				"\n\n",
 		);
 	};
+	/** 收尾：给 finish_reason，再发 [DONE]，然后关掉这条流。 */
+	const finish = (reason: string) => {
+		send({}, reason);
+		res.write("data: [DONE]\n\n");
+		res.end();
+	};
+	if (mockMode === "ask") {
+		// 提问那一轮要看清请求里有没有工具结果，才知道该发问还是该收尾。
+		const chunks: Buffer[] = [];
+		req.on("data", (chunk: Buffer) => chunks.push(chunk));
+		req.on("end", () => {
+			const body = Buffer.concat(chunks).toString("utf8");
+			upstreamBodies.push(body);
+			res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", connection: "keep-alive" });
+			let hasToolResult = false;
+			try {
+				const parsed = JSON.parse(body) as { messages?: { role?: string }[] };
+				hasToolResult = (parsed.messages ?? []).some((message) => message.role === "tool");
+			} catch {
+				// 解析不出就当没有工具结果，照常发问。
+			}
+			if (!hasToolResult) {
+				// 第一轮：向作者发问。arguments 必须是一整段 JSON 字符串。
+				send({
+					role: "assistant",
+					tool_calls: [
+						{
+							index: 0,
+							id: "call_ask_1",
+							type: "function",
+							function: {
+								name: "ask_user",
+								arguments: JSON.stringify({ question: ASK_QUESTION, options: ASK_OPTIONS }),
+							},
+						},
+					],
+				});
+				finish("tool_calls");
+				return;
+			}
+			// 第二轮：作者已经回话，工具结果也回来了，收一句话把这一轮了结。
+			send({ role: "assistant", content: "" });
+			send({ content: "记下了，接着办。" });
+			finish("stop");
+		});
+		return;
+	}
+	if (mockMode === "write" || mockMode === "patch") {
+		// 成文与局部修改都是两轮：第一轮给工具调用，收到工具结果后第二轮收尾。
+		// "第几轮"只看请求里有没有工具结果 —— 服务端不额外喂标记，协议本身就能分。
+		const chunks: Buffer[] = [];
+		req.on("data", (chunk: Buffer) => chunks.push(chunk));
+		req.on("end", () => {
+			const body = Buffer.concat(chunks).toString("utf8");
+			upstreamBodies.push(body);
+			res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", connection: "keep-alive" });
+			let hasToolResult = false;
+			try {
+				const parsed = JSON.parse(body) as { messages?: { role?: string }[] };
+				hasToolResult = (parsed.messages ?? []).some((message) => message.role === "tool");
+			} catch {
+				// 解析不出就当第一轮，照常发工具调用。
+			}
+			if (!hasToolResult) {
+				const call =
+					mockMode === "write"
+						? {
+							id: "call_write_1",
+							name: "write_chapter",
+							arguments: { chapterId: "ch01", title: "核载二十人", content: WRITE_BODY, mode: "create" },
+						}
+						: {
+							id: "call_patch_1",
+							name: "revise_chapter",
+							arguments: { chapterId: patchTarget.chapterId, find: patchTarget.find, replace: patchTarget.replace },
+						};
+				// 工具调用的每一片都必须带 index / id / type / function.name，
+				// arguments 是整段 JSON 字符串；少了任何一样，pi-ai 都拼不出这次调用。
+				send({
+					role: "assistant",
+					tool_calls: [
+						{
+							index: 0,
+							id: call.id,
+							type: "function",
+							function: { name: call.name, arguments: JSON.stringify(call.arguments) },
+						},
+					],
+				});
+				finish("tool_calls");
+				return;
+			}
+			send({ role: "assistant", content: "" });
+			send({ content: mockMode === "write" ? "本章已写完。" : "只改了那一句，其余没动。" });
+			finish("stop");
+		});
+		return;
+	}
+	req.resume();
+	res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", connection: "keep-alive" });
 	send({ role: "assistant", content: "" });
 	send({ content: "正在写。" });
-	const timer = setInterval(() => send({ content: "……" }), 100);
-	res.on("close", () => {
-		clearInterval(timer);
-		resolveUpstreamClosed();
-	});
+	timer = setInterval(() => send({ content: "……" }), 100);
 });
 await new Promise<void>((resolve) => mockServer.listen(mockPort, "127.0.0.1", resolve));
 
@@ -293,6 +416,101 @@ function streamSessionMessage(sessionId: string): { destroy: () => void; started
 	client.on("error", () => undefined);
 	client.end(JSON.stringify({ input: "写点什么" }));
 	return { destroy: () => client.destroy(), started };
+}
+
+/**
+ * 读完一整条 NDJSON 流，中途遇到提问就当场回话。
+ *
+ * 提问是"流里插一句话"：智能体在工具里挂着等，作者的回答走另一条 HTTP 请求，
+ * 答完这一轮才继续往下走。所以这里必须边读边答，不能先把流读完再说。
+ */
+async function streamSessionAnswering(
+	sessionId: string,
+	answer: string,
+): Promise<{ events: Record<string, any>[]; questionId: string; answeredStatus: number }> {
+	const res = await fetch(base + `/api/sessions/${sessionId}/messages`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ input: "帮我把这本书的设定立起来" }),
+	});
+	const events: Record<string, any>[] = [];
+	let questionId = "";
+	let answeredStatus = 0;
+	const reader = res.body?.getReader();
+	if (!reader) return { events, questionId, answeredStatus };
+	const decoder = new TextDecoder();
+	let buffer = "";
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		buffer += decoder.decode(value, { stream: true });
+		let cut = buffer.indexOf("\n");
+		while (cut >= 0) {
+			const line = buffer.slice(0, cut).trim();
+			buffer = buffer.slice(cut + 1);
+			if (line) {
+				const event = JSON.parse(line) as Record<string, any>;
+				events.push(event);
+				if (event.type === "question" && !questionId) {
+					questionId = String(event.id ?? "");
+					const reply = await fetch(base + `/api/questions/${questionId}/answer`, {
+						method: "POST",
+						headers: { "content-type": "application/json" },
+						body: JSON.stringify({ answer }),
+					});
+					answeredStatus = reply.status;
+				}
+			}
+			cut = buffer.indexOf("\n");
+		}
+	}
+	return { events, questionId, answeredStatus };
+}
+
+/**
+ * 跑一次 POST /chapters/:id/write，把整条 NDJSON 流读完。
+ *
+ * 一次性成文与局部修改都从这个接口起步：它不建常驻会话、不留历史。
+ * 校验失败时回的是普通 JSON（400 / 404 / 409），成功时才是 NDJSON 事件流。
+ */
+async function streamWrite(
+	projectId: string,
+	chapterId: string,
+	body: Record<string, unknown>,
+): Promise<{ status: number; events: Record<string, any>[]; data: Record<string, any> }> {
+	const res = await fetch(base + `/api/projects/${projectId}/chapters/${chapterId}/write`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify(body),
+	});
+	if (!res.ok) {
+		const text = await res.text();
+		let data: Record<string, any> = {};
+		try {
+			data = JSON.parse(text) as Record<string, any>;
+		} catch {
+			data = { raw: text };
+		}
+		return { status: res.status, events: [], data };
+	}
+	const events: Record<string, any>[] = [];
+	const reader = res.body?.getReader();
+	if (!reader) return { status: res.status, events, data: {} };
+	const decoder = new TextDecoder();
+	let buffer = "";
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		buffer += decoder.decode(value, { stream: true });
+		let cut = buffer.indexOf("\n");
+		while (cut >= 0) {
+			const line = buffer.slice(0, cut).trim();
+			buffer = buffer.slice(cut + 1);
+			if (line) events.push(JSON.parse(line) as Record<string, any>);
+			cut = buffer.indexOf("\n");
+		}
+	}
+	return { status: res.status, events, data: {} };
 }
 
 try {
@@ -839,6 +1057,98 @@ try {
 	const writeUnknownProject = await req("POST", "/api/projects/nope/chapters/ch01/write", {});
 	check("工程不存在返回 404", writeUnknownProject.status === 404);
 
+	// ---- 局部修改（第四档写法：只改几处，不整章重交）----
+	console.log("\n局部修改");
+	// 先装料再成文：patch 用例需要一版真实落盘的正文当底座，而正文只能由执笔者写入。
+	const patchLoaded = await req("POST", `/api/projects/${seedId}/chapters/ch01/materials`, { add: ["seed-mat-2"] });
+	check(
+		"局部修改前先给 ch01 装料",
+		patchLoaded.status === 200 && patchLoaded.data.chapter.materialIds.join() === "seed-mat-2",
+		JSON.stringify(patchLoaded.data.chapter?.materialIds),
+	);
+
+	mockMode = "write";
+	const writeRun = await streamWrite(seedId, "ch01", { mode: "create", modelRef: "mock/mock" });
+	check("成文流以 run_end 收尾", writeRun.status === 200 && writeRun.events.some((event) => event.type === "run_end"), String(writeRun.status) + " " + JSON.stringify(writeRun.events.map((event) => event.type)));
+	const writeToolEnd = writeRun.events.find((event) => event.type === "tool_end" && event.name === "write_chapter");
+	check("整章成文调用了 write_chapter", Boolean(writeToolEnd) && writeToolEnd?.isError !== true, JSON.stringify(writeToolEnd));
+	const freshDraft = await req("GET", `/api/projects/${seedId}/chapters/ch01/draft`);
+	check("成文正文已落地", freshDraft.data.chapter?.content === WRITE_BODY, String(freshDraft.data.chapter?.content));
+	check("成文是第 1 版", freshDraft.data.chapter?.revision === 1, String(freshDraft.data.chapter?.revision));
+
+	// 同一章发 mode: patch —— 只换 find 指的那一处，其余一个字都不该动。
+	mockMode = "patch";
+	patchTarget = { chapterId: "ch01", find: PATCH_FIND, replace: PATCH_REPLACE };
+	const patchRun = await streamWrite(seedId, "ch01", { mode: "patch", modelRef: "mock/mock" });
+	check(
+		"局部修改流正常收尾（有 run_end、没有 error）",
+		patchRun.status === 200 &&
+			patchRun.events.some((event) => event.type === "run_end") &&
+			!patchRun.events.some((event) => event.type === "error"),
+		String(patchRun.status) + " " + JSON.stringify(patchRun.events.map((event) => event.type)),
+	);
+	const patchToolEnd = patchRun.events.find((event) => event.type === "tool_end" && event.name === "revise_chapter");
+	check("局部修改调用了 revise_chapter", Boolean(patchToolEnd) && patchToolEnd?.isError !== true, JSON.stringify(patchToolEnd));
+	check("工具结果点明其余一字未动", String(patchToolEnd?.preview ?? "").includes("其余一字未动"), String(patchToolEnd?.preview ?? ""));
+
+	const patchedDraft = await req("GET", `/api/projects/${seedId}/chapters/ch01/draft`);
+	check("局部修改后是第 2 版", patchedDraft.data.chapter?.revision === 2, String(patchedDraft.data.chapter?.revision));
+	check(
+		"正文只在 find 那处变了",
+		patchedDraft.data.chapter?.content === WRITE_BODY.replace(PATCH_FIND, PATCH_REPLACE),
+		String(patchedDraft.data.chapter?.content),
+	);
+	check(
+		"其余一字未动（首尾段落原样）",
+		String(patchedDraft.data.chapter?.content ?? "").startsWith("裴渡在渡口数人头，数到第二十个才停。\n\n") &&
+			String(patchedDraft.data.chapter?.content ?? "").includes("老周把船缆绕在桩上，等一个不来的客人。") &&
+			String(patchedDraft.data.chapter?.content ?? "").endsWith("江面起了雾，雾里没有第二条船。"),
+		String(patchedDraft.data.chapter?.content),
+	);
+
+	// 正文之外还得有版本记录：历史里最后一版记着这次是 patch 改出来的。
+	const patchHistory = await req("GET", `/api/projects/${seedId}/chapters/ch01/draft?history=1`);
+	const patchHistoryItems = (patchHistory.data.chapter?.history ?? []) as Record<string, any>[];
+	check("局部修改留下了历史版本", patchHistoryItems.length === 1, JSON.stringify(patchHistoryItems));
+	check("历史里这一版 mode 是 patch", patchHistoryItems.at(-1)?.mode === "patch", String(patchHistoryItems.at(-1)?.mode));
+	check("历史里存着改前的全文", patchHistoryItems.at(-1)?.content === WRITE_BODY, String(patchHistoryItems.at(-1)?.content));
+	check("历史稿次是第 1 版", patchHistoryItems.at(-1)?.revision === 1, String(patchHistoryItems.at(-1)?.revision));
+
+	// 没装料的章也能局部修改：料是"写"的来源，不是"改"的前提。
+	// 空渡章此前用 mode create 已被 409 拦住（见「成文前置校验」），正好当对照。
+	const emptyChapterId = String(made.data.chapter.id);
+	mockMode = "patch";
+	patchTarget = { chapterId: emptyChapterId, find: "江面起了雾。", replace: "江面起了雾，看不清对岸。" };
+	const emptyPatchRun = await streamWrite(seedId, emptyChapterId, { mode: "patch", modelRef: "mock/mock" });
+	check(
+		"没装料的章：patch 不被素材前置检查拦住",
+		emptyPatchRun.status === 200 && emptyPatchRun.events.some((event) => event.type === "run_end"),
+		String(emptyPatchRun.status) + " " + JSON.stringify(emptyPatchRun.data),
+	);
+	const emptyPatched = await req("GET", `/api/projects/${seedId}/chapters/${emptyChapterId}/draft`);
+	check(
+		"没装料的章：正文只改了那一处",
+		emptyPatched.data.chapter?.content === draftText.replace("江面起了雾。", "江面起了雾，看不清对岸。"),
+		String(emptyPatched.data.chapter?.content),
+	);
+
+	// 没有正文就无从"改"：验证服务端不会把它悄悄退化成"从零写起"。
+	const patchNoBody = await req("POST", `/api/projects/${seedId}/chapters/ch02/write`, { mode: "patch", modelRef: "mock/mock" });
+	check("没有正文的章发 patch 返回 409", patchNoBody.status === 409, String(patchNoBody.status) + " " + JSON.stringify(patchNoBody.data));
+	check("409 说清还没有正文", String(patchNoBody.data.error).includes("还没有正文"), String(patchNoBody.data.error));
+
+	// 非法 mode 仍按白名单拒绝，报错要列出四档写法，作者才知道有 patch 可选。
+	const patchBadMode = await req("POST", `/api/projects/${seedId}/chapters/ch01/write`, { mode: "nope", modelRef: "mock/mock" });
+	check("非法 mode 返回 400", patchBadMode.status === 400, String(patchBadMode.status) + " " + JSON.stringify(patchBadMode.data));
+	check(
+		"400 列出四档写法",
+		String(patchBadMode.data.error).includes("create / rewrite / continue / patch"),
+		String(patchBadMode.data.error),
+	);
+
+	// 后面的用例依赖假上游回到持续吐字模式。
+	mockMode = "stream";
+
 	// ---- 会话 ----
 	console.log("\n会话");
 	const noProject = await req("POST", "/api/sessions", { role: "material" });
@@ -884,6 +1194,227 @@ try {
 		afterAbortSwitch.status === 200,
 		String(afterAbortSwitch.status) + " " + JSON.stringify(afterAbortSwitch.data),
 	);
+
+	// ---- 智能体向作者提问 ----
+	console.log("\n智能体提问");
+	mockMode = "ask";
+	const bodiesBeforeAsk = upstreamBodies.length;
+	const askSession = await req("POST", "/api/sessions", { projectId: seedId, role: "material", modelRef: "mock/mock" });
+	check("提问会话可建", askSession.status === 201, JSON.stringify(askSession.data));
+	const askSessionId = String(askSession.data.sessionId ?? "");
+	const askRun = await streamSessionAnswering(askSessionId, "沈砚，寒门出身");
+	const askEvent = askRun.events.find((event) => event.type === "question");
+	check("智能体把问题送到了流里", Boolean(askEvent), JSON.stringify(askRun.events.map((event) => event.type)));
+	check("问题与候选项原样送达", askEvent?.question === ASK_QUESTION && Array.isArray(askEvent?.options) && askEvent.options.length === 2, JSON.stringify(askEvent));
+	check("回答接口回了 200", askRun.answeredStatus === 200, String(askRun.answeredStatus));
+	const closedEvent = askRun.events.find((event) => event.type === "question_closed");
+	check("问题以已回答收尾", closedEvent?.reason === "answered", JSON.stringify(closedEvent));
+	const askToolEnd = askRun.events.find((event) => event.type === "tool_end" && event.name === "ask_user");
+	check("提问工具执行成功", Boolean(askToolEnd) && askToolEnd?.isError !== true, JSON.stringify(askToolEnd));
+	const askBodies = upstreamBodies.slice(bodiesBeforeAsk);
+	check("工具结果回到了上游", askBodies.length >= 2 && (askBodies[1] ?? "").includes("沈砚，寒门出身"), "上游轮次：" + askBodies.length);
+	check("这一轮正常走完", askRun.events.some((event) => event.type === "run_end"), JSON.stringify(askRun.events.map((event) => event.type)));
+	// 问过之后不该有问号残留：再答一次就该 404。
+	const staleAnswer = await req("POST", `/api/questions/${askRun.questionId}/answer`, { answer: "再来一次" });
+	check("同一个问题不能答两遍", staleAnswer.status === 404, String(staleAnswer.status) + " " + JSON.stringify(staleAnswer.data));
+	mockMode = "stream";
+
+	// ---- 生成记录 ----
+	// 每轮落笔都会留档：列表按面板只留最近 10 条，能从旧记录接着写，也能删。
+	// 前面的用例已经留下成文、局部修改与两轮会话的记录，先清空再逐条断言，
+	// 免得"恰好还有几条"被上一段留下的记录带偏。
+	console.log("\n生成记录");
+	const recordsReply = (query: string) => req("GET", "/api/records" + query);
+	const listRecords = async (query: string): Promise<Record<string, any>[]> => {
+		const reply = await recordsReply(query);
+		return Array.isArray(reply.data.records) ? (reply.data.records as Record<string, any>[]) : [];
+	};
+	// 生成轮次在流结束之后才补写记录，留一点余量再清，免得清完又被补回。
+	await new Promise((resolve) => setTimeout(resolve, 300));
+	for (let round = 0; round < 5; round++) {
+		const remaining = await listRecords("?limit=50");
+		if (remaining.length === 0) break;
+		for (const record of remaining) await req("DELETE", "/api/records/" + String(record.id));
+		await new Promise((resolve) => setTimeout(resolve, 50));
+	}
+	const emptyAfterClean = await listRecords("?limit=50");
+	check("生成记录已清空（不吃前面几段的剩饭）", emptyAfterClean.length === 0, String(emptyAfterClean.length));
+
+	// 一轮成文：mode create 应留下一条带章名与写法的记录。
+	const REC_NOTE = "这一轮交代：雨夜追车要克制，别让裴渡先开口。";
+	mockMode = "write";
+	const firstWrite = await streamWrite(seedId, "ch01", { mode: "create", modelRef: "mock/mock", note: REC_NOTE });
+	check(
+		"成文一轮正常收尾",
+		firstWrite.status === 200 && firstWrite.events.some((event) => event.type === "run_end"),
+		String(firstWrite.status) + " " + JSON.stringify(firstWrite.events.map((event) => event.type)),
+	);
+	const ch01Query = "?role=writing&projectId=" + seedId + "&chapterId=ch01";
+	const ch01Appeared = await waitFor(async () => (await listRecords(ch01Query)).length === 1, 8_000);
+	const ch01Reply = await recordsReply(ch01Query);
+	check("记录列表可查", ch01Reply.status === 200, String(ch01Reply.status) + " " + JSON.stringify(ch01Reply.data));
+	const ch01Records = (ch01Reply.data.records ?? []) as Record<string, any>[];
+	check(
+		"一轮成文在 ch01 面板留下 1 条记录",
+		ch01Appeared && ch01Records.length === 1,
+		ch01Records.map((record) => String(record.title)).join(" | "),
+	);
+	const writingRecord = ch01Records[0]!;
+	check(
+		"记录标题带章名与写法",
+		String(writingRecord.title).includes("核载二十人") && String(writingRecord.title).includes("从零写起"),
+		String(writingRecord.title),
+	);
+	check("记录里至少有一问一答", Number(writingRecord.messageCount) >= 2, String(writingRecord.messageCount));
+	check(
+		"记录归属写作角色与本章",
+		writingRecord.role === "writing" && writingRecord.projectId === seedId && writingRecord.chapterId === "ch01",
+		JSON.stringify(writingRecord),
+	);
+	check(
+		"记录预览取自这一轮的助手收尾",
+		String(writingRecord.preview ?? "").includes("本章已写完"),
+		String(writingRecord.preview),
+	);
+
+	// 从这条接着写：不开新记录，对话在原记录上继续变长。
+	mockMode = "write";
+	const secondWrite = await streamWrite(seedId, "ch01", {
+		mode: "rewrite",
+		modelRef: "mock/mock",
+		recordId: writingRecord.id,
+	});
+	check(
+		"带旧记录接着写正常收尾",
+		secondWrite.status === 200 && secondWrite.events.some((event) => event.type === "run_end"),
+		String(secondWrite.status) + " " + JSON.stringify(secondWrite.events.map((event) => event.type)),
+	);
+	const resumedGrew = await waitFor(async () => {
+		const list = await listRecords(ch01Query);
+		return list.length === 1 && Number(list[0]?.messageCount) > Number(writingRecord.messageCount);
+	}, 8_000);
+	const afterResume = await listRecords(ch01Query);
+	check("接着写不开新记录", afterResume.length === 1, String(afterResume.length));
+	check("接着写的还是同一条记录", afterResume[0]?.id === writingRecord.id, String(afterResume[0]?.id));
+	check(
+		"接着写后对话变长",
+		resumedGrew && Number(afterResume[0]?.messageCount) > Number(writingRecord.messageCount),
+		writingRecord.messageCount + " -> " + String(afterResume[0]?.messageCount),
+	);
+	const storedRecord = await req("GET", "/api/records/" + String(writingRecord.id));
+	const storedMessages = (storedRecord.data.record?.messages ?? []) as unknown[];
+	check("记录详情能按 id 取到", storedRecord.status === 200, String(storedRecord.status) + " " + JSON.stringify(storedRecord.data));
+	check(
+		"详情里的 messages 数与列表一致",
+		storedMessages.length === Number(afterResume[0]?.messageCount),
+		storedMessages.length + " vs " + String(afterResume[0]?.messageCount),
+	);
+	check("上一轮的用户交代还在上下文里", JSON.stringify(storedMessages).includes(REC_NOTE));
+
+	// 记录与面板是绑死的：不在、或不属于本章，都不能将就着写。
+	const ghostRecordWrite = await streamWrite(seedId, "ch01", { recordId: "ghost-record", mode: "continue", modelRef: "mock/mock" });
+	check(
+		"带上不存在的记录 id 接着写返回 404",
+		ghostRecordWrite.status === 404,
+		String(ghostRecordWrite.status) + " " + JSON.stringify(ghostRecordWrite.data),
+	);
+	const ch02Loaded = await req("POST", "/api/projects/" + seedId + "/chapters/ch02/materials", { add: ["seed-mat-1"] });
+	check(
+		"临时给 ch02 装一条料（越过 409 才测得到 400）",
+		ch02Loaded.status === 200 && ch02Loaded.data.chapter.materialIds.includes("seed-mat-1"),
+		JSON.stringify(ch02Loaded.data),
+	);
+	const crossChapter = await streamWrite(seedId, "ch02", { recordId: String(writingRecord.id), mode: "create", modelRef: "mock/mock" });
+	check(
+		"拿 ch01 的记录去写 ch02 返回 400",
+		crossChapter.status === 400,
+		String(crossChapter.status) + " " + JSON.stringify(crossChapter.data),
+	);
+	check("400 说清记录属于别的章节", String(crossChapter.data.error ?? "").includes("别的章节"), String(crossChapter.data.error));
+	const ch02Unloaded = await req("POST", "/api/projects/" + seedId + "/chapters/ch02/materials", { remove: ["seed-mat-1"] });
+	check(
+		"ch02 的临时材料收回，后面的用例回到原样",
+		ch02Unloaded.status === 200 && ch02Unloaded.data.chapter.materialIds.length === 0,
+		JSON.stringify(ch02Unloaded.data.chapter?.materialIds),
+	);
+
+	// 删除：删掉就取不到，再删一次还是 404。
+	const deletedRecord = await req("DELETE", "/api/records/" + String(writingRecord.id));
+	check("删除记录返回 200 与 ok", deletedRecord.status === 200 && deletedRecord.data.ok === true, JSON.stringify(deletedRecord.data));
+	const goneRecord = await req("GET", "/api/records/" + String(writingRecord.id));
+	check("删掉的记录再取返回 404", goneRecord.status === 404, String(goneRecord.status));
+	const deleteAgain = await req("DELETE", "/api/records/" + String(writingRecord.id));
+	check("重复删除返回 404", deleteAgain.status === 404, String(deleteAgain.status));
+
+	// 设定官的一席：建会话时就落一条记录，一轮跑完消息补进去。
+	mockMode = "ask";
+	const materialSession = await req("POST", "/api/sessions", { projectId: seedId, role: "material", modelRef: "mock/mock" });
+	check(
+		"设定官会话返回 recordId",
+		materialSession.status === 201 && typeof materialSession.data.recordId === "string" && materialSession.data.recordId.length > 0,
+		JSON.stringify(materialSession.data),
+	);
+	const materialRecordId = String(materialSession.data.recordId ?? "");
+	const materialRun = await streamSessionAnswering(String(materialSession.data.sessionId ?? ""), "沈砚，寒门出身");
+	check(
+		"设定官这一轮正常收尾",
+		materialRun.events.some((event) => event.type === "run_end"),
+		JSON.stringify(materialRun.events.map((event) => event.type)),
+	);
+	const materialQuery = "?role=material&projectId=" + seedId;
+	const materialSaved = await waitFor(
+		async () => (await listRecords(materialQuery)).some((record) => record.id === materialRecordId && Number(record.messageCount) > 0),
+		8_000,
+	);
+	const materialRecords = await listRecords(materialQuery);
+	check("设定官的一轮落成 1 条记录", materialRecords.length === 1, materialRecords.map((record) => String(record.title)).join(" | "));
+	check("这条记录就是会话建的那条", materialRecords[0]?.id === materialRecordId, String(materialRecords[0]?.id));
+	check("设定官记录里对话非空", materialSaved && Number(materialRecords[0]?.messageCount) > 0, String(materialRecords[0]?.messageCount));
+	check("设定官记录按面板起名", materialRecords[0]?.title === "设定官的一席", String(materialRecords[0]?.title));
+
+	// 拿这条记录再开一席：沿用同一个 id，面板里仍然只有一条。
+	const resumedMaterialSession = await req("POST", "/api/sessions", {
+		projectId: seedId,
+		role: "material",
+		modelRef: "mock/mock",
+		recordId: materialRecordId,
+	});
+	check(
+		"带旧记录再开设定官会话返回 201",
+		resumedMaterialSession.status === 201,
+		String(resumedMaterialSession.status) + " " + JSON.stringify(resumedMaterialSession.data),
+	);
+	check("沿用同一条记录而不是新开", resumedMaterialSession.data.recordId === materialRecordId, String(resumedMaterialSession.data.recordId));
+	const afterMaterialResume = await listRecords(materialQuery);
+	check("复用记录后面板里仍然只有 1 条", afterMaterialResume.length === 1, String(afterMaterialResume.length));
+
+	// 库作用域的记录不属于任何工程，不能拿来开工程会话。
+	const librarySession = await req("POST", "/api/sessions", { scope: "library", role: "material", modelRef: "mock/mock" });
+	check(
+		"库作用域会话也带 recordId",
+		librarySession.status === 201 && typeof librarySession.data.recordId === "string",
+		JSON.stringify(librarySession.data),
+	);
+	const libraryRecordId = String(librarySession.data.recordId ?? "");
+	const libraryCross = await req("POST", "/api/sessions", {
+		projectId: seedId,
+		role: "material",
+		modelRef: "mock/mock",
+		recordId: libraryRecordId,
+	});
+	check(
+		"库记录不能拿来开工程会话",
+		libraryCross.status === 400,
+		String(libraryCross.status) + " " + JSON.stringify(libraryCross.data),
+	);
+	check("400 说清记录不属于这个面板", String(libraryCross.data.error ?? "").includes("不属于这个面板"), String(libraryCross.data.error));
+	const libraryRecordDeleted = await req("DELETE", "/api/records/" + libraryRecordId);
+	check("库记录用完即删", libraryRecordDeleted.status === 200, String(libraryRecordDeleted.status));
+
+	// 段末把记录清干净、假上游复位，后面的用例不受这一段影响。
+	const remainingAtEnd = await listRecords("?limit=50");
+	for (const record of remainingAtEnd) await req("DELETE", "/api/records/" + String(record.id));
+	mockMode = "stream";
 
 	// ---- 删除素材的连带清理 ----
 	console.log("\n删除素材");
@@ -1044,8 +1575,34 @@ try {
 	check("选中条与选中卡有样式", styleSource.includes(".picked-bar") && styleSource.includes(".card.mat.is-picked"));
 	// 一轮跑完要重载工程：新素材才会同步进素材库与生文工作台，然后才能装配。
 	// 现在收尾走 reloadProjectSafely（先包一层错误提示），所以给足切片长度并只认函数前缀。
-	const sendBody = appSource.slice(appSource.indexOf("async function sendMessage"), appSource.indexOf("async function sendMessage") + 2800);
+	const sendBody = appSource.slice(appSource.indexOf("async function sendMessage"), appSource.indexOf("async function sendMessage") + 3600);
 	check("对议跑完会重载工程以同步素材", sendBody.includes("reloadProject"));
+	// 断线时浏览器只说英文（"network error" / "Failed to fetch"）。作者读不懂，
+	// 也不该看见同一场故障在面板里报成两条。这两条守着那层翻译与去重。
+	check(
+		"网络层故障翻成中文",
+		appSource.includes("function isNetworkFailure") && appSource.includes("function describeFailure") && appSource.includes("服务没接上"),
+	);
+	check(
+		"同一次断线不连报两条红字",
+		appSource.includes("options.quiet") && appSource.includes("isNetworkFailure(error)") && appSource.includes("describeFailure(error"),
+	);
+	// 静默不等于放弃：服务重启往往一两秒就回来。重载要多敲几次门，
+	// 端口一回来就把右案补上，否则作者得自己刷新页面才知道稿子写没写成。
+	check(
+		"断线后的收尾重载会重试",
+		appSource.includes("RELOAD_RETRY_DELAYS") &&
+			appSource.includes("async function reloadWithRetries") &&
+			appSource.includes("noteReconnected"),
+	);
+	// 服务进程是"在线"本身：一次半路断线的写错误不该把它带走。
+	const mainSource = readFileSync(path.join(root, "src", "server", "main.ts"), "utf8");
+	check(
+		"服务端兜住未捕获异常与断线写错误",
+		mainSource.includes('process.on("uncaughtException"') &&
+			mainSource.includes('process.on("unhandledRejection"') &&
+			mainSource.includes('res.on("error"'),
+	);
 	// 立一章：章节是装料的落点，没有章就看不了也装不了料。
 	check("左卷有立章入口", indexHtml.includes('id="add-chapter"'));
 	check("有立章对话框", indexHtml.includes('id="chapter-dialog"') && indexHtml.includes('id="chapter-form"'));

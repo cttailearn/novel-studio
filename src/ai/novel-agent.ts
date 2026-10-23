@@ -11,6 +11,7 @@ import {
 	type WritingContext,
 } from "./prompts.ts";
 import { createLibraryTools, createMaterialTools, createWritingTools } from "./tools.ts";
+import type { AskBroker } from "./ask.ts";
 
 /**
  * 智能体角色。
@@ -38,6 +39,11 @@ export interface NovelAgentOptions {
 	 */
 	library?: MaterialLibrary;
 	thinkingLevel?: ThinkingLevel;
+	/**
+	 * 提问通道。给了才有 ask_user 工具 ——
+	 * 没有通道的场合（比如一次性写作）不给模型一个问不出去的工具。
+	 */
+	ask?: AskBroker;
 }
 
 /** 当会话里的工具结果超过这个数量时，丢弃最旧的部分。 */
@@ -103,7 +109,7 @@ export async function createNovelAgent(options: NovelAgentOptions): Promise<Agen
 				systemPrompt: buildLibrarySystemPrompt(options.library.list()),
 				model,
 				thinkingLevel: options.thinkingLevel ?? config.defaultThinkingLevel,
-				tools: createLibraryTools({ library: options.library }),
+				tools: createLibraryTools({ library: options.library, ask: options.ask }),
 			},
 			streamFn,
 			sessionId,
@@ -131,7 +137,7 @@ export async function createNovelAgent(options: NovelAgentOptions): Promise<Agen
 	const project = store.get(projectId);
 	if (!project) throw new Error(`工程 ${projectId} 不存在`);
 
-	const deps = { store, projectId };
+	const deps = { store, projectId, ask: options.ask };
 	const systemPrompt =
 		role === "material"
 			? buildMaterialSystemPrompt(project)

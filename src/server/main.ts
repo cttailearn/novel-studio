@@ -3,11 +3,13 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { Agent, type AgentEvent, type ThinkingLevel } from "@earendil-works/pi-agent-core";
+import { Agent, type AgentEvent, type AgentMessage, type ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
 import { createNovelAgent, type AgentRole } from "../ai/novel-agent.ts";
 import type { ChapterWriteMode, WritingContext } from "../ai/prompts.ts";
 import { extractText, MAX_UPLOAD_BYTES, UnsupportedUploadError, UploadTooLargeError } from "./upload.ts";
+import { answerQuestion, AskChannel } from "./ask.ts";
+import { RECORDS_KEEP, RecordStore, type RecordFilter, type RecordRole } from "./records.ts";
 import {
 	libraryFieldsOf,
 	materialFromLibrary,
@@ -55,7 +57,7 @@ const config = readConfig();
 const publicDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "public");
 
 /** 写作作业的三种性质，与提示词里的"作业"一一对应。 */
-const WRITE_MODES: readonly ChapterWriteMode[] = ["create", "rewrite", "continue"];
+const WRITE_MODES: readonly ChapterWriteMode[] = ["create", "rewrite", "continue", "patch"];
 
 /**
  * JSON 请求体上限。
@@ -103,6 +105,20 @@ interface Session {
 	model: Model<any>;
 	agent: Agent;
 	createdAt: number;
+	/**
+	 * 提问通道。
+	 *
+	 * 智能体问出来的问题要送到作者眼前，作者的回答再送回智能体 ——
+	 * 这一来一回都走这条通道。会话活多久，通道就活多久。
+	 */
+	ask: AskChannel;
+	/**
+	 * 这一席留档的记录 id。
+	 *
+	 * 会话是内存里的一次对话，进程一重启就没了；记录活在 data/records.json 里，
+	 * 作者回头还能把它捡起来接着写。两者共用同一个 id 生成的记录。
+	 */
+	recordId?: string;
 }
 
 const sessions = new Map<string, Session>();
@@ -124,6 +140,56 @@ function pruneSessions(): void {
 	// 还超量就按创建时间丢最老的。
 	const ordered = [...sessions.entries()].sort((a, b) => a[1].createdAt - b[1].createdAt);
 	for (const [id] of ordered.slice(0, sessions.size - SESSION_MAX)) sessions.delete(id);
+}
+
+/** 写作作业的中文叫法。按钮文案、提示语与记录标题都从这里取，别各写一份。 */
+const WRITE_MODE_LABELS: Record<ChapterWriteMode, string> = {
+	create: "从零写起",
+	rewrite: "整章重写",
+	continue: "续写下去",
+	patch: "局部修改",
+};
+
+/** 章节标题，找不到就退回章号。 */
+function chapterTitleOf(projectId: string, chapterId: string): string {
+	const chapter = store.get(projectId)?.outline.find((item) => item.id === chapterId);
+	return chapter?.title?.trim() || chapterId;
+}
+
+/**
+ * 给一轮生成起个名字。
+ *
+ * 记录列表是给作者认的："设定官的一席"三个月后毫无信息量，
+ * 所以写作记录带上章名与这一轮的写法（从零写起/整章重写/局部修改）。
+ */
+function recordTitleFor(input: {
+	role: AgentRole;
+	projectId?: string;
+	chapterId?: string;
+	libraryScope?: boolean;
+	mode?: ChapterWriteMode;
+}): string {
+	if (input.role === "writing" && input.projectId && input.chapterId) {
+		const mode = input.mode ? " · " + WRITE_MODE_LABELS[input.mode] : "";
+		return "《" + chapterTitleOf(input.projectId, input.chapterId) + "》" + mode;
+	}
+	if (input.libraryScope) return "通用素材库的一席";
+	return "设定官的一席";
+}
+
+/**
+ * 一轮跑完（或被中止）后，把这段对话补进记录。
+ *
+ * 中止的一轮也要存：作者点了"止笔"往往只是不满意，回头接着改的正是那半轮。
+ * 系统消息不入库 —— 它是按当时的素材现算的，存下来下次也照样会重算。
+ */
+function roundRecorder(agent: Agent, recordId: string) {
+	return async (): Promise<void> => {
+		const messages = agent.state.messages;
+		const conversation = messages[0]?.role === "system" ? messages.slice(1) : messages;
+		if (conversation.length === 0) return;
+		await recordStore.saveMessages(recordId, conversation);
+	};
 }
 
 function json(res: ServerResponse, status: number, body: unknown): void {
@@ -193,6 +259,8 @@ async function replaceAgent(session: Session, model: Model<any>): Promise<void> 
 		sessionId: session.id,
 		role: session.role,
 		thinkingLevel: session.thinkingLevel,
+		// 会话里的提问通道：智能体问，作者答，答案回到同一轮里。
+		ask: session.ask,
 		// 库作用域传的是库，不是工程；createNovelAgent 见到它就走另一支。
 		...(session.libraryScope ? { library: libraryStore } : {}),
 		...(session.chapterId ? { chapterId: session.chapterId } : {}),
@@ -267,14 +335,21 @@ function writingPreflight(assembly: WritingContext): string {
 	return "";
 }
 
-/** 一次性写作的首轮指令。素材全文已在系统提示词里，这里只说"动手"。 */
+/**
+ * 一次性写作的首轮指令。素材全文已在系统提示词里，这里只说"动手"。
+ *
+ * patch 与另外三种不同：它不是"再写一遍"，而是"只改这几处"。
+ * 指令里点明只用 revise_chapter，免得它顺手整章重交。
+ */
 function writingInstruction(assembly: WritingContext, note?: string): string {
 	const base =
-		assembly.mode === "continue"
-			? "在《" + assembly.chapter.title + "》现有正文之后继续写。先 read_chapter 读已有正文，接上末尾继续，不要重复已写内容。"
-			: assembly.mode === "rewrite"
-				? "重写《" + assembly.chapter.title + "》。先 read_chapter 读旧稿，再整章重写。"
-				: "写出《" + assembly.chapter.title + "》本章。";
+		assembly.mode === "patch"
+			? "局部修改《" + assembly.chapter.title + "》。先 read_chapter 读现有正文，只用 revise_chapter 改作者点名的那几处，其余一字不动。"
+			: assembly.mode === "continue"
+				? "在《" + assembly.chapter.title + "》现有正文之后继续写。先 read_chapter 读已有正文，接上末尾继续，不要重复已写内容。"
+				: assembly.mode === "rewrite"
+					? "重写《" + assembly.chapter.title + "》。先 read_chapter 读旧稿，再整章重写。"
+					: "写出《" + assembly.chapter.title + "》本章。";
 	return note ? base + "\n\n作者另有交代：" + note : base;
 }
 
@@ -300,6 +375,9 @@ async function streamNdjson(
 	agent: Agent,
 	modelRef: string,
 	input: string,
+	ask?: AskChannel,
+	/** 这一轮结束后（含中途断线、中止）调用，用来把对话补进记录。 */
+	onFinish?: () => Promise<void>,
 ): Promise<void> {
 	res.writeHead(200, {
 		"content-type": "application/x-ndjson; charset=utf-8",
@@ -310,8 +388,14 @@ async function streamNdjson(
 
 	const state = { aborted: false };
 	const emit = (event: unknown) => {
-		if (res.writableEnded) return;
-		res.write(`${JSON.stringify(event)}\n`);
+		// 连接已经没了还往里写，Node 会在响应上抛一个 error 事件。
+		// 那个事件没人接，就会把整个进程带走 —— 作者下一句话直接撞上"连不上服务"。
+		if (res.writableEnded || res.destroyed) return;
+		try {
+			res.write(`${JSON.stringify(event)}\n`);
+		} catch (error) {
+			console.error("[server] 回话通道写失败", error);
+		}
 	};
 	/**
 	 * 客户端断开就停笔。
@@ -327,12 +411,29 @@ async function streamNdjson(
 		agent.abort();
 	};
 	res.on("close", abortOnClose);
+	// 半路断线的写错误就地咽下：不接这个事件，它就是一个未捕获异常。
+	res.on("error", (error) => {
+		state.aborted = true;
+		console.error("[server] 回话通道断了", error);
+	});
+
+	// 智能体在这一轮里问出来的问题，走这条流送到作者眼前。
+	ask?.bindEmitter((event) => emit(event));
 
 	try {
 		await runAgentStream(agent, modelRef, input, emit, state);
 	} finally {
+		ask?.bindEmitter(null);
 		res.off("close", abortOnClose);
 		if (!res.writableEnded) res.end();
+		// 记录在流关掉之后才落盘：它比回话慢（要写整个文件），但不该拖住作者看结果。
+		if (onFinish) {
+			try {
+				await onFinish();
+			} catch (error) {
+				console.error("[records] 这一轮的记录没能存下", error);
+			}
+		}
 	}
 }
 
@@ -1159,6 +1260,8 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 			thinkingLevel?: ThinkingLevel;
 			/** "library" 时不绑工程：作者要在开书之前先把通用素材备好。 */
 			scope?: string;
+			/** 从这条旧记录接着写：新的一席会把那段对话当自己的上下文。 */
+			recordId?: string;
 		}>(req);
 		// 库作用域不绑工程：那时作者还没建书，不该强迫他先随便开一卷。
 		const libraryScope = body.scope === "library";
@@ -1184,8 +1287,25 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 			return json(res, status, { error: (error as Error).message, candidates: error instanceof ModelResolutionError ? error.candidates : [] });
 		}
 
+		const sessionId = randomUUID();
+		// 从旧记录接着写：把那段对话原样塞回来，不新建记录（否则一条线会被切成好几截）。
+		const resumed = body.recordId ? recordStore.get(body.recordId) : undefined;
+		if (body.recordId && !resumed) return json(res, 404, { error: "这条记录不在了（可能已被删除）" });
+		if (resumed) {
+			if (resumed.role !== role) return json(res, 400, { error: "这条记录不属于这个面板" });
+			// 记录的 libraryScope 只在 true 时才写进文件，工程记录的该字段是 undefined，
+			// 所以两边都规范成布尔再比，否则同一面板的旧记录会被判成"别的面板"。
+			if (Boolean(resumed.libraryScope) !== libraryScope) return json(res, 400, { error: "这条记录不属于这个面板" });
+			if (!libraryScope && resumed.projectId !== body.projectId) {
+				return json(res, 400, { error: "这条记录属于别的作品" });
+			}
+			if (role === "writing" && resumed.chapterId !== body.chapterId) {
+				return json(res, 400, { error: "这条记录属于别的章节" });
+			}
+		}
+
 		const session: Session = {
-			id: randomUUID(),
+			id: sessionId,
 			projectId: body.projectId ?? "",
 			role,
 			...(libraryScope ? { libraryScope: true } : {}),
@@ -1195,12 +1315,32 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 			agent: undefined as unknown as Agent,
 			model,
 			createdAt: Date.now(),
+			ask: new AskChannel(sessionId),
 		};
 		try {
 			await replaceAgent(session, model);
 		} catch (error) {
 			return json(res, 400, { error: (error as Error).message });
 		}
+
+		if (resumed) {
+			session.recordId = resumed.id;
+			// 接上那段对话：消息头仍是这一席刚建好的 system（提示词与工具声明在里头）。
+			if (resumed.messages.length > 0) {
+				const head = session.agent.state.messages[0]?.role === "system" ? session.agent.state.messages.slice(0, 1) : [];
+				session.agent.state.messages = [...head, ...resumed.messages];
+			}
+		} else {
+			const record = await recordStore.create({
+				role,
+				projectId: session.projectId,
+				...(session.chapterId ? { chapterId: session.chapterId } : {}),
+				...(libraryScope ? { libraryScope: true } : {}),
+				title: recordTitleFor({ role, projectId: session.projectId, chapterId: session.chapterId, libraryScope }),
+			});
+			session.recordId = record.id;
+		}
+
 		pruneSessions();
 		sessions.set(session.id, session);
 		return json(res, 201, {
@@ -1208,6 +1348,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 			role: session.role,
 			model: session.modelRef,
 			thinkingLevel: session.thinkingLevel,
+			recordId: session.recordId,
 		});
 	}
 	const modelMatch = pathname.match(/^\/api\/sessions\/([\w-]+)\/model$/);
@@ -1240,6 +1381,8 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		const session = sessions.get(abortMatch[1]!);
 		if (!session) return json(res, 404, { error: "会话不存在" });
 		session.agent.abort();
+		// 中止了还在等的问题：作者不答了，这一轮也就到此为止。
+		session.ask.close("aborted");
 		return json(res, 200, { ok: true });
 	}
 
@@ -1255,6 +1398,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		const session = sessions.get(sessionMatch[1]!);
 		if (!session) return json(res, 404, { error: "会话不存在" });
 		session.agent.abort();
+		session.ask.close("aborted");
 		sessions.delete(session.id);
 		return json(res, 200, { ok: true });
 	}
@@ -1270,14 +1414,42 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		if (session.agent.state.isStreaming) return json(res, 409, { error: "上一条消息还在生成中" });
 		// 写作会话的组装上下文会随装料变化，每轮重建让提示词跟上。
 		if (session.role === "writing") await refreshWritingAgent(session);
-		return streamNdjson(res, session.agent, session.modelRef, input);
+		const recordId = session.recordId;
+		return streamNdjson(
+			res,
+			session.agent,
+			session.modelRef,
+			input,
+			session.ask,
+			recordId ? roundRecorder(session.agent, recordId) : undefined,
+		);
+	}
+
+	/**
+	 * 作者回话。
+	 *
+	 * 提问的那条流此刻正阻塞着等这个回答，所以回答不能走那条流 ——
+	 * 走独立的一条 HTTP 请求，带上问题的 id。
+	 *
+	 * 空串是"跳过"：模型会知道作者没答，按自己的判断往下走。
+	 */
+	const answerMatch = pathname.match(/^\/api\/questions\/([\w-]+)\/answer$/);
+	if (answerMatch && req.method === "POST") {
+		const body = await readJsonBody<{ answer?: string }>(req);
+		const answer = typeof body.answer === "string" ? body.answer.trim() : "";
+		const id = answerMatch[1]!;
+		if (!answerQuestion(id, answer)) {
+			return json(res, 404, { error: "这个问题已经结束了" });
+		}
+		return json(res, 200, { ok: true });
 	}
 
 	/**
 	 * 一次性写作：组装本章素材 → 生成正文。
 	 *
-	 * 不建常驻会话、不留历史。上下文在服务端算好后一次性交给写作智能体，
+	 * 不建常驻会话。上下文在服务端算好后一次性交给写作智能体，
 	 * 章末正文由 write_chapter 落盘，因此连不上也不会丢稿。
+	 * 每一轮都留一条记录；带上 recordId 就是从那一轮接着写。
 	 */
 	const writeMatch = pathname.match(/^\/api\/projects\/([\w-]+)\/chapters\/([^/]+)\/write$/);
 	if (writeMatch && req.method === "POST") {
@@ -1289,14 +1461,26 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 			thinkingLevel?: ThinkingLevel;
 			mode?: string;
 			note?: string;
+			/** 从这条旧记录接着写：那段对话会原样接在这一轮前面。 */
+			recordId?: string;
 		}>(req);
 
 		// mode 决定提示词里的"作业"，先定下来再组装上下文。
 		if (body.mode !== undefined && !WRITE_MODES.includes(body.mode as ChapterWriteMode)) {
-			return json(res, 400, { error: "mode 只能是 create / rewrite / continue" });
+			return json(res, 400, { error: "mode 只能是 create / rewrite / continue / patch" });
 		}
-		const hasDraft = Boolean(store.get(projectId)?.drafts[chapterId]);
+		// 章号先对一遍再谈正文有无：章号打错时该说"没这一章"，
+		// 而不是拿 patch 的"还没有正文"去答，否则作者会去按「从零写起」白写一遍。
+		const project = store.get(projectId)!;
+		if (!project.outline.some((chapter) => chapter.id === chapterId)) {
+			return json(res, 404, { error: "章节 " + chapterId + " 不存在" });
+		}
+		const hasDraft = Boolean(project.drafts[chapterId]);
 		const mode: ChapterWriteMode = (body.mode as ChapterWriteMode | undefined) ?? (hasDraft ? "rewrite" : "create");
+		// 局部修改改的是已有正文：没有正文就无从下笔，别让它退化成"从零写起"。
+		if (mode === "patch" && !hasDraft) {
+			return json(res, 409, { error: "这一章还没有正文，没法局部修改；要从零写起请选「从零写起」。" });
+		}
 
 		let assembly: WritingContext;
 		try {
@@ -1304,7 +1488,8 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		} catch (error) {
 			return json(res, 404, { error: (error as Error).message });
 		}
-		const blocked = writingPreflight(assembly);
+		// 局部修改不装料也成立：料是"写"的来源，不是"改"的前提。
+		const blocked = mode === "patch" ? "" : writingPreflight(assembly);
 		if (blocked) return json(res, 409, { error: blocked });
 
 		const modelRef = resolveDefaultModel(body.modelRef);
@@ -1318,21 +1503,86 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		}
 
 		const instruction = writingInstruction(assembly, body.note?.trim());
-		const agent = await createNovelAgent({
-			store,
-			projectId,
-			model,
-			models: getModels(),
-			config,
-			sessionId: randomUUID(),
-			role: "writing",
-			chapterId,
-			writing: assembly,
-			thinkingLevel: body.thinkingLevel ?? settingsStore.get().defaultThinkingLevel,
-		});
-		return streamNdjson(res, agent, `${model.provider}/${model.id}`, instruction);
+		// 记录先认下来：接旧记录就沿用它的 id，否则这一轮自己开一条。
+		const resumed = body.recordId ? recordStore.get(body.recordId) : undefined;
+		if (body.recordId && !resumed) return json(res, 404, { error: "这条记录不在了（可能已被删除）" });
+		if (resumed) {
+			if (resumed.role !== "writing") return json(res, 400, { error: "这条记录不属于执笔者" });
+			if (resumed.projectId !== projectId || resumed.chapterId !== chapterId) {
+				return json(res, 400, { error: "这条记录属于别的章节" });
+			}
+		}
+		const record =
+			resumed ??
+			(await recordStore.create({
+				role: "writing",
+				projectId,
+				chapterId,
+				title: recordTitleFor({ role: "writing", projectId, chapterId, mode }),
+			}));
+
+		let agent: Agent;
+		try {
+			agent = await createNovelAgent({
+				store,
+				projectId,
+				model,
+				models: getModels(),
+				config,
+				sessionId: randomUUID(),
+				role: "writing",
+				chapterId,
+				writing: assembly,
+				thinkingLevel: body.thinkingLevel ?? settingsStore.get().defaultThinkingLevel,
+			});
+		} catch (error) {
+			// 这一轮根本没开成，刚占的那条空记录别留着占名额。
+			if (!resumed) await recordStore.remove(record.id);
+			return json(res, 400, { error: (error as Error).message });
+		}
+		// 接着旧记录写：把那段对话当成本轮之前的上下文。系统消息不塞，
+		// 这一轮的提示词是按现在的素材现算的，比旧的那份准 ——
+		// 但消息头那条 system 要留住，它是提示词与工具声明的载体。
+		if (resumed && resumed.messages.length > 0) {
+			const head = agent.state.messages[0]?.role === "system" ? agent.state.messages.slice(0, 1) : [];
+			agent.state.messages = [...head, ...resumed.messages];
+		}
+		return streamNdjson(res, agent, `${model.provider}/${model.id}`, instruction, undefined, roundRecorder(agent, record.id));
 	}
 
+
+	// ---------------------------------------------------------------- 生成记录
+	//
+	// 每轮落笔都留档：作者回头能翻到上一版是在哪一轮写的，也能从那一轮接着写。
+	// 列表只给摘要，正文按 id 现取 —— 一条记录里可能躺着整章内容。
+
+	if (pathname === "/api/records" && req.method === "GET") {
+		const filter: RecordFilter = {};
+		const roleParam = url.searchParams.get("role");
+		if (roleParam === "writing" || roleParam === "material") filter.role = roleParam as RecordRole;
+		const projectId = url.searchParams.get("projectId");
+		if (projectId) filter.projectId = projectId;
+		const chapterId = url.searchParams.get("chapterId");
+		if (chapterId) filter.chapterId = chapterId;
+		if (url.searchParams.get("scope") === "library") filter.libraryScope = true;
+		const asked = Number(url.searchParams.get("limit") ?? RECORDS_KEEP);
+		const limit = Number.isFinite(asked) ? Math.min(Math.max(Math.trunc(asked), 1), 50) : RECORDS_KEEP;
+		return json(res, 200, { records: recordStore.list(filter, limit) });
+	}
+
+	const recordMatch = pathname.match(/^\/api\/records\/([\w-]+)$/);
+	if (recordMatch && req.method === "GET") {
+		const record = recordStore.get(recordMatch[1]!);
+		if (!record) return json(res, 404, { error: "这条记录不在了（可能已被删除）" });
+		return json(res, 200, { record });
+	}
+
+	if (recordMatch && req.method === "DELETE") {
+		if (!(await recordStore.remove(recordMatch[1]!))) {
+			return json(res, 404, { error: "这条记录不在了（可能已被删除）" });
+		}
+		return json(res, 200, { ok: true });
+	}
 
 	// ---------------------------------------------------------------- 通用素材库
 	//
@@ -2051,10 +2301,30 @@ const store = await ProjectStore.open(config.dataDir);
 const libraryStore = await MaterialLibrary.open(config.dataDir);
 const settingsStore = await SettingsStore.open(config.dataDir);
 const credentialStore = await FileCredentialStore.open(config.dataDir);
+const recordStore = await RecordStore.open(config.dataDir);
 settingsStore.replace(syncBuiltinProviders(settingsStore.get(), config.defaultModel));
 initModelRuntime(settingsStore, credentialStore);
 
+/**
+ * 兜底：一次没接住的异常，不该把整个服务带走。
+ *
+ * 这是本地单人用的写作台，进程活着就等于"服务在线"。一次 EPIPE、
+ * 一次没 await 的拒绝，都会让作者的下一次点击直接撞上"连不上服务"，
+ * 而此刻他正写到一半 —— 稿子在内存里，页一关就没了。记清楚日志，
+ * 让服务继续跑，比"干净地退出"对他有用得多。
+ */
+process.on("uncaughtException", (error) => {
+	console.error("[server] 未捕获的异常（服务继续跑）：", error);
+});
+process.on("unhandledRejection", (reason) => {
+	console.error("[server] 没接住的 Promise 拒绝（服务继续跑）：", reason);
+});
+
 const server = createServer((req, res) => {
+	// 客户端半路走了，写回话时就会在响应上抛 error。没人接就是未捕获异常。
+	res.on("error", (error) => {
+		console.error("[server] 响应流出错", error);
+	});
 	let url: URL;
 	try {
 		url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);

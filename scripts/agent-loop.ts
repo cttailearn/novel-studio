@@ -10,8 +10,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { createModels } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
-import type { AgentEvent } from "@earendil-works/pi-agent-core";
+import type { AgentEvent, AgentMessage } from "@earendil-works/pi-agent-core";
 import { createNovelAgent } from "../src/ai/novel-agent.ts";
+import type { AskBroker, AskRequest } from "../src/ai/ask.ts";
 import { ProjectStore } from "../src/store/project.ts";
 import { readConfig } from "../src/config/env.ts";
 
@@ -192,6 +193,197 @@ try {
 		!JSON.stringify((writingAgent.state as unknown as { tools?: { name: string }[] }).tools ?? []).includes("upsert_material"),
 	);
 
+	// ───────────────────────────────── 局部修改
+	console.log("\n局部修改");
+	// 整章重写的风险在"改动量"不受控：patch 档要证明没点名的字一个都没动。
+	// 先落一版可控的长正文 —— write_chapter 的产物只有一句，挑不出"唯一"与"重复"两种定位。
+	const patchBody = [
+		"雨停了三天。",
+		"裴渡在渡口数人头，数到第十九个就停了。",
+		"他没再往下数。",
+		"江面起了雾。",
+		"江面起了雾。船在雾里像一块没写完的字。",
+	].join("\n\n");
+	const patchSeed = await store.saveDraftBody(project.id, "ch01", {
+		title: "第一章",
+		content: patchBody,
+		summary: "雨停后，裴渡在渡口数人头。",
+		materialIds: [materialId],
+		mode: "rewrite",
+		keepHistory: true,
+	});
+	check("局部修改的基线正文已落盘", patchSeed.revision === 2, String(patchSeed.revision));
+
+	// 一次性成文走 patch：提示词必须点名 revise_chapter，且不能退回"整章落稿"的作业。
+	const patchChapter = store.get(project.id)!.outline.find((chapter) => chapter.id === "ch01")!;
+	const patchAgent = await createNovelAgent({
+		store,
+		projectId: project.id,
+		model,
+		models,
+		config,
+		sessionId: "patch-loop",
+		role: "writing",
+		chapterId: "ch01",
+		writing: {
+			chapter: patchChapter,
+			materials: [],
+			existing: {
+				id: "ch01",
+				title: patchSeed.title,
+				content: patchBody,
+				summary: patchSeed.summary,
+				revision: patchSeed.revision,
+				updatedAt: patchSeed.updatedAt,
+				materialIds: patchSeed.materialIds,
+				history: [],
+			},
+			mode: "patch",
+		},
+	});
+
+	// 工具集是角色边界：改正文是执笔者的活，备料的不该有这把刀。
+	const patchToolNames = ((patchAgent.state as unknown as { tools?: { name: string }[] }).tools ?? []).map((tool) => tool.name);
+	check("写作智能体的工具集含 revise_chapter", patchToolNames.includes("revise_chapter"), patchToolNames.join(","));
+	const patchMaterialToolNames = ((materialAgent.state as unknown as { tools?: { name: string }[] }).tools ?? []).map((tool) => tool.name);
+	check(
+		"素材智能体的工具集不含 revise_chapter",
+		!patchMaterialToolNames.includes("revise_chapter"),
+		patchMaterialToolNames.join(","),
+	);
+
+	const patchEvents: AgentEvent[] = [];
+	patchAgent.subscribe((event) => {
+		patchEvents.push(event);
+	});
+	const lastPatchToolEnd = (): Extract<AgentEvent, { type: "tool_execution_end" }> | undefined =>
+		patchEvents
+			.filter((event): event is Extract<AgentEvent, { type: "tool_execution_end" }> => event.type === "tool_execution_end")
+			.at(-1);
+	const patchToolText = (event: Extract<AgentEvent, { type: "tool_execution_end" }> | undefined): string =>
+		(event?.result?.content ?? [])
+			.map((part: { type: string; text?: string }) => (part.type === "text" ? part.text ?? "" : ""))
+			.join("\n");
+
+	// 正例：find 是正文里唯一的一段，替换必须只落在那一段上。
+	const patchFind = "裴渡在渡口数人头，数到第十九个就停了。";
+	const patchReplace = "裴渡在渡口数人头，数到第二十个才停。";
+	faux.setResponses([
+		fauxAssistantMessage(fauxToolCall("revise_chapter", {
+			chapterId: "ch01",
+			find: patchFind,
+			replace: patchReplace,
+		})),
+		fauxAssistantMessage([fauxText("改好这一处。")], { stopReason: "stop" }),
+	]);
+	await patchAgent.prompt("把数人头那句改成第二十个。");
+
+	const patchPromptText = String(patchAgent.state.messages[0]?.content);
+	check("patch 提示词要求用 revise_chapter", patchPromptText.includes("revise_chapter"));
+	check("patch 提示词声明只动点名的那几处", patchPromptText.includes("只动点名的那几处"));
+	check("patch 提示词带出现有正文", patchPromptText.includes("现有正文"));
+	check("patch 提示词不再要求整章落稿", !patchPromptText.includes("一次写完"));
+	check("patch 提示词不退回整章重写", !patchPromptText.includes("整章重写。旧稿会被这次输出整体替换"));
+
+	const patchFirstEnd = lastPatchToolEnd();
+	const patchAfterFirst = await store.readDraftBody(project.id, "ch01");
+	check("revise_chapter 执行成功", patchFirstEnd?.isError === false, JSON.stringify(patchFirstEnd?.isError));
+	check("revise_chapter 工具名对得上", patchFirstEnd?.toolName === "revise_chapter", String(patchFirstEnd?.toolName));
+	check(
+		"正文只换了点名的那一处",
+		patchAfterFirst?.content === patchBody.replace(patchFind, patchReplace),
+		String(patchAfterFirst?.content),
+	);
+	check(
+		"其余段落一字未动",
+		patchAfterFirst?.content?.startsWith("雨停了三天。\n\n") === true
+			&& patchAfterFirst?.content?.includes("他没再往下数。") === true
+			&& patchAfterFirst?.content?.endsWith("江面起了雾。船在雾里像一块没写完的字。") === true,
+		String(patchAfterFirst?.content),
+	);
+	check("局部修改后版本号递增 1", store.get(project.id)!.drafts.ch01?.revision === patchSeed.revision + 1);
+	check("返回文案点明其余一字未动", patchToolText(patchFirstEnd).includes("其余一字未动"), patchToolText(patchFirstEnd));
+
+	// 反例一：同一段原文出现两次时宁可报错也不猜 —— 猜错就是改坏了别处。
+	const patchTwiceFind = "江面起了雾。";
+	const patchBeforeTwice = patchAfterFirst!.content;
+	const revisionBeforeTwice = store.get(project.id)!.drafts.ch01!.revision;
+	faux.setResponses([
+		fauxAssistantMessage(fauxToolCall("revise_chapter", {
+			chapterId: "ch01",
+			find: patchTwiceFind,
+			replace: "江面上浮着一层白。",
+		})),
+		fauxAssistantMessage([fauxText("这处指不准，先停。")], { stopReason: "stop" }),
+	]);
+	await patchAgent.prompt("把江面起了雾改掉。");
+	const patchTwiceEnd = lastPatchToolEnd();
+	const patchAfterTwice = await store.readDraftBody(project.id, "ch01");
+	check("重复原文：工具报错", patchTwiceEnd?.isError === true);
+	check("重复原文：正文完全没变", patchAfterTwice?.content === patchBeforeTwice, String(patchAfterTwice?.content));
+	check("重复原文：版本号没动", store.get(project.id)!.drafts.ch01?.revision === revisionBeforeTwice);
+	check("重复原文：文案点明不止一处", patchToolText(patchTwiceEnd).includes("不止一处"), patchToolText(patchTwiceEnd));
+
+	// 反例二：正文里根本没有这段原文 —— 报错让模型拿着 read_chapter 的原文重试。
+	const patchMissingFind = "渡口的灯灭了。";
+	const patchBeforeMissing = patchAfterTwice!.content;
+	faux.setResponses([
+		fauxAssistantMessage(fauxToolCall("revise_chapter", {
+			chapterId: "ch01",
+			find: patchMissingFind,
+			replace: "渡口的灯亮了。",
+		})),
+		fauxAssistantMessage([fauxText("原文对不上，不硬改。")], { stopReason: "stop" }),
+	]);
+	await patchAgent.prompt("把渡口那盏灯改掉。");
+	const patchMissingEnd = lastPatchToolEnd();
+	const patchAfterMissing = await store.readDraftBody(project.id, "ch01");
+	check("找不到原文：工具报错", patchMissingEnd?.isError === true);
+	check("找不到原文：正文没变", patchAfterMissing?.content === patchBeforeMissing, String(patchAfterMissing?.content));
+	check("找不到原文：文案点明找不到", patchToolText(patchMissingEnd).includes("找不到这段原文"), patchToolText(patchMissingEnd));
+
+	// 反例三：章号不在大纲里时不造"幽灵正文"。
+	const patchBeforeGhost = patchAfterMissing!.content;
+	faux.setResponses([
+		fauxAssistantMessage(fauxToolCall("revise_chapter", {
+			chapterId: "ch09",
+			find: "雨停了三天。",
+			replace: "雨没停。",
+		})),
+		fauxAssistantMessage([fauxText("章号不对，先确认。")], { stopReason: "stop" }),
+	]);
+	await patchAgent.prompt("改第九章第一句。");
+	const patchGhostEnd = lastPatchToolEnd();
+	check("不存在的章节：工具报错", patchGhostEnd?.isError === true);
+	check("不存在的章节：正文没变", (await store.readDraftBody(project.id, "ch01"))?.content === patchBeforeGhost);
+	check("不存在的章节：文案点明不在本章目里", patchToolText(patchGhostEnd).includes("不在本章目里"), patchToolText(patchGhostEnd));
+
+	// 空 replace：删掉那一段，和"替换成空串"逐字等价。
+	const patchDeleteFind = "他没再往下数。\n\n";
+	const patchBeforeDelete = patchAfterMissing!.content;
+	const revisionBeforeDelete = store.get(project.id)!.drafts.ch01!.revision;
+	faux.setResponses([
+		fauxAssistantMessage(fauxToolCall("revise_chapter", {
+			chapterId: "ch01",
+			find: patchDeleteFind,
+			replace: "",
+		})),
+		fauxAssistantMessage([fauxText("删掉了。")], { stopReason: "stop" }),
+	]);
+	await patchAgent.prompt("那句多余，删掉。");
+	const patchDeleteEnd = lastPatchToolEnd();
+	const patchAfterDelete = await store.readDraftBody(project.id, "ch01");
+	check("空 replace：执行成功", patchDeleteEnd?.isError === false);
+	check(
+		"空 replace：那一段被删掉",
+		patchAfterDelete?.content === patchBeforeDelete.replace(patchDeleteFind, ""),
+		String(patchAfterDelete?.content),
+	);
+	check("空 replace：这一段确实不在了", patchAfterDelete?.content?.includes("他没再往下数") === false);
+	check("空 replace：其余段落还在", patchAfterDelete?.content?.includes("江面起了雾。") === true);
+	check("空 replace：版本号递增 1", store.get(project.id)!.drafts.ch01?.revision === revisionBeforeDelete + 1);
+	check("局部修改智能体无错误", patchAgent.state.errorMessage === undefined, String(patchAgent.state.errorMessage));
+
 	// ───────────────────────────────── 上下文管理
 	console.log("\n上下文管理");
 	// 第二轮：验证多轮对话下素材仍能落盘。
@@ -212,6 +404,95 @@ try {
 	check("第二轮后系统提示词仍在头部", afterSecond[0]?.role === "system");
 	check("第二轮后无残留错误", materialAgent.state.errorMessage === undefined);
 	check("第二轮素材也落盘", store.get(project.id)!.materials.length === 2);
+
+	// ───────────────────────────────── 提问
+	console.log("\n提问");
+
+	// 假 broker：把模型发来的问题原样记下来，回一段可控的作者回答。
+	const askRequests: AskRequest[] = [];
+	const authorAnswer = "主角叫沈砚，出身寒门";
+	const fakeBroker: AskBroker = {
+		ask: async (request) => {
+			askRequests.push(request);
+			return authorAnswer;
+		},
+	};
+
+	const askQuestion = "主角叫什么，出身如何？";
+	const askOptions = ["沈砚，寒门", "陆昭，世家"];
+	const askClosing = "已按作者的回答记下。";
+
+	faux.setResponses([
+		fauxAssistantMessage(fauxToolCall("ask_user", { question: askQuestion, options: askOptions })),
+		fauxAssistantMessage([fauxText(askClosing)], { stopReason: "stop" }),
+	]);
+
+	const askingAgent = await createNovelAgent({
+		store,
+		projectId: project.id,
+		model,
+		models,
+		config,
+		sessionId: "ask-loop",
+		role: "material",
+		ask: fakeBroker,
+	});
+
+	const askToolNames = (askingAgent.state as unknown as { tools?: { name: string }[] }).tools?.map((t) => t.name) ?? [];
+	check("工具集含 ask_user", askToolNames.includes("ask_user"), askToolNames.join(","));
+
+	const askEvents: AgentEvent[] = [];
+	askingAgent.subscribe((event) => {
+		askEvents.push(event);
+	});
+
+	await askingAgent.prompt("主角还没定，先问作者。");
+
+	check("作者被问了一次", askRequests.length === 1, String(askRequests.length));
+	check("问题原样送达", askRequests[0]?.question === askQuestion, String(askRequests[0]?.question));
+	check(
+		"选项原样送达",
+		JSON.stringify(askRequests[0]?.options) === JSON.stringify(askOptions),
+		JSON.stringify(askRequests[0]?.options),
+	);
+	check(
+		"ask_user 执行成功",
+		askEvents.filter((e) => e.type === "tool_execution_end" && !e.isError).length === 1,
+		String(askEvents.filter((e) => e.type === "tool_execution_end").length),
+	);
+	check("提问智能体无错误", askingAgent.state.errorMessage === undefined, String(askingAgent.state.errorMessage));
+	check(
+		"共两个 turn",
+		askEvents.filter((e) => e.type === "turn_start").length === 2,
+		String(askEvents.filter((e) => e.type === "turn_start").length),
+	);
+
+	// 工具结果里的文本是模型看到的那份回答 —— 作者说的话必须真的回到对话里。
+	const toolResultText = (message: Extract<AgentMessage, { role: "toolResult" }>): string =>
+		message.content.map((c) => (c.type === "text" ? c.text : "")).join("");
+	const assistantText = (message: Extract<AgentMessage, { role: "assistant" }>): string =>
+		message.content.map((c) => (c.type === "text" ? c.text : "")).join("");
+
+	const askMessages = [...askingAgent.state.messages];
+	const askResult = askMessages.find(
+		(m): m is Extract<AgentMessage, { role: "toolResult" }> => m.role === "toolResult" && m.toolName === "ask_user",
+	);
+	check("工具结果已回填", Boolean(askResult));
+	const askResultText = askResult ? toolResultText(askResult) : "";
+	check("工具结果里带上了作者的回答", askResultText.includes(authorAnswer), askResultText);
+
+	// 拿到回答后要在同一轮里接着往下写，而不是停在工具调用上等下一次指令。
+	const afterAsk = askResult ? askMessages.slice(askMessages.indexOf(askResult) + 1) : [];
+	const followUps = afterAsk.filter((m): m is Extract<AgentMessage, { role: "assistant" }> => m.role === "assistant");
+	check(
+		"拿到回答后仍在同一轮继续产出",
+		followUps.some((m) => assistantText(m).includes(askClosing)),
+		afterAsk.map((m) => m.role).join(","),
+	);
+
+	// 反例：没有 broker 就没有提问工具 —— 问不到人的时候不该给模型一个空转的按钮。
+	const noAskToolNames = (materialAgent.state as unknown as { tools?: { name: string }[] }).tools?.map((t) => t.name) ?? [];
+	check("未接 broker 的智能体没有 ask_user", !noAskToolNames.includes("ask_user"), noAskToolNames.join(","));
 } finally {
 	await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 }
