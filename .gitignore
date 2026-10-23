@@ -59,3 +59,6 @@ Desktop.ini
 .pi/
 # 本地 UI 审查截图与临时浏览器配置
 .audit/
+# 下载来参考/试验的临时物料
+.tmp/
+.dsh-tmp/
