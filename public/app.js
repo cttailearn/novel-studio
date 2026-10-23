@@ -149,6 +149,18 @@ const state = {
 	/** 专注模式与排版偏好。 */
 	focusMode: false,
 	typography: { size: 17, line: 2.05, measure: 54 },
+	/**
+	 * 正文缓存：chapterId → { content, revision, updatedAt, materialIds, title, summary, history? }
+	 *
+	 * 作品接口现在只回章节的**元数据**（字数、第几稿、有没有正文），正文要单独取 ——
+	 * 一部千万字的书，把全书正文随每次刷新一起端过来，谁都受不了。所以正文按需取，
+	 * 取回来就存在这里，只装正在看的那几章（见 rememberBody 的上限）。
+	 */
+	bodies: new Map(),
+	/** 正在路上的取稿请求：chapterId(+":history") → Promise。同一章并发取只打一次。 */
+	bodyLoading: new Map(),
+	/** 取稿失败的那一章：{ chapterId, message }。稿面据此显示重试，而不是一直「正在取稿…」。 */
+	bodyError: null,
 };
 
 /** 素材表单的落点：新建（可能来自某条上传）还是改已有的。 */
@@ -298,6 +310,179 @@ async function api(path, options = {}) {
 	const data = await res.json().catch(() => ({}));
 	if (!res.ok) throw new Error(data.error || "请求失败 (" + res.status + ")");
 	return data;
+}
+
+// ═══════════════════════════════════════════════════ 正文
+
+/**
+ * 取一章的正文。
+ *
+ * 作品接口只回元数据，正文走这一条单独取。取回来的东西除了正文，还带着
+ * 这一稿的 revision / updatedAt / materialIds —— 稿面要显示「第 N 稿 · 存于何时」，
+ * 这些字段跟着正文一起回来最省事，不必再从元数据里拼。
+ *
+ * options.history 为真时多带一份历史版本（版本抽屉与回滚才需要，别的时候白拉）。
+ *
+ * 同一章并发取只打一次：稿面渲染、版本抽屉、回滚可能同时想读同一章，
+ * 各打一发不但费流量，回来的两份还可能不是同一稿。
+ */
+function fetchDraft(chapterId, options = {}) {
+	const key = chapterId + (options.history ? ":history" : "");
+	const inflight = state.bodyLoading.get(key);
+	if (inflight) return inflight;
+	const task = (async () => {
+		const query = options.history ? "?history=1" : "";
+		const data = await api(
+			"/api/projects/" + state.projectId + "/chapters/" + encodeURIComponent(chapterId) + "/draft" + query,
+		);
+		const chapter = data?.chapter;
+		if (chapter) {
+			// 不带 history 的那次不能把已有的历史冲掉：两份响应是同一个对象的两个截面。
+			// 但版本号变了，手里那份历史就是上一稿的，留着会让人「恢复」到一个不该有的版本 ——
+			// 那种情况下宁可丢掉，等下次打开版本抽屉再取。
+			const cached = state.bodies.get(chapterId) ?? {};
+			const keepHistory = chapter.history ?? (cached.revision === chapter.revision ? cached.history : undefined);
+			rememberBody(chapterId, {
+				...cached,
+				...chapter,
+				history: keepHistory,
+			});
+		}
+		return chapter ?? null;
+	})().finally(() => {
+		state.bodyLoading.delete(key);
+	});
+	state.bodyLoading.set(key, task);
+	return task;
+}
+
+/** 缓存里这一章的正文；没取过返回 null（「还没取」与「正文是空的」必须分得开）。 */
+function bodyOf(chapterId) {
+	return state.bodies.get(chapterId) ?? null;
+}
+
+/**
+ * 章的元数据，统一成一份口径：字数、有没有正文、第几稿。
+ *
+ * 服务端正在把「骨架 / 元数据 / 正文」拆开，旧响应里 drafts[id] 还带着正文。
+ * 界面上要用的其实只有三个数（words / hasDraft / revision），这里收口取一次，
+ * 免得十几处各写一遍 `?? 0`。响应还是旧形状（没有 words）时按正文现算一次兜底 ——
+ * 前后端不是同一秒上线，中间那段总不能让界面报出「全书 0 字」。
+ * 等新响应全面铺开，这个兜底可以直接删掉。
+ */
+function chapterMeta(meta) {
+	if (!meta) return null;
+	if (typeof meta.words === "number") return meta;
+	const content = typeof meta.content === "string" ? meta.content : "";
+	return { ...meta, words: countWords(content), hasDraft: Boolean(content.trim()) };
+}
+
+/**
+ * 把响应里的章元数据归到 project.drafts 上。
+ *
+ * 新响应把章元数据单独放在顶层 chapters[]（骨架里不再带正文），旧响应还塞在
+ * project.drafts 里。界面只认 project.drafts 一处，这里补齐 —— 否则换到新响应
+ * 那一刻，全书字数会归零、所有章都变「没写过」，稿面也再不会去取正文。
+ * 两种形状都收，是为了前后端不必同一秒上线。
+ */
+function adoptChapterMeta(chapters) {
+	if (!state.project) return;
+	// 骨架里没有 drafts 也要补一个空对象：后面存稿时要往里写元数据。
+	state.project.drafts ??= {};
+	if (!Array.isArray(chapters)) return;
+	const drafts = { ...state.project.drafts };
+	for (const meta of chapters) {
+		if (meta?.id) drafts[meta.id] = { ...(drafts[meta.id] ?? {}), ...meta };
+	}
+	state.project.drafts = drafts;
+}
+
+/** 最多留几章正文。再多也没用 —— 作者同时在看的也就一两章。 */
+const MAX_BODIES = 4;
+
+/** 放进正文缓存，并挤掉最旧的几章。Map 的迭代顺序就是插入顺序，够用了。 */
+function rememberBody(chapterId, body) {
+	state.bodies.set(chapterId, body);
+	while (state.bodies.size > MAX_BODIES) {
+		const oldest = state.bodies.keys().next().value;
+		// 刚放进来的是当前这一章，别把它自己挤掉（只有一章时循环会停在这儿）。
+		if (oldest === chapterId) break;
+		state.bodies.delete(oldest);
+	}
+}
+
+/**
+ * 存稿 / 回滚之后把缓存换成刚写下的那份，并作废旧的历史。
+ *
+ * 不做这一步的话，下次进稿面读到的还是上一次取回来的旧正文 —— 明明存成功了，
+ * 一刷新却退回原样，是最伤人的那种「假成功」。
+ *
+ * meta 一并带过来（服务端回的元数据）：缓存里的版本号、存稿时间要跟着新，
+ * 否则下次刷新时 syncBodies 会以为「版本对不上」，把刚存的正文白扔了重取一遍。
+ */
+function cacheWrittenBody(chapterId, content, meta) {
+	// 缓存里没有也照建一条：新起的章第一次存稿时本来就没有旧正文可留，
+	// 现记下来省得下一屏又要去取一趟。
+	const cached = state.bodies.get(chapterId) ?? {
+		id: chapterId,
+		content: "",
+		revision: meta?.revision ?? 1,
+		updatedAt: meta?.updatedAt ?? Date.now(),
+		materialIds: meta?.materialIds ?? [],
+	};
+	const next = { ...cached, content };
+	if (meta) {
+		if (typeof meta.revision === "number") next.revision = meta.revision;
+		if (meta.updatedAt) next.updatedAt = meta.updatedAt;
+		if (Array.isArray(meta.materialIds)) next.materialIds = meta.materialIds;
+	}
+	// 正文一变，手里的历史就是旧的（版本号对不上），宁可下次重取。
+	delete next.history;
+	rememberBody(chapterId, next);
+}
+
+/** 取稿失败后由稿面显示的那句话。 */
+function bodyErrorOf(chapterId) {
+	return state.bodyError?.chapterId === chapterId ? state.bodyError.message : "";
+}
+
+/**
+ * 保证这一章正文已在本地：有就直接给，没有就取。
+ *
+ * 失败不抛（返回 null），由调用方决定怎么提示 —— 进编辑态这种事要自己判断
+ * 该不该继续，不能让一次网络抖动把作者丢进一个空编辑器。
+ */
+async function ensureBody(chapterId, options = {}) {
+	const cached = state.bodies.get(chapterId);
+	if (cached && typeof cached.content === "string" && (!options.history || cached.history)) return cached;
+	try {
+		const chapter = await fetchDraft(chapterId, options);
+		state.bodyError = null;
+		return chapter;
+	} catch (error) {
+		state.bodyError = { chapterId, message: error.message };
+		toast("取稿失败：" + error.message, "error", 6000);
+		return null;
+	}
+}
+
+/**
+ * 元数据刷新后校正正文缓存。
+ *
+ * 智能体在面板里改了某一章，界面靠重拉作品接口来同步 —— 但作品接口只回元数据，
+ * 手上的正文还是旧的。版本号一变就把那一章从缓存里剔掉：下次进稿面会重取，
+ * 既不会拿旧稿糊弄人，也不必为没变的章白白重取一遍。
+ */
+function syncBodies() {
+	const drafts = state.project?.drafts ?? {};
+	for (const [chapterId, body] of state.bodies) {
+		// 正在改的这一章不动它：编辑框里的字才是最新的，
+		// 剔掉缓存会让稿面以为「正文还没取」，把作者正在改的稿子顶掉。
+		if (state.editing && chapterId === state.chapterId) continue;
+		const meta = chapterMeta(drafts[chapterId]);
+		if (!meta || !meta.hasDraft || meta.revision !== body.revision) state.bodies.delete(chapterId);
+	}
+	if (state.bodyError && state.bodies.has(state.bodyError.chapterId)) state.bodyError = null;
 }
 
 // ═══════════════════════════════════════════════════ 反馈
@@ -1290,10 +1475,8 @@ function volumeOf(chapter) {
  */
 function volumeHeader(volume, project) {
 	const chapters = project.outline.filter((chapter) => chapter.volumeId === volume.id);
-	const words = chapters.reduce((sum, chapter) => {
-		const draft = project.drafts[chapter.id];
-		return sum + (draft ? countWords(draft.content) : 0);
-	}, 0);
+	// 字数由服务端随元数据算好带过来 —— 章目里每卷都要加一遍，不能指望手边有正文。
+	const words = chapters.reduce((sum, chapter) => sum + (chapterMeta(project.drafts[chapter.id])?.words ?? 0), 0);
 	const head = el("li", "chapter-volume");
 	head.tabIndex = 0;
 	head.setAttribute("role", "button");
@@ -1337,15 +1520,15 @@ function renderChapters() {
 			seenVolumes.add(volume.id);
 			list.append(volumeHeader(volume, project));
 		}
-		const draft = project.drafts[chapter.id];
-		const words = draft ? countWords(draft.content) : 0;
+		const draft = chapterMeta(project.drafts[chapter.id]);
+		const words = draft?.words ?? 0;
 		const item = el("li", "chapter-item" + (chapter.id === state.chapterId ? " is-on" : ""));
 		item.tabIndex = 0;
 		item.setAttribute("role", "button");
 		if (chapter.id === state.chapterId) item.setAttribute("aria-current", "true");
 		item.append(el("span", "ord", toCn(index + 1)));
 		item.append(el("span", "ct", chapter.title));
-		if (!draft) item.append(el("span", "dotmark"));
+		if (!draft?.hasDraft) item.append(el("span", "dotmark"));
 		item.append(el("span", "cw", words ? fmt(words) : "—"));
 		item.title =
 			(chapter.summary || "（未写要略）") +
@@ -1500,7 +1683,8 @@ function openChapterNow(chapterId) {
 	clearEditorState();
 	state.chapterId = chapterId;
 	state.editing = false;
-	state.writeMode = state.project?.drafts[chapterId] ? "rewrite" : "create";
+	// 这章写成过没有，看元数据就够（hasDraft），不必把正文取回来才敢判断。
+	state.writeMode = chapterMeta(state.project?.drafts[chapterId])?.hasDraft ? "rewrite" : "create";
 	writeStored(chapterKey(state.projectId), chapterId);
 	switchViewNow("manuscript");
 	renderChapters();
@@ -1985,7 +2169,8 @@ function renderFrontMatter(box, project) {
 	head.append(el("h2", "", project.title));
 	head.append(el("p", "", [project.genre, project.logline].filter(Boolean).join(" · ") || "尚未题写一句话骨相"));
 	if (project.targetWords) {
-		const done = project.outline.reduce((sum, chapter) => sum + (project.drafts[chapter.id] ? countWords(project.drafts[chapter.id].content) : 0), 0);
+		// 全书已写：累加各章的元数据字数。正文不在手上，也不该为了报个数把全书正文取回来。
+		const done = project.outline.reduce((sum, chapter) => sum + (chapterMeta(project.drafts[chapter.id])?.words ?? 0), 0);
 		head.append(
 			el(
 				"p",
@@ -2001,8 +2186,9 @@ function renderFrontMatter(box, project) {
 	} else {
 		const toc = el("ol", "toc");
 		project.outline.forEach((chapter, index) => {
-			const draft = project.drafts[chapter.id];
-			const words = draft ? countWords(draft.content) : 0;
+			const draft = chapterMeta(project.drafts[chapter.id]);
+			// 字数由服务端算好放在元数据里；正文不在手边也算得出。
+			const words = draft?.words ?? 0;
 			const item = el("li", "toc-item");
 			item.tabIndex = 0;
 			item.setAttribute("role", "button");
@@ -2036,9 +2222,18 @@ function renderChapter(box, project) {
 		renderFrontMatter(box, project);
 		return;
 	}
-	const draft = project.drafts[state.chapterId];
-	const content = draft ? draft.content : "";
-	const words = countWords(content);
+	const meta = chapterMeta(project.drafts[state.chapterId]);
+	// 过渡期的兜底：旧响应里章元数据还带着正文，那就顺手收进缓存，别再白取一趟。
+	// 新响应不再带正文，这段自然就空转；后端全面铺开后可以删。
+	if (!bodyOf(state.chapterId) && typeof meta?.content === "string") {
+		rememberBody(state.chapterId, { ...meta, content: meta.content });
+	}
+	// 正文单独取（见 fetchDraft）：手上没有就摆占位去取，别让稿面凭空空白。
+	const body = bodyOf(state.chapterId);
+	const content = body?.content ?? "";
+	const waiting = Boolean(meta?.hasDraft) && !body;
+	// 编辑态必须有正文在手上：空编辑框里一存稿，等于把原来的字抹了。
+	if (state.editing && waiting) state.editing = false;
 
 	const prev = project.outline[index - 1];
 	const next = project.outline[index + 1];
@@ -2066,13 +2261,14 @@ function renderChapter(box, project) {
 	head.append(el("p", "ms-kicker", "第" + toCn(index + 1) + "章" + (chapter.pov ? " · " + chapter.pov : "")));
 	head.append(el("h1", "ms-title", chapter.title));
 	head.append(el("div", "ms-rule"));
-	const meta = [];
-	if (words) meta.push(fmt(words) + " 字");
-	if (draft) meta.push("第 " + draft.revision + " 稿");
-	if (draft?.updatedAt) meta.push("存于 " + fmtTime(draft.updatedAt));
-	if (chapter.targetWords) meta.push("目标 " + fmt(chapter.targetWords) + " 字");
-	meta.push("装料 " + chapter.materialIds.length + " 条");
-	head.append(el("p", "ms-meta", meta.join(" · ")));
+	const metaBits = [];
+	// 字数用元数据里的那份：正文还没取回来时也得报得出数。
+	if (meta?.words) metaBits.push(fmt(meta.words) + " 字");
+	if (meta?.hasDraft) metaBits.push("第 " + (meta.revision ?? 1) + " 稿");
+	if (meta?.updatedAt) metaBits.push("存于 " + fmtTime(meta.updatedAt));
+	if (chapter.targetWords) metaBits.push("目标 " + fmt(chapter.targetWords) + " 字");
+	metaBits.push("装料 " + chapter.materialIds.length + " 条");
+	head.append(el("p", "ms-meta", metaBits.join(" · ")));
 	page.append(head);
 
 	if (state.editing) {
@@ -2105,6 +2301,8 @@ function renderChapter(box, project) {
 		page.append(editor);
 		// 这一刻元素还没进文档，scrollHeight 是 0，得等它挂上去再量。
 		requestAnimationFrame(() => fitEditor(editor));
+	} else if (waiting) {
+		page.append(bodyPlaceholder(chapter.id));
 	} else if (content) {
 		const text = el("article", "ms-text");
 		for (const para of content.split(/\n+/)) {
@@ -2118,8 +2316,58 @@ function renderChapter(box, project) {
 
 	// 操作条排在正文之前：写作时手要够得着「存稿」，
 	// 不该被一整章的篇幅压在底下（条子自己吸顶，滚多远都在）。
-	box.append(chapterToolbar(chapter, index, content));
+	box.append(chapterToolbar(chapter, index, content, meta));
 	box.append(page);
+
+	// 占位已经摆好了，再去把正文取回来；取回后重绘这一屏。
+	if (waiting) ensureChapterBody(chapter.id);
+}
+
+/**
+ * 稿面的取稿占位：正在取 / 取砸了。
+ *
+ * 取砸了必须给一条能点的「重试」——否则作者对着「正在取稿…」干等，
+ * 而实际上请求早就失败了。
+ */
+function bodyPlaceholder(chapterId) {
+	// 借用空稿位的样式（.ms-blank）：这只是过渡态，不值得为它新造一套视觉。
+	const box = el("div", "ms-blank ms-loading");
+	const message = bodyErrorOf(chapterId);
+	if (message) {
+		box.classList.add("is-error");
+		box.append(el("p", "", "取稿失败：" + message));
+		box.append(button("重试", "btn btn-quiet btn-sm", () => {
+			state.bodyError = null;
+			box.replaceWith(bodyPlaceholder(chapterId));
+			ensureChapterBody(chapterId);
+		}));
+		return box;
+	}
+	box.append(el("p", "", "正在取稿…"));
+	return box;
+}
+
+/**
+ * 把这一章的正文取回来，取到后重绘稿面。
+ *
+ * 三处不重复发起：正文已在手、请求已在路上、上一次刚失败（等作者点「重试」）。
+ * 少了这道闸，每次重绘都会再打一发，失败时就成了死循环。
+ */
+function ensureChapterBody(chapterId) {
+	if (state.bodies.has(chapterId)) return;
+	if (state.bodyLoading.has(chapterId)) return;
+	if (state.bodyError?.chapterId === chapterId) return;
+	void (async () => {
+		const chapter = await ensureBody(chapterId);
+		// 取稿期间作者可能已经翻到别章：别把旧章的结果画到新章上。
+		if (state.chapterId !== chapterId) return;
+		if (!chapter) {
+			// 失败态已经记在 state.bodyError 上，重绘一次让占位换成错误提示。
+			renderView();
+			return;
+		}
+		renderView();
+	})();
 }
 
 /**
@@ -2139,9 +2387,10 @@ function navButton(id, label) {
 	return button(label, "btn btn-quiet btn-sm", () => openChapter(id));
 }
 
-function chapterToolbar(chapter, index, content) {
+function chapterToolbar(chapter, index, content, meta) {
 	const bar = el("div", "actions actions-center");
-	const draft = state.project.drafts[chapter.id];
+	// 这章写成过没有，看元数据（meta.hasDraft），不靠正文在不在手上。
+	const hasDraft = Boolean(meta?.hasDraft);
 
 	if (state.editing) {
 		const save = button("存稿", "btn btn-ink btn-sm", async () => {
@@ -2170,14 +2419,18 @@ function chapterToolbar(chapter, index, content) {
 		syncSaveState();
 	} else {
 		bar.append(
-			button(content ? "改稿" : "起稿", "btn btn-sm", () => {
-				state.editing = true;
-				renderView();
+			button(hasDraft ? "改稿" : "起稿", "btn btn-sm", () => {
+				void (async () => {
+					// 正文没在手就先取：空编辑框里一存稿，原来的字就没了。
+					if (hasDraft && !(await ensureBody(chapter.id))) return;
+					state.editing = true;
+					renderView();
+				})();
 			}),
 		);
-		if (draft) {
+		if (hasDraft) {
 			const state_ = el("span", "ms-save-state");
-			state_.textContent = "存于 " + fmtTime(draft.updatedAt);
+			state_.textContent = meta?.updatedAt ? "存于 " + fmtTime(meta.updatedAt) : "";
 			bar.append(state_);
 		}
 	}
@@ -2187,7 +2440,7 @@ function chapterToolbar(chapter, index, content) {
 
 	// 成文动作在生文工作台里做，这里只负责把作者送过去。
 	bar.append(
-		button(content ? "重写此章" : "装料成文", "btn btn-ink btn-sm", () => {
+		button(hasDraft ? "重写此章" : "装料成文", "btn btn-ink btn-sm", () => {
 			void (async () => {
 				if (!(await flushEditor())) return;
 				switchViewNow("writing");
@@ -2206,7 +2459,9 @@ function chapterToolbar(chapter, index, content) {
 		}),
 	);
 	// 版本：服务端每次覆盖保存都留了档，这里只是把已有的东西摆出来。
-	const historyCount = draft?.history.length ?? 0;
+	// 条数不再挂在元数据上（历史版本要连正文一起取，太重）；只标出「有过旧稿」。
+	// 服务端最多留 10 版，所以这里的估算也要封顶，别报出一个取不回来的数。
+	const historyCount = Math.min(Math.max((meta?.revision ?? 1) - 1, 0), 10);
 	bar.append(
 		button("版本" + (historyCount ? " " + historyCount : ""), "btn btn-quiet btn-sm", () => openHistoryDialog(chapter.id)),
 	);
@@ -2259,9 +2514,12 @@ function clearEditorState() {
 }
 
 /** 把一次成功的写入同步到内存与页面上，但不重绘稿台 —— 重绘会抢走光标。 */
-function applySavedChapter(chapterId, data) {
+function applySavedChapter(chapterId, data, content) {
 	if (!state.project || !data?.chapter) return;
 	state.project.drafts[chapterId] = data.chapter;
+	// 正文缓存也要跟着换：不然下次进稿面读到的还是上一次取回来的旧稿，
+	// 明明存成功了、一刷新却退回原样 —— 最伤人的那种「假成功」。
+	if (typeof content === "string") cacheWrittenBody(chapterId, content, data.chapter);
 	if (data.stats) state.stats = data.stats;
 	$("project-stats").textContent = statsLine();
 	renderChapters();
@@ -2280,7 +2538,7 @@ async function autoSaveNow() {
 		try {
 			const data = await saveChapter(chapterId, content, true);
 			if (state.chapterId !== chapterId) return true;
-			applySavedChapter(chapterId, data);
+			applySavedChapter(chapterId, data, content);
 			state.editorSavedAt = Date.now();
 			// 保存期间又敲了字：仍算未存，再排一次。
 			const latest = $("view-manuscript").querySelector(".ms-edit");
@@ -2369,9 +2627,10 @@ function openExportDialog(chapterId) {
  */
 async function exportProject(chapterId, format = "txt") {
 	// 一章未落笔就导出，拿到的只是一个空文件。先拦住，比让用户对着空文件发愣好。
+	// 有没有正文看元数据（hasDraft），不必把正文取回来才能判断。
 	const hasText = chapterId
-		? Boolean(state.project?.drafts[chapterId]?.content.trim())
-		: Object.values(state.project?.drafts ?? {}).some((draft) => draft.content.trim());
+		? Boolean(chapterMeta(state.project?.drafts[chapterId])?.hasDraft)
+		: Object.values(state.project?.drafts ?? {}).some((meta) => chapterMeta(meta)?.hasDraft);
 	if (!hasText) {
 		toast(chapterId ? "这一章还没有正文可导出。" : "这部作品还没有正文可导出。", "warn");
 		return false;
@@ -2427,17 +2686,27 @@ function exportName(res) {
 /**
  * 版本抽屉。
  *
- * 服务端每次覆盖保存都会把旧稿记进 draft.history（最近 10 版），
- * 但此前界面上没有入口 —— 数据在，人取不到。这里把它摆出来：
- * 看每一版的来源、时间、字数，可展开读全文，也可一键换回。
+ * 服务端每次覆盖保存都会把旧稿记进历史（最近 10 版），但此前界面上没有入口 ——
+ * 数据在，人取不到。这里把它摆出来：看每一版的来源、时间、字数，可展开读全文，也可一键换回。
+ *
+ * 历史版本连正文一起存在服务端，要单独取（?history=1）。所以先把抽屉开出来摆占位，
+ * 再取 —— 而不是让作者点「版本」之后盯着一个没反应的界面等网络。
  */
 function openHistoryDialog(chapterId) {
 	void (async () => {
 		if (!(await flushEditor())) return;
 		state.pendingRestore = null;
 		$("history-error").textContent = "";
-		renderHistoryList(chapterId);
 		openDialog($("history-dialog"), { focus: "self" });
+		renderHistoryList(chapterId);
+		// 历史没在手才去取。旧响应里历史还挂在章元数据上（renderHistoryList 已经收下），
+		// 那就别去请求一个还不存在的接口 —— 免得开个版本抽屉先弹一条「取稿失败」。
+		const legacy = state.project?.drafts[chapterId];
+		if (bodyOf(chapterId)?.history || Array.isArray(legacy?.history)) return;
+		const chapter = await ensureBody(chapterId, { history: true });
+		// 取稿期间作者可能已经关掉抽屉：那就别再往里画了。
+		if (!chapter || !$("history-dialog").open) return;
+		renderHistoryList(chapterId);
 	})();
 }
 
@@ -2445,32 +2714,48 @@ function renderHistoryList(chapterId) {
 	const project = state.project;
 	const index = project.outline.findIndex((chapter) => chapter.id === chapterId);
 	const chapter = project.outline[index];
-	const draft = project.drafts[chapterId];
+	const meta = chapterMeta(project.drafts[chapterId]);
 	const list = $("history-list");
 	list.replaceChildren();
 	$("history-subtitle").textContent = chapter
-		? "第" + toCn(index + 1) + "章《" + chapter.title + "》 · 当前第 " + (draft?.revision ?? 0) + " 稿"
+		? "第" + toCn(index + 1) + "章《" + chapter.title + "》 · 当前第 " + (meta?.revision ?? 0) + " 稿"
 		: "";
-	if (!draft) {
+	if (!meta?.hasDraft) {
 		list.append(el("div", "bench-empty", "这一章还没有正文，也就没有版本。"));
 		return;
 	}
 
-	const wordCount = countWords(draft.content);
+	const body = bodyOf(chapterId);
+	if (!body) {
+		// 旧响应里历史与正文都还挂在元数据上：有就直接用，别去取一个还不存在的接口。
+		const fallback = state.project?.drafts[chapterId];
+		if (fallback && Array.isArray(fallback.history) && typeof fallback.content === "string") {
+			rememberBody(chapterId, { ...fallback, words: countWords(fallback.content) });
+			renderHistoryList(chapterId);
+			return;
+		}
+		// 正文与历史都还在路上：先摆一句，别让人以为这一章没有版本。
+		list.append(el("div", "bench-empty", bodyErrorOf(chapterId) ? "取版本失败：" + bodyErrorOf(chapterId) : "正在取版本…"));
+		return;
+	}
+
+	const wordCount = countWords(body.content);
 	const current = el("div", "history-row is-current");
 	const currentHead = el("div", "history-head");
 	currentHead.append(el("span", "history-version", "当前稿"));
-	currentHead.append(el("span", "history-mode", "第 " + draft.revision + " 稿"));
-	currentHead.append(el("span", "history-when", fmtTime(draft.updatedAt)));
-	currentHead.append(el("span", "history-words", fmt(wordCount) + " 字 · 装料 " + draft.materialIds.length + " 条"));
+	currentHead.append(el("span", "history-mode", "第 " + (meta.revision ?? 1) + " 稿"));
+	currentHead.append(el("span", "history-when", fmtTime(body.updatedAt ?? meta.updatedAt)));
+	currentHead.append(
+		el("span", "history-words", fmt(wordCount) + " 字 · 装料 " + (body.materialIds ?? meta.materialIds).length + " 条"),
+	);
 	current.append(currentHead);
 	const currentDetails = el("details", "history-preview");
 	currentDetails.append(el("summary", "", "看当前全文"));
-	currentDetails.append(el("pre", "history-text", draft.content || "（空）"));
+	currentDetails.append(el("pre", "history-text", body.content || "（空）"));
 	current.append(currentDetails);
 	list.append(current);
 
-	const history = [...draft.history].reverse();
+	const history = [...(body.history ?? [])].reverse();
 	if (history.length === 0) {
 		list.append(el("div", "history-empty", "还没有旧版本。手动存稿或执笔者写入时，被覆盖的那一版会记在这里。"));
 		return;
@@ -2509,8 +2794,9 @@ async function restoreRevision(chapterId, revisionNumber) {
 		return;
 	}
 	state.pendingRestore = null;
-	const draft = state.project?.drafts[chapterId];
-	const revision = draft?.history.find((item) => item.revision === revisionNumber);
+	// 历史要连正文一起取回来才找得到那一版；缓存里没有就先补上。
+	const body = bodyOf(chapterId)?.history ? bodyOf(chapterId) : await ensureBody(chapterId, { history: true });
+	const revision = body?.history?.find((item) => item.revision === revisionNumber);
 	if (!revision) {
 		$("history-error").textContent = "这一版已经不在存照里了，可能被更新的版本挤掉。";
 		renderHistoryList(chapterId);
@@ -2522,6 +2808,8 @@ async function restoreRevision(chapterId, revisionNumber) {
 			body: { content: revision.content },
 		});
 		state.project.drafts[chapterId] = data.chapter;
+		// 恢复之后手上的正文换成这一版，历史作废（版本号对不上了）。
+		cacheWrittenBody(chapterId, revision.content, data.chapter);
 		state.stats = data.stats;
 		state.editing = false;
 		clearEditorState();
@@ -3505,8 +3793,9 @@ function renderWritingBench() {
 	}
 
 	const index = project.outline.findIndex((item) => item.id === chapter.id);
-	const draft = project.drafts[chapter.id];
-	const words = draft ? countWords(draft.content) : 0;
+	const draft = chapterMeta(project.drafts[chapter.id]);
+	// 字数与「有没有正文」都看元数据：装配栏不该为了报个数去取正文。
+	const words = draft?.words ?? 0;
 	$("assembly-chapter").textContent =
 		"第" + toCn(index + 1) + "章《" + chapter.title + "》 · " + statusLabel(chapter.status) +
 		(words ? " · 已成 " + fmt(words) + " 字" : " · 尚无正文");
@@ -3651,7 +3940,7 @@ function setWriteChapter(chapterId) {
 	if (!next) return;
 	state.chapterId = next.id;
 	// 写法跟着章走：有旧稿就该是「整章重写」，空白章才是「从零写起」。
-	state.writeMode = state.project.drafts[next.id] ? "rewrite" : "create";
+	state.writeMode = chapterMeta(state.project.drafts[next.id])?.hasDraft ? "rewrite" : "create";
 	writeStored(chapterKey(state.projectId), next.id);
 	renderAll();
 }
@@ -4141,8 +4430,9 @@ function renderBible() {
 		project.outline.forEach((chapter, index) => {
 			if (!matchesQuery(state.bibleQuery, chapter.title, chapter.summary, statusLabel(chapter.status), chapter.pov)) return;
 			shown += 1;
-			const draft = project.drafts[chapter.id];
-			const words = draft ? countWords(draft.content) : 0;
+			const draft = chapterMeta(project.drafts[chapter.id]);
+			// 字数由服务端算好放在元数据里；正文不在手边也算得出。
+			const words = draft?.words ?? 0;
 			const card = el("div", "card");
 			card.tabIndex = 0;
 			card.setAttribute("role", "button");
@@ -4220,6 +4510,10 @@ async function selectProject(id) {
 	state.pendingRestore = null;
 	state.exportChapterId = null;
 	state.pickedMaterials = new Set();
+	// 换卷即换正文：上一卷缓存下来的稿子留在内存里没有意义，还容易被误读成本卷的。
+	state.bodies.clear();
+	state.bodyLoading.clear();
+	state.bodyError = null;
 	// 检索与筛选是「这一卷」的视图状态，换卷必须复位，否则会看见一片空列表还找不到原因。
 	state.chapterQuery = "";
 	state.materialQuery = "";
@@ -4319,7 +4613,10 @@ async function reloadProject() {
 	const data = await api("/api/projects/" + id);
 	if (!isCurrentRead("project", seq) || state.projectId !== id) return;
 	state.project = data.project;
+	adoptChapterMeta(data.chapters);
 	state.stats = data.stats;
+	// 元数据变了，手里的正文可能就旧了（智能体刚在面板里改过这一章）。
+	syncBodies();
 	if (state.chapterId && !state.project.outline.some((chapter) => chapter.id === state.chapterId)) {
 		state.chapterId = null;
 	}

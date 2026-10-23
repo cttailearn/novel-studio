@@ -473,6 +473,33 @@ pnpm dev                  # 默认 http://127.0.0.1:8787
 - 界面只显示脱敏后的 key，不回传明文。
 - 落盘用「随机名临时文件 + rename + 重试」：临时名唯一，避免多实例并发写互相覆盖；重试是因为 Windows 上 rename 覆盖已存在文件会偶发 `EPERM`。
 
+## 规模：千万字也不卡
+
+一部长篇写到一千万字时，最先出问题的不是磁盘，而是「每次都把整本书搬一遍」。
+墨耕现在把一部书拆成三层：
+
+| 层 | 装什么 | 在哪 | 大小 |
+| --- | --- | --- | --- |
+| 骨架 | 卷 / 大纲 / 素材 / 备注 | `data/<projectId>.json` | 与章节数成正比，很小 |
+| 元数据 | 每章的标题 / 要略 / 字数 / 第几稿 | 骨架里的 `drafts` + `<enc>.meta.json` | 每章几百字节 |
+| 正文 | 每章的正文与版本历史 | `<enc>.txt` 与 `<enc>.hist/` | 用到才取，取完就走 |
+
+因此：
+
+- **打开一部书不再搬正文**：`GET /api/projects/:id` 只回骨架与章的元数据
+  （`{ project, chapters, stats }`）；要看正文再单独取 `GET /api/projects/:id/chapters/:chapterId/draft`。
+- **存稿不再扫全书**：字数是元数据，随正文一起记账，不再每次 `countWords` 扫一遍。
+- **导出仍是整本**，但改成流式输出，不会先在内存里拼出整本字符串。
+- **快照变小**：工程快照改成 gzip（`.json.gz`），里面带着正文与历史；旧格式的 `.json` 快照照样读得开。
+- **设定官不会一次把全书塞进脑袋**：`list_chapters` 支持按范围筛（已写 / 未写）与分页取，
+  要略按需才给；`read_chapter` 支持只取开头或结尾若干字。
+
+老工程**不用手动升级**：读到旧格式的章节文件时，会在后台把它拆成「元数据 + 正文 + 历史」，
+拆完把旧文件改名成 `.migrated` 留着当后悔药（**不会删**）。
+拆的过程不打断任何操作，稿子一个字都不会少。
+
+完整的取舍与实测数据见 [docs/scaling-plan.md](docs/scaling-plan.md)。
+
 ## 架构
 
 ```
@@ -553,7 +580,7 @@ scripts/                     测试
 | GET/POST | `/api/library` | 通用素材库：列表（含取用情况）/ 收录一条 |
 | PATCH/DELETE | `/api/library/:libraryId` | 改 / 删库条目 |
 | GET/POST | `/api/projects` | 作品列表（摘要 + 统计）/ 新建（可带 `libraryIds`） |
-| GET/PATCH/DELETE | `/api/projects/:id` | 作品全量 / 改题名与规约 / 删作品 |
+| GET/PATCH/DELETE | `/api/projects/:id` | 作品骨架 + 章目元数据 + 统计（**正文不在里面**）/ 改题名与规约 / 删作品 |
 | POST | `/api/projects/:id/chapters` | **立一章**：`{ title, summary?, pov?, targetWords?, volumeId? }` |
 | POST | `/api/projects/:id/volumes` | **立一卷**：`{ title, summary?, targetWords? }`，返回 `{ volume, stats }` |
 | PATCH/DELETE | `/api/projects/:id/volumes/:volumeId` | 改卷名 / 要略 / 目标字数；删卷不删章，回 `moved`（回到不分卷的章数） |
@@ -567,7 +594,8 @@ scripts/                     测试
 | PATCH/DELETE | `/api/projects/:id/materials/:materialId` | 改 / 删单条素材 |
 | POST | `/api/projects/:id/materials/:materialId/library` | **存回素材库**：`{ mode, title? }` |
 | POST | `/api/projects/:id/chapters/:chapterId/materials` | **装配**：`{ add, remove }`，双向同步 |
-| PATCH | `/api/projects/:id/chapters/:chapterId` | 保存章节正文（稿面直接编辑；`autosave` 见下） |
+| PATCH | `/api/projects/:id/chapters/:chapterId` | 保存章节正文（稿面直接编辑；`autosave` 见下）。响应 `{ chapter: 元数据, stats }`，**不回正文** |
+| GET | `/api/projects/:id/chapters/:chapterId/draft` | **取正文**：`{ chapter: { id, title, content, summary, revision, updatedAt, materialIds } }`；加 `?history=1` 附带版本历史；章不存在 **404** |
 | POST | `/api/projects/:id/chapters/:chapterId/write` | **一次性成文**：组装素材生成正文，返回 NDJSON 事件流 |
 | POST | `/api/sessions` | 创建会话（`role: material` / `writing`） |
 | GET | `/api/kinds` | 素材种类目录：内置 + 自建，各带 `builtin` 与 `count`（用它的料有多少条） |
@@ -596,6 +624,18 @@ trim 后比较，完全相同也不重复归档。该章不存在时返回 **404
 `summary` 是这一章的**实际小结**（2-4 句），只有传了非空值才覆盖；不传或传空白串都保留旧小结 ——
 作者手改正文时不该把上一章的接续线索弄丢。
 
+正文与骨架是分开的：`GET /api/projects/:id` 回的 `project` 里 `drafts` 只有每章的元数据
+（`id / title / summary / words / revision / updatedAt / materialIds / hasDraft`），**没有正文，也没有版本历史**；
+`chapters` 是各章元数据的清单，按大纲顺序排好（只列已经建过章目记录的章）——界面拿它排章目就够了；
+每章的 `hasDraft` 说明它到底有没有正文。
+要正文就单独取 `GET /api/projects/:id/chapters/:chapterId/draft`（`?history=1` 才带历史，挂在 `chapter.history` 上）。
+存稿的响应也只回元数据 —— 刚写进去的正文，前端自己留一份，不必再从服务端搬一遍。
+
+`list_chapters` 的参数：`{ scope?: "all" | "drafted" | "undrafted", offset?: number, limit?: number, withSummary?: boolean }`。
+默认一页 40 章（上限 200），翻页用 `offset`；要略只在 `withSummary` 为真时才带。
+`read_chapter` 的参数：`{ chapterId, part?: "full" | "head" | "tail", chars?: number, start?: number }`，
+默认最多取 6000 字（上限 20000），取不到的部分会在结果里说明还剩多少。
+
 `/write` 的 body：`{ modelRef, thinkingLevel, mode: "create" | "rewrite" | "continue", note }`。
 该章没有装配任何素材时返回 **409** 并说明原因 —— 不给执笔者一个空清单去硬编。
 
@@ -619,9 +659,10 @@ body `{ mode: "create" | "update", title? }`。`update` 覆盖 `originId` 指向
 ## 测试
 
 ```bash
-pnpm test          # tsc + 配置层 + 工具链路 + 接口契约 + 智能体循环
+pnpm test          # tsc + 配置层 + 工具链路 + 存储层 + 接口契约 + 智能体循环
 pnpm test:config   # 归一化、凭据存储、provider 构造、档位屏蔽、拉取合并
 pnpm test:tools    # 存储、素材模型、两套工具集与提示词、上传解析、通用素材库
+pnpm test:storage  # 正文 / 元数据 / 历史三层存储、老工程惰性迁移、损坏隔离
 pnpm test:server   # 真起一个服务进程，走真实 HTTP 验接口契约
 pnpm test:loop     # 用 pi-ai faux provider 走真实的智能体循环
 ```

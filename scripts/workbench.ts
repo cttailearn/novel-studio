@@ -669,7 +669,9 @@ try {
 	// 导出的稿子要能直接带走：单章、整本、markdown 三种口径，外加中文文件名。
 	const draftText = "老周把船缆绕在桩上，等一个不来的客人。\n\n江面起了雾。";
 	const savedDraft = await req("PATCH", `/api/projects/${seedId}/chapters/${made.data.chapter.id}`, { content: draftText });
-	check("存稿返回 200", savedDraft.status === 200 && savedDraft.data.chapter.content === draftText, String(savedDraft.status));
+	check("存稿返回 200", savedDraft.status === 200, String(savedDraft.status));
+	// 正文不再随存稿回传：一存就是整本，百万字的书会被这一件事拖死。
+	check("存稿的响应里没有正文", savedDraft.data.chapter?.content === undefined, JSON.stringify(savedDraft.data.chapter));
 
 	// 大纲里没有的章节不能被正文写入凭空造成 draft（那样正文永远挂不上任何章）。
 	const ghostPatch = await req("PATCH", `/api/projects/${seedId}/chapters/ghost-chapter`, { content: "无主正文" });
@@ -686,26 +688,62 @@ try {
 		content: "自动保存第二版",
 		autosave: true,
 	});
+	// 版本与正文都要单独去取：存稿的响应只回元数据。
+	const afterAutosave = await req("GET", `/api/projects/${seedId}/chapters/${made.data.chapter.id}/draft?history=1`);
 	check(
 		"连续两次自动保存不产生版本",
-		autosave1.status === 200 && autosave2.data.chapter.history.length === 0,
-		JSON.stringify(autosave2.data.chapter?.history),
+		autosave1.status === 200 && (afterAutosave.data.history?.length ?? 0) === 0,
+		JSON.stringify(afterAutosave.data.history),
 	);
-	check("自动保存的内容已生效", autosave2.data.chapter.content === "自动保存第二版", autosave2.data.chapter.content);
-	// 版本历史不追加，但 revision/updatedAt 必须照常推进：前端靠它显示稿次与保存时间。
-	check("自动保存也递增 revision", autosave2.data.chapter.revision === 3, String(autosave2.data.chapter.revision));
-	check("自动保存也刷新 updatedAt", autosave2.data.chapter.updatedAt >= autosave1.data.chapter.updatedAt);
+	check("自动保存的内容已生效", afterAutosave.data.chapter?.content === "自动保存第二版", afterAutosave.data.chapter?.content);
+	check("自动保存也递增 revision", afterAutosave.data.chapter?.revision === 3, String(afterAutosave.data.chapter?.revision));
+	check("自动保存也刷新 updatedAt", afterAutosave.data.chapter?.updatedAt >= autosave1.data.chapter?.updatedAt);
 	const explicitSave = await req("PATCH", `/api/projects/${seedId}/chapters/${made.data.chapter.id}`, { content: "显式保存稿" });
-	check("显式保存归档旧稿", explicitSave.data.chapter.history.length === 1, String(explicitSave.data.chapter.history.length));
+	const afterExplicit = await req("GET", `/api/projects/${seedId}/chapters/${made.data.chapter.id}/draft?history=1`);
+	check("显式保存归档旧稿", afterExplicit.data.chapter?.history?.length === 1, String(afterExplicit.data.chapter?.history?.length));
 	check(
 		"归档的是自动保存的最后一版",
-		explicitSave.data.chapter.history[0]?.content === "自动保存第二版",
-		explicitSave.data.chapter.history[0]?.content,
+		afterExplicit.data.chapter?.history?.[0]?.content === "自动保存第二版",
+		afterExplicit.data.chapter?.history?.[0]?.content,
 	);
 	const repeatSave = await req("PATCH", `/api/projects/${seedId}/chapters/${made.data.chapter.id}`, { content: "显式保存稿" });
-	check("内容相同再保存不产生重复版本", repeatSave.data.chapter.history.length === 1, String(repeatSave.data.chapter.history.length));
+	const afterRepeat = await req("GET", `/api/projects/${seedId}/chapters/${made.data.chapter.id}/draft?history=1`);
+	check("内容相同再保存不产生重复版本", afterRepeat.data.chapter?.history?.length === 1, String(afterRepeat.data.chapter?.history?.length));
 	// 还原成导出用例的正文：后面的断言依赖这份内容。
 	await req("PATCH", `/api/projects/${seedId}/chapters/${made.data.chapter.id}`, { content: draftText });
+
+	// ---- 正文按需取 ----
+	// 骨架里只有元数据，正文要单独去取。这是百万字的书不被接口拖死的关键。
+	console.log("\n正文按需取");
+	const draftView = await req("GET", `/api/projects/${seedId}/chapters/${made.data.chapter.id}/draft`);
+	check("按需取正文返回 200", draftView.status === 200, String(draftView.status));
+	check("取回来的正文与存进去的一致", draftView.data.chapter?.content === draftText, draftView.data.chapter?.content);
+	check("取回来的稿次对得上", typeof draftView.data.chapter?.revision === "number", String(draftView.data.chapter?.revision));
+	check("按需取不带历史时不给历史", draftView.data.history === undefined, JSON.stringify(draftView.data.history));
+	check("取不存在的章返回 404", (await req("GET", `/api/projects/${seedId}/chapters/ghost/draft`)).status === 404);
+
+	const skeleton = await req("GET", `/api/projects/${seedId}`);
+	const skeletonText = JSON.stringify(skeleton.data.project);
+	check("整本响应里没有正文", !skeletonText.includes(draftText), skeletonText.slice(0, 120));
+	check("整本响应里有章的元数据", typeof skeleton.data.project.drafts?.[made.data.chapter.id]?.words === "number", JSON.stringify(skeleton.data.project.drafts?.[made.data.chapter.id]));
+	// 章清单给的是「有正文的那些章」的元数据，按大纲顺序排好；
+	// 大纲里还没动笔的章不在其中（它们只有条目，没有稿次与字数可报）。
+	const draftedIds = skeleton.data.project.outline
+		.filter((chapter: any) => skeleton.data.project.drafts?.[chapter.id] !== undefined)
+		.map((chapter: any) => chapter.id);
+	check(
+		"整本响应给出章的清单",
+		Array.isArray(skeleton.data.chapters) &&
+			skeleton.data.chapters.length === draftedIds.length &&
+			JSON.stringify(skeleton.data.chapters.map((c: any) => c.id)) === JSON.stringify(draftedIds),
+		JSON.stringify(skeleton.data.chapters?.map((c: any) => c.id)),
+	);
+	check(
+		"章清单按大纲顺序",
+		JSON.stringify(skeleton.data.chapters?.map((c: any) => c.id)) === JSON.stringify(draftedIds),
+		JSON.stringify(skeleton.data.chapters?.map((c: any) => c.id)),
+	);
+	check("元数据里有字数与稿次", typeof skeleton.data.chapters?.[0]?.words === "number" && typeof skeleton.data.chapters?.[0]?.revision === "number", JSON.stringify(skeleton.data.chapters?.[0]));
 
 	const oneChapter = await reqText(`/api/projects/${seedId}/export?chapter=${made.data.chapter.id}`);
 	check("单章导出返回 200", oneChapter.status === 200, String(oneChapter.status));
@@ -964,7 +1002,7 @@ try {
 	);
 	check(
 		"操作条排在正文之前",
-		/box\.append\(chapterToolbar\(chapter, index, content\)\);\s*\n\s*box\.append\(page\);/.test(appSource),
+		/box\.append\(chapterToolbar\([^)]*\)\);\s*\n\s*box\.append\(page\);/.test(appSource),
 		"操作条应 append 在 page 之前",
 	);
 	// 稿纸必须给死宽度。稿台是 flex 纵向容器，margin:auto 会关掉 align-self:stretch，
