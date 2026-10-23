@@ -840,6 +840,9 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 				for (const entry of taken) draft.materials.push(materialFromLibrary(entry));
 			});
 		}
+		// 新建一部书要等骨架真的落到磁盘上才回话：这一部书刚建就没了，
+		// 比慢上一二十毫秒难受得多。
+		await store.flush();
 		return json(res, 201, { project, stats: store.stats(project) });
 	}
 
@@ -882,6 +885,8 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 			});
 		});
 		const chapter = saved.outline.find((item) => item.id === createdId);
+		// 立完章就回话之前先等骨架落盘：章目录丢了等于这一章白立。
+		await store.flush();
 		return json(res, 201, { chapter, stats: store.stats(saved) });
 	}
 
@@ -910,6 +915,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 			});
 		});
 		const volume = saved.volumes.find((item) => item.id === createdId);
+		await store.flush();
 		return json(res, 201, { volume, stats: store.stats(saved) });
 	}
 
@@ -951,6 +957,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		});
 		if (!found) return json(res, 404, { error: "卷不存在" });
 		const volume = saved.volumes.find((item) => item.id === volumeId);
+		await store.flush();
 		return json(res, 200, { volume, stats: store.stats(saved) });
 	}
 
@@ -997,6 +1004,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 			}
 		});
 		const chapter = saved.outline.find((item) => item.id === chapterId);
+		await store.flush();
 		return json(res, 200, { chapter, stats: store.stats(saved) });
 	}
 
@@ -1041,6 +1049,8 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 			}),
 		);
 		const current = store.get(project.id);
+		// 存稿回话之前先等骨架也落盘：正文与元数据都在磁盘上，才算存上。
+		await store.flush();
 		return json(res, 200, { chapter: saved, stats: current ? store.stats(current) : undefined });
 	}
 
