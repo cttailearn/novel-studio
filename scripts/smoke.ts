@@ -27,6 +27,34 @@ import { extractText, MAX_INFLATED_BYTES, MAX_TEXT_CHARS, UnsupportedUploadError
 import { deflateRawSync } from "node:zlib";
 
 /**
+ * 把一章的"正文 + 元数据"重新拼成 ChapterDraft。
+ *
+ * 正文已挪到磁盘上的 .txt，骨架里只留元数据；提示词与工具要的是完整的一章，
+ * 所以测试里需要这个拼装动作 —— 它也是 src/ai/novel-agent.ts 里
+ * loadDraftShape 干的事。
+ */
+async function draftShape(
+	store: ProjectStore,
+	projectId: string,
+	chapterId: string,
+): Promise<ChapterDraft | undefined> {
+	const meta = store.get(projectId)?.drafts[chapterId];
+	if (!meta) return undefined;
+	const body = await store.readDraftBody(projectId, chapterId, { history: true });
+	if (!body) return undefined;
+	return {
+		id: meta.id,
+		title: meta.title,
+		content: body.content,
+		summary: meta.summary,
+		revision: meta.revision,
+		updatedAt: meta.updatedAt,
+		materialIds: meta.materialIds,
+		history: body.history,
+	};
+}
+
+/**
  * 造一个最小的 zip。docx 就是 zip，这里自己拼一份，
  * 好让解包路径在没有外部文件的情况下也被测到。
  * crc32 一律填 0 —— 读取方不校验它。
@@ -330,7 +358,9 @@ try {
 	});
 	check("write_chapter 写入正文", textOf(written).includes("第 1 版"), textOf(written));
 	const stored = store.get(project.id)!;
-	check("正文内容一致", stored.drafts.ch01?.content === draftText);
+	// 正文已挪到磁盘上的 .txt，元数据只留字数与版本 —— 断言要去读正文本体。
+	const bodyCh01 = await store.readDraftBody(project.id, "ch01");
+	check("正文内容一致", bodyCh01?.content === draftText, String(bodyCh01?.content?.slice(0, 20)));
 	check("版本号为 1", stored.drafts.ch01?.revision === 1);
 	check("记录用到的素材", stored.drafts.ch01?.materialIds.length === 2);
 	check("中文字数统计", countWords(draftText) > 0, String(countWords(draftText)));
@@ -338,15 +368,16 @@ try {
 	await callWriting("write_chapter", { chapterId: "ch01", title: "雨夜", content: draftText + "更多。", mode: "rewrite" });
 	check("重写后版本号为 2", store.get(project.id)!.drafts.ch01?.revision === 2);
 	// 覆盖写必须留退路：旧稿进 history，否则 rewrite 写坏就是整章不可恢复地丢失。
-	const afterRewrite = store.get(project.id)!.drafts.ch01!;
-	check("重写后旧稿进入历史", afterRewrite.history.length === 1 && afterRewrite.history[0]!.content === draftText, JSON.stringify(afterRewrite.history.length));
-	check("历史记录了作业类型", afterRewrite.history[0]!.mode === "rewrite", afterRewrite.history[0]!.mode);
+	const afterRewrite = await store.readDraftBody(project.id, "ch01", { history: true });
+	check("重写后旧稿进入历史", (afterRewrite?.history.length ?? 0) === 1 && afterRewrite?.history[0]?.content === draftText, String(afterRewrite?.history.length));
+	check("历史记录了作业类型", afterRewrite?.history[0]?.mode === "rewrite", String(afterRewrite?.history[0]?.mode));
 	// 首次写入时若未显式传素材，应继承本章的装配清单 —— 否则正文与素材的
 	// 回溯链会在第一次落笔时就断掉。
 	await call("attach_materials", { chapterId: "ch02", materialIds: [worldId], mode: "add" });
 	await callWriting("write_chapter", { chapterId: "ch02", title: "追查", content: "第二天，雨还没停。", mode: "create" });
 	// 首次写入没有前序，不该凭空造出一条空历史。
-	check("首次写入无历史", store.get(project.id)!.drafts.ch02?.history.length === 0);
+	const bodyCh02 = await store.readDraftBody(project.id, "ch02", { history: true });
+	check("首次写入无历史", (bodyCh02?.history.length ?? 0) === 0, String(bodyCh02?.history.length));
 	check("新章正文继承本章装料", store.get(project.id)!.drafts.ch02?.materialIds.length === 1, String(store.get(project.id)!.drafts.ch02?.materialIds.length));
 	// outlined 的章节写出正文后也应变成 drafted，否则界面一直显示"未成稿"。
 	check(
@@ -614,26 +645,37 @@ try {
 	// 一次 upsert 就要重写整本书，写放大随书稿一起膨胀。
 	await new Promise((resolve) => setTimeout(resolve, 120));
 	const mainRaw = await readFile(path.join(dir, project.id + ".json"), "utf8");
-	const mainJson = JSON.parse(mainRaw) as { drafts?: Record<string, unknown> };
-	check("主文件不再内联正文", Object.keys(mainJson.drafts ?? {}).length === 0, JSON.stringify(Object.keys(mainJson.drafts ?? {})));
+	const mainJson = JSON.parse(mainRaw) as { drafts?: Record<string, { content?: string; words?: number }> };
+	const mainDrafts = Object.values(mainJson.drafts ?? {});
+	check("主文件不再内联正文", mainDrafts.every((meta) => typeof meta.content !== "string"), JSON.stringify(Object.keys(mainJson.drafts ?? {})));
+	check("主文件只留元数据", mainDrafts.every((meta) => typeof meta.words === "number"), JSON.stringify(mainDrafts.map((m) => m.words)));
 	const draftFiles = await readdir(path.join(dir, "drafts", project.id));
-	check("章节正文各自成文件", draftFiles.filter((n) => n.endsWith(".json")).length === 2, String(draftFiles.length));
-	const ch01File = draftFiles.find((n) => n.endsWith(".json"))!;
-	const draftJson = JSON.parse(await readFile(path.join(dir, "drafts", project.id, ch01File), "utf8")) as ChapterDraft;
-	check("章节文件内容完整", draftJson.content.length > 0 && typeof draftJson.history === "object", draftJson.content.slice(0, 20));
+	const metaFiles = draftFiles.filter((n) => n.endsWith(".meta.json"));
+	const bodyFiles = draftFiles.filter((n) => n.endsWith(".txt"));
+	check("章节元数据各自成文件", metaFiles.length === 2, String(metaFiles.length));
+	check("章节正文各自成文件", bodyFiles.length === 2, String(bodyFiles.length));
+	const ch01BodyFile = bodyFiles[0]!;
+	const bodyRaw = await readFile(path.join(dir, "drafts", project.id, ch01BodyFile), "utf8");
+	check("章节文件内容完整", bodyRaw.length > 0, bodyRaw.slice(0, 20));
+	const ch01MetaFile = metaFiles.find((n) => n.replace(".meta.json", "") === ch01BodyFile.replace(".txt", ""))!;
+	const metaJson = JSON.parse(await readFile(path.join(dir, "drafts", project.id, ch01MetaFile), "utf8")) as { words?: number; revision?: number };
+	check("章节元数据带字数与稿次", typeof metaJson.words === "number" && typeof metaJson.revision === "number", JSON.stringify(metaJson));
 
 	// 重新打开必须能把拆出去的正文读回来，否则等于把稿子丢了。
 	const reopenedStore = await ProjectStore.open(dir);
 	const restoredProject = reopenedStore.get(project.id)!;
 	check("重开后正文仍在", Object.keys(restoredProject.drafts).length === 2, String(Object.keys(restoredProject.drafts).length));
-	check("重开后正文内容一致", restoredProject.drafts.ch01?.content === store.get(project.id)!.drafts.ch01?.content);
+	const restoredBody = await reopenedStore.readDraftBody(project.id, "ch01");
+	const storedBody = await store.readDraftBody(project.id, "ch01");
+	check("重开后正文内容一致", restoredBody?.content === storedBody?.content, String(restoredBody?.content?.slice(0, 20)));
 
 	// 快照：章节 history 只管本章覆盖，误删素材这类要靠工程级快照退回去。
 	const snapName = await reopenedStore.snapshot(restoredProject, "test");
 	const snaps = await reopenedStore.listSnapshots(project.id);
 	check("快照已生成", snaps.some((s) => s.name === snapName), String(snaps.length));
-	const snapProject = await reopenedStore.readSnapshot(project.id, snapName);
-	check("快照可读回", snapProject !== undefined && snapProject.materials.length === restoredProject.materials.length);
+	const snapRestored = await reopenedStore.readSnapshot(project.id, snapName);
+	check("快照可读回", snapRestored !== undefined && snapRestored.project.materials.length === restoredProject.materials.length);
+	check("快照带着正文", Object.keys(snapRestored?.bodies ?? {}).length === 2, String(Object.keys(snapRestored?.bodies ?? {}).length));
 	// 路径穿越必须挡住。
 	check("快照拒绝路径穿越", (await reopenedStore.readSnapshot(project.id, "../../settings.json")) === undefined);
 	// 回滚演练：删掉一条素材再从快照恢复。
@@ -642,9 +684,9 @@ try {
 	});
 	check("回滚前素材已清空", reopenedStore.get(project.id)!.materials.length === 0);
 	reopenedStore.mutate(project.id, (draft) => {
-		draft.materials = snapProject!.materials;
+		draft.materials = snapRestored!.project.materials;
 	});
-	check("从快照回滚后素材回来了", reopenedStore.get(project.id)!.materials.length === snapProject!.materials.length);
+	check("从快照回滚后素材回来了", reopenedStore.get(project.id)!.materials.length === snapRestored!.project.materials.length);
 
 	// library.json 损坏必须隔离，不能被空库覆盖。
 	await writeFile(path.join(dir, "library.json"), "{ 坏掉的库", "utf8");
@@ -674,30 +716,27 @@ try {
 			notes: "",
 			materialIds: [],
 		});
-		draft.drafts[longChapterId] = {
-			id: longChapterId,
-			title: "超长章号",
-			content: "超长章号也写得下。",
-			summary: "",
-			revision: 1,
-			updatedAt: Date.now(),
-			materialIds: [],
-			history: [],
-		};
+	});
+	// 正文走 saveDraftBody：它自己写 .txt 与 .meta.json。
+	await nameStore.saveDraftBody(nameProject.id, longChapterId, {
+		title: "超长章号",
+		content: "超长章号也写得下。",
+		materialIds: [],
 	});
 	const nameChaptersDir = path.join(nameDir, "drafts", nameProject.id);
 	const nameWritten = await waitFor(async () => {
 		const names = await readdir(nameChaptersDir).catch(() => [] as string[]);
-		return names.some((name) => name.endsWith(".json"));
+		return names.some((name) => name.endsWith(".txt"));
 	});
 	const nameFiles = await readdir(nameChaptersDir).catch(() => [] as string[]);
-	const longFile = nameFiles.find((name) => name.endsWith(".json")) ?? "";
+	const longFile = nameFiles.find((name) => name.endsWith(".txt")) ?? "";
 	check("超长中文章号能落盘", nameWritten, nameFiles.join(","));
-	check("文件名不超过 120 字符 + .json", longFile.length > 0 && longFile.length <= 125, String(longFile.length));
+	check("文件名不超过 120 字符 + .txt", longFile.length > 0 && longFile.length <= 125, String(longFile.length));
 	check("落盘后没有待重试章节", nameStore.pendingWrites().length === 0, JSON.stringify(nameStore.pendingChapterWrites()));
 	// 文件名截断后仍有短哈希兜底：映射必须稳定，重开能按 id 读回同一份正文。
 	const nameReopened = await ProjectStore.open(nameDir);
-	check("超长章号重开可读回", nameReopened.get(nameProject.id)?.drafts[longChapterId]?.content === "超长章号也写得下。");
+	const longChapterBody = await nameReopened.readDraftBody(nameProject.id, longChapterId);
+	check("超长章号重开可读回", longChapterBody?.content === "超长章号也写得下。", String(longChapterBody?.content));
 
 	// ---- 落盘失败按章记录 ----
 	console.log("\n落盘失败按章记录");
@@ -706,45 +745,35 @@ try {
 	const dirtyProject = dirtyStore.create({ title: "失败章" });
 	const badChapter = "bad-chapter";
 	const goodChapter = "good-chapter";
-	const draftOf = (id: string, content: string): ChapterDraft => ({
-		id,
-		title: id,
-		content,
-		summary: "",
-		revision: 1,
-		updatedAt: Date.now(),
-		materialIds: [],
-		history: [],
-	});
 	dirtyStore.mutate(dirtyProject.id, (draft) => {
-		draft.drafts[badChapter] = draftOf(badChapter, "旧稿");
-		draft.drafts[goodChapter] = draftOf(goodChapter, "旧稿");
+		draft.outline.push(
+			{ id: badChapter, title: "坏章", summary: "", pov: "", volumeId: "", status: "planned", targetWords: 0, notes: "", materialIds: [] },
+			{ id: goodChapter, title: "好章", summary: "", pov: "", volumeId: "", status: "planned", targetWords: 0, notes: "", materialIds: [] },
+		);
 	});
+	await dirtyStore.saveDraftBody(dirtyProject.id, badChapter, { title: "坏章", content: "旧稿" });
+	await dirtyStore.saveDraftBody(dirtyProject.id, goodChapter, { title: "好章", content: "旧稿" });
 	const dirtyChaptersDir = path.join(dirtyDir, "drafts", dirtyProject.id);
-	const badFile = path.join(dirtyChaptersDir, encodeFileName(badChapter) + ".json");
+	const badFile = path.join(dirtyChaptersDir, encodeFileName(badChapter) + ".txt");
 	const initialWritten = await waitFor(async () => {
 		const names = await readdir(dirtyChaptersDir).catch(() => [] as string[]);
-		return names.filter((name) => name.endsWith(".json")).length === 2;
+		return names.filter((name) => name.endsWith(".txt")).length === 2;
 	});
 	check("初始两章都落盘", initialWritten, JSON.stringify(await readdir(dirtyChaptersDir).catch(() => [])));
 	// 用同名目录占住坏章的文件路径：写 tmp 能成功，rename 覆盖目录必然失败。
 	await rm(badFile, { force: true });
 	await mkdir(badFile, { recursive: true });
-	dirtyStore.mutate(dirtyProject.id, (draft) => {
-		// 与真实存稿一致：换新对象并递增 revision，changedChapters 才认得出这一章动过。
-		draft.drafts[badChapter] = { ...draft.drafts[badChapter]!, content: "改不进去的新稿", revision: 2, updatedAt: Date.now() };
-	});
+	// 存稿失败要把这一章记进待重试，而不是把整本书吞掉。
+	await dirtyStore.saveDraftBody(dirtyProject.id, badChapter, { title: "坏章", content: "改不进去的新稿" }).catch(() => undefined);
 	const chapterPending = await waitFor(
 		async () => (dirtyStore.pendingChapterWrites()[dirtyProject.id] ?? []).includes(badChapter),
 	);
 	check("写失败的章进入待重试", chapterPending, JSON.stringify(dirtyStore.pendingChapterWrites()));
 	// 再成功写另一章：不能把上面失败的那章一起从待重试里清掉。
-	dirtyStore.mutate(dirtyProject.id, (draft) => {
-		draft.drafts[goodChapter] = { ...draft.drafts[goodChapter]!, content: "另一章的新稿", revision: 2, updatedAt: Date.now() };
-	});
+	await dirtyStore.saveDraftBody(dirtyProject.id, goodChapter, { title: "好章", content: "另一章的新稿" });
 	const goodWritten = await waitFor(async () => {
 		const pending = dirtyStore.pendingChapterWrites()[dirtyProject.id] ?? [];
-		const raw = await readFile(path.join(dirtyChaptersDir, encodeFileName(goodChapter) + ".json"), "utf8").catch(() => "");
+		const raw = await readFile(path.join(dirtyChaptersDir, encodeFileName(goodChapter) + ".txt"), "utf8").catch(() => "");
 		return raw.includes("另一章的新稿") && pending.includes(badChapter) && !pending.includes(goodChapter);
 	});
 	check("别的章写成功不会清掉失败章", goodWritten, JSON.stringify(dirtyStore.pendingChapterWrites()));
@@ -758,7 +787,8 @@ try {
 	});
 	check("恢复后重试能把失败章补上", retried, JSON.stringify(dirtyStore.pendingChapterWrites()));
 	const dirtyReopened = await ProjectStore.open(dirtyDir);
-	check("重试后重开可读回坏章新稿", dirtyReopened.get(dirtyProject.id)?.drafts[badChapter]?.content === "改不进去的新稿");
+	const dirtyBody = await dirtyReopened.readDraftBody(dirtyProject.id, badChapter);
+	check("重试后重开可读回坏章新稿", dirtyBody?.content === "改不进去的新稿", String(dirtyBody?.content));
 
 	// ---- 提示词 ----
 	console.log("\n提示词");
@@ -787,9 +817,9 @@ try {
 		chapter,
 		materials: assembled,
 		mode: "rewrite",
-		existing: final.drafts.ch01,
+		existing: await draftShape(store, project.id, "ch01"),
 	});
-	check("重写提示词带出现有正文", rewritePrompt.includes(final.drafts.ch01!.content.slice(0, 40)), "");
+	check("重写提示词带出现有正文", rewritePrompt.includes((await store.readDraftBody(project.id, "ch01"))?.content.slice(0, 40) ?? "zzz"), "");
 	check("重写提示词声明可回退", rewritePrompt.includes("历史版本"));
 	// 没有旧稿时不该留一节空的「现有正文」。
 	check("无旧稿时不带该节", !writingPrompt.includes("# 现有正文"), "");

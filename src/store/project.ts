@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { gunzipSync, gzipSync } from "node:zlib";
 
 export type ChapterStatus = "planned" | "outlined" | "drafting" | "drafted" | "revising" | "done";
 export type NoteSeverity = "info" | "warning" | "blocker";
@@ -25,33 +26,6 @@ const SNAPSHOTS_DIR = "snapshots";
 
 /** 每部作品保留的快照数上限。 */
 const MAX_SNAPSHOTS = 20;
-
-/**
- * 记下当前各章 draft 的对象引用与版本号，用于事后判断哪几章被改过。
- *
- * 只比引用和版本号，不比内容：正文动辄数万字，逐字比较会把每次 mutate
- * 都变成一次全书扫描，拆文件省下的时间又还回去了。
- */
-function snapshotDrafts(project: Project): Map<string, { ref: ChapterDraft; revision: number }> {
-	return new Map(Object.entries(project.drafts).map(([id, draft]) => [id, { ref: draft, revision: draft.revision }]));
-}
-
-/** 比对前后快照，返回需要重写的章 id（含被删除的章）。 */
-function changedChapters(
-	before: Map<string, { ref: ChapterDraft; revision: number }>,
-	project: Project,
-): Set<string> {
-	const changed = new Set<string>();
-	for (const [id, draft] of Object.entries(project.drafts)) {
-		const prev = before.get(id);
-		if (!prev || prev.ref !== draft || prev.revision !== draft.revision) changed.add(id);
-	}
-	// 消失的章也要落盘一次：writeChapterFile 见到 undefined 才会删掉那个文件。
-	for (const id of before.keys()) {
-		if (!(id in project.drafts)) changed.add(id);
-	}
-	return changed;
-}
 
 /**
  * 编码后的文件名主体上限（含短哈希后缀，不含 .json）。
@@ -84,10 +58,12 @@ function shortHash(raw: string): string {
 	return (h >>> 0).toString(36);
 }
 
-/** 主文件不带正文：正文按章单独落盘，这里剥掉以免又写一遍。 */
-function stripDrafts(project: Project): Omit<Project, "drafts"> & { drafts: Record<string, never> } {
-	return { ...project, drafts: {} };
-}
+/**
+ * 主文件只留骨架：卷、大纲、素材、备注，以及各章的元数据。
+ *
+ * 正文与历史在 data/drafts/<projectId>/ 下按章单独存，
+ * 骨架里一个字的正文都不留 —— 这是"千万字也不卡"的第一道门。
+ */
 /**
  * 素材种类。
  *
@@ -255,6 +231,40 @@ export interface DraftRevision {
 	mode: string;
 }
 
+/**
+ * 一章的元数据：骨架里存的就是它。
+ *
+ * 正文不进骨架 —— 骨架是每次都要读进读出的东西，一部千万字的书若把正文也挂在
+ * 骨架上，光是刷新一次页面就得搬动几十兆。骨架只留"这章写过没有、多少字、
+ * 第几稿、装配了哪些料"，正文与历史按需从磁盘单独取。
+ */
+export interface ChapterMeta {
+	id: string;
+	title: string;
+	/** 这一章实际写了什么的小结（与大纲的 summary 要略不是一回事）。 */
+	summary: string;
+	/** 这一章正文的字数，存稿时算好，统计时直接加。 */
+	words: number;
+	revision: number;
+	updatedAt: number;
+	/** 写作时装配了哪些素材，用于回溯"这段正文是从什么料写出来的"。 */
+	materialIds: string[];
+	/** 有没有正文。草稿文件在磁盘上但正文是空的，仍算写过。 */
+	hasDraft: boolean;
+}
+
+/** 一章的正文与历史版本，按需从磁盘取。 */
+export interface DraftBody {
+	content: string;
+	history: DraftRevision[];
+}
+
+/**
+ * 章节正文的完整形态（含正文与历史）。
+ *
+ * 磁盘上不再以这个形状存（拆成 .meta.json / .txt / .hist/），
+ * 但工具与提示词之间传的就是它：写作上下文要的是"上一章正文 + 小结"。
+ */
 export interface ChapterDraft {
 	id: string;
 	title: string;
@@ -311,7 +321,8 @@ export interface Project {
 	 */
 	volumes: Volume[];
 	outline: OutlineChapter[];
-	drafts: Record<string, ChapterDraft>;
+	/** 各章的元数据。正文不在这里，按需从 drafts/<projectId>/ 取。 */
+	drafts: Record<string, ChapterMeta>;
 	notes: ContinuityNote[];
 	createdAt: number;
 	updatedAt: number;
@@ -523,44 +534,32 @@ export function normalizeProject(raw: unknown): Project {
 		}))
 		: [];
 
-	const drafts: Record<string, ChapterDraft> = {};
+	const drafts: Record<string, ChapterMeta> = {};
 	if (input.drafts && typeof input.drafts === "object") {
 		for (const [key, value] of Object.entries(input.drafts as Record<string, unknown>)) {
 			if (!value || typeof value !== "object") continue;
-			const draft = value as Partial<ChapterDraft>;
-			drafts[key] = {
-				id: typeof draft.id === "string" ? draft.id : key,
-				title: typeof draft.title === "string" ? draft.title : "",
-				content: typeof draft.content === "string" ? draft.content : "",
+			const raw = value as Partial<ChapterMeta> & Partial<ChapterDraft>;
+			const id = typeof raw.id === "string" && raw.id ? raw.id : key;
+			// 老骨架里正文是内联的（拆文件之前的老工程），这里照样认得：
+			// 字数当场算一次，正文随后由迁移写进 .txt。
+			const content = typeof raw.content === "string" ? raw.content : "";
+			drafts[id] = {
+				id,
+				title: typeof raw.title === "string" ? raw.title : "",
 				// 老工程没有小结字段，缺省空串：读得开，接续时提示"上一章没有小结"。
-				summary: typeof draft.summary === "string" ? draft.summary : "",
-				revision: typeof draft.revision === "number" ? draft.revision : 1,
-				updatedAt: typeof draft.updatedAt === "number" ? draft.updatedAt : Date.now(),
-				materialIds: Array.isArray(draft.materialIds)
-					? draft.materialIds.filter((v): v is string => typeof v === "string")
+				summary: typeof raw.summary === "string" ? raw.summary : "",
+				words:
+					typeof raw.words === "number" && raw.words >= 0
+						? Math.floor(raw.words)
+						: content
+							? countWords(content)
+							: 0,
+				revision: typeof raw.revision === "number" ? raw.revision : 1,
+				updatedAt: typeof raw.updatedAt === "number" ? raw.updatedAt : Date.now(),
+				materialIds: Array.isArray(raw.materialIds)
+					? raw.materialIds.filter((v): v is string => typeof v === "string")
 					: [],
-				// 老工程没有 history 字段，缺省为空数组：升级后第一次覆盖才开始留档。
-				// 用 flatMap 而非 filter+map：filter 不收窄 content 的类型，
-				// 运行时"确实是 string"这个判断只有 flatMap 里的分支能表达。
-				history: Array.isArray(draft.history)
-					? draft.history
-							.flatMap((h): DraftRevision[] => {
-								if (!h || typeof h !== "object" || typeof h.content !== "string") return [];
-								return [
-									{
-										revision: typeof h.revision === "number" ? h.revision : 0,
-										title: typeof h.title === "string" ? h.title : "",
-										content: h.content,
-										materialIds: Array.isArray(h.materialIds)
-											? h.materialIds.filter((v): v is string => typeof v === "string")
-											: [],
-										updatedAt: typeof h.updatedAt === "number" ? h.updatedAt : Date.now(),
-										mode: typeof h.mode === "string" ? h.mode : "rewrite",
-									},
-								];
-							})
-							.slice(-MAX_DRAFT_HISTORY)
-					: [],
+				hasDraft: typeof raw.hasDraft === "boolean" ? raw.hasDraft : content.length > 0,
 			};
 		}
 	}
@@ -586,6 +585,38 @@ export function normalizeProject(raw: unknown): Project {
 	};
 }
 
+/**
+ * 从老骨架里挑出还内联着正文的那几章。
+ *
+ * 拆正文之前，drafts 里的每一章都带着 content 与 history。
+ * normalizeProject 只留元数据（正文按需取），所以迁移正文要用这份原始副本。
+ */
+export function extractLegacyDrafts(input: unknown): Record<string, ChapterDraft> {
+	const out: Record<string, ChapterDraft> = {};
+	if (!input || typeof input !== "object") return out;
+	const drafts = (input as { drafts?: unknown }).drafts;
+	if (!drafts || typeof drafts !== "object") return out;
+	for (const [key, value] of Object.entries(drafts as Record<string, unknown>)) {
+		if (!value || typeof value !== "object") continue;
+		const raw = value as Partial<ChapterDraft>;
+		if (typeof raw.content !== "string") continue;
+		const id = typeof raw.id === "string" && raw.id ? raw.id : key;
+		out[id] = {
+			id,
+			title: typeof raw.title === "string" ? raw.title : "",
+			content: raw.content,
+			summary: typeof raw.summary === "string" ? raw.summary : "",
+			revision: typeof raw.revision === "number" ? raw.revision : 1,
+			updatedAt: typeof raw.updatedAt === "number" ? raw.updatedAt : Date.now(),
+			materialIds: Array.isArray(raw.materialIds) ? raw.materialIds.filter((v): v is string => typeof v === "string") : [],
+			history: Array.isArray(raw.history)
+				? raw.history.filter((h): h is DraftRevision => !!h && typeof h.content === "string")
+				: [],
+		};
+	}
+	return out;
+}
+
 export interface ProjectStats {
 	chapters: number;
 	words: number;
@@ -598,14 +629,30 @@ export interface ProjectStats {
 
 /** 消除作品所有派生数据的字段，用于界面展示。 */
 export function projectStats(project: Project): ProjectStats {
-	const words = Object.values(project.drafts).reduce((sum, draft) => sum + countWords(draft.content), 0);
+	// 字数直接加各章的元数据：正文已经不在内存里了，
+	// 每存一次稿就全书扫一遍会把自动存稿拖成几十毫秒的重活。
+	const words = Object.values(project.drafts).reduce((sum, meta) => sum + (meta.words || 0), 0);
 	return {
 		chapters: project.outline.length,
 		words,
 		materials: project.materials.length,
 		coveredChapters: project.outline.filter((chapter) => chapter.materialIds.length > 0).length,
-		draftedChapters: Object.keys(project.drafts).length,
+		draftedChapters: Object.values(project.drafts).filter((meta) => meta.hasDraft).length,
 		openNotes: project.notes.filter((note) => note.status === "open").length,
+	};
+}
+
+/** 由完整草稿算出元数据。存稿与迁移都走这里，保证两处算出的字数一致。 */
+export function draftMeta(draft: ChapterDraft): ChapterMeta {
+	return {
+		id: draft.id,
+		title: draft.title,
+		summary: draft.summary ?? "",
+		words: countWords(draft.content ?? ""),
+		revision: draft.revision,
+		updatedAt: draft.updatedAt,
+		materialIds: draft.materialIds ?? [],
+		hasDraft: (draft.content ?? "").length > 0,
 	};
 }
 
@@ -713,6 +760,16 @@ interface PendingWrites {
 	chapters: Set<string>;
 }
 
+/** 一份还没写进磁盘的正文，等重试时补写。 */
+interface PendingBody {
+	title: string;
+	content: string;
+	summary?: string;
+	materialIds?: string[];
+	mode?: string;
+	keepHistory?: boolean;
+}
+
 /**
  * 小说工程的持久化存储。
  * 内存为主，每次写入后异步落盘为一个 JSON 文件。
@@ -727,6 +784,14 @@ export class ProjectStore {
 	 * 上一次失败、这一轮根本没重试的章一并从待重试里清掉。
 	 */
 	private readonly dirty = new Map<string, PendingWrites>();
+	/**
+	 * 上一轮没写进磁盘的正文（工程 id → 章 id → 原文）。
+	 *
+	 * 正文落在 .txt 与 .hist/，与骨架分开写：骨架写成功不代表正文写成功。
+	 * 写正文失败时原文还在手里，留一份在这儿，等 retryPending 补写 ——
+	 * 否则这一稿就只剩编辑器里那一份，刷新就没了。
+	 */
+	private readonly pendingBodies = new Map<string, Map<string, PendingBody>>();
 
 	private readonly dir: string;
 
@@ -734,13 +799,35 @@ export class ProjectStore {
 		this.dir = dir;
 	}
 
-	/** 章节正文目录：data/drafts/<projectId>/<encoded chapterId>.json */
+	/** 章节正文目录：data/drafts/<projectId>/ */
 	private draftDir(projectId: string): string {
 		return path.join(this.dir, DRAFTS_DIR, projectId);
 	}
 
-	private draftFile(projectId: string, chapterId: string): string {
-		return path.join(this.draftDir(projectId), encodeFileName(chapterId) + ".json");
+	/**
+	 * 一章的三个落点：元数据、正文、历史。
+	 *
+	 * <enc>.meta.json —— ChapterMeta（骨架里也有一份，这里是权威副本）
+	 * <enc>.txt        —— 正文纯文本
+	 * <enc>.hist/      —— 历史版本，每版一个 <revision>.json
+	 *
+	 * 拆开是为了两件事：正文能被单独取（不拖着一整本书走），
+	 * 历史不必与正文同生共死（回滚时只翻历史目录，不必整章重写）。
+	 */
+	private draftBase(projectId: string, chapterId: string): string {
+		return path.join(this.draftDir(projectId), encodeFileName(chapterId));
+	}
+
+	private metaFile(projectId: string, chapterId: string): string {
+		return this.draftBase(projectId, chapterId) + ".meta.json";
+	}
+
+	private bodyFile(projectId: string, chapterId: string): string {
+		return this.draftBase(projectId, chapterId) + ".txt";
+	}
+
+	private histDir(projectId: string, chapterId: string): string {
+		return this.draftBase(projectId, chapterId) + ".hist";
 	}
 
 	/**
@@ -760,28 +847,17 @@ export class ProjectStore {
 	 */
 	private persist(project: Project, changed?: ReadonlySet<string>): Promise<void> {
 		const file = path.join(this.dir, project.id + ".json");
-		// 不显式给 changed 时按全量写：用于新建与全量重试。
-		const chapters = new Set(changed ?? Object.keys(project.drafts));
+		void changed;
 		const previous = this.writeChains.get(project.id) ?? Promise.resolve();
 		const next = previous
 			.catch(() => undefined)
 			.then(async () => {
-				// 顺序要紧：先把章节文件写落，再剥主文件里的正文。
-				// 反过来（先写主文件）一旦中途崩溃，主文件已不带正文而章节文件还没写全，
-				// 重启后读到的就是一部没有正文的书 —— 迁移本身成了丢数据的动作。
-				// 先写章节文件则最坏情况只是多留一份冗余，下一轮会覆盖。
-				for (const chapterId of chapters) {
-					try {
-						await this.writeChapterFile(project.id, chapterId, project.drafts[chapterId]);
-						// 只摘这一章的标记：别的失败章要继续留着等重试。
-						this.clearDirtyChapter(project.id, chapterId);
-					} catch (error) {
-						this.markDirtyChapter(project.id, chapterId);
-						console.error("[store] 落盘 " + project.id + " 章 " + chapterId + " 失败（已标记待重试）:", error);
-					}
-				}
+				// 骨架里只有卷、大纲、素材、备注与各章元数据，没有正文。
+				// 正文由 saveDraftBody 自己按章写，两边不互相依赖：
+				// 骨架落后一拍只影响字数显示，正文落后一拍则是"字还在但没存上"，
+				// 后者由 writeBody 的失败标记单独追。
 				try {
-					await this.writeAtomic(file, stripDrafts(project));
+					await this.writeAtomic(file, project);
 					this.clearDirtyProject(project.id);
 				} catch (error) {
 					this.markDirtyProject(project.id);
@@ -812,15 +888,228 @@ export class ProjectStore {
 		}
 	}
 
-	/** 章节正文单文件落盘；draft 为 undefined 表示这一章被删了。 */
-	private async writeChapterFile(projectId: string, chapterId: string, draft: ChapterDraft | undefined): Promise<void> {
-		const file = this.draftFile(projectId, chapterId);
-		if (!draft) {
-			await rm(file, { force: true });
-			return;
+	/**
+	 * 写一章：正文落 .txt，元数据落 .meta.json，历史落 .hist/。
+	 *
+	 * 顺序是"先正文、后元数据"：元数据说"这章有正文"却找不到正文文件，
+	 * 界面就会摆出一个空章节（幽灵章）；反过来只是字数晚一拍显示。
+	 *
+	 * 历史版本每版一个文件（<revision>.json）。留着它们是因为覆盖写是这套流程里
+	 * 唯一会销毁内容的动作 —— 模型看不见原文时执行覆盖，出错就是静默截断。
+	 */
+	async saveDraftBody(
+		projectId: string,
+		chapterId: string,
+		input: {
+			title: string;
+			content: string;
+			summary?: string;
+			materialIds?: string[];
+			mode?: string;
+			/** 是否把旧稿归档成历史版本。自动存稿为 false。 */
+			keepHistory?: boolean;
+		},
+	): Promise<ChapterMeta> {
+		try {
+			return await this.writeDraftBody(projectId, chapterId, input);
+		} catch (error) {
+			// 写不进去就把原文留在手里，等 retryPending 补写。
+			// 只留一个标记不济事 —— 原文没了就再也补不回来。
+			this.markDirtyChapter(projectId, chapterId);
+			let chapters = this.pendingBodies.get(projectId);
+			if (!chapters) {
+				chapters = new Map<string, PendingBody>();
+				this.pendingBodies.set(projectId, chapters);
+			}
+			chapters.set(chapterId, { ...input });
+			throw error;
 		}
-		await mkdir(path.dirname(file), { recursive: true });
-		await this.writeAtomic(file, draft);
+	}
+
+	private async writeDraftBody(
+		projectId: string,
+		chapterId: string,
+		input: {
+			title: string;
+			content: string;
+			summary?: string;
+			materialIds?: string[];
+			mode?: string;
+			keepHistory?: boolean;
+		},
+	): Promise<ChapterMeta> {
+		const project = this.projects.get(projectId);
+		if (!project) throw new Error("工程 " + projectId + " 不存在");
+		const existingMeta = project.drafts[chapterId];
+		const existingBody = await this.readDraftBody(projectId, chapterId, { history: true });
+		const oldContent = existingBody?.content ?? "";
+		const content = input.content;
+		// 内容没变就不留版本：连点两次"存稿"不该产生一份重复历史。
+		const changed = oldContent.trim() !== content.trim();
+		const history: DraftRevision[] = [...(existingBody?.history ?? [])];
+		if (existingMeta && oldContent.trim() && input.keepHistory !== false && changed) {
+			history.push({
+				revision: existingMeta.revision,
+				title: existingMeta.title,
+				content: oldContent,
+				materialIds: existingMeta.materialIds,
+				updatedAt: existingMeta.updatedAt,
+				mode: input.mode ?? "manual",
+			});
+		}
+		while (history.length > MAX_DRAFT_HISTORY) history.shift();
+
+		const meta: ChapterMeta = {
+			id: chapterId,
+			title: input.title,
+			summary: input.summary ?? existingMeta?.summary ?? "",
+			words: countWords(content),
+			revision: (existingMeta?.revision ?? 0) + 1,
+			updatedAt: Date.now(),
+			materialIds: input.materialIds ?? existingMeta?.materialIds ?? [],
+			hasDraft: content.length > 0,
+		};
+
+		await mkdir(this.draftDir(projectId), { recursive: true });
+		// 正文先落。
+		await this.writeAtomicText(this.bodyFile(projectId, chapterId), content);
+		// 历史版本：每版一个文件，多余的旧版删掉。
+		const histDir = this.histDir(projectId, chapterId);
+		await mkdir(histDir, { recursive: true });
+		for (const revision of history) {
+			await this.writeAtomic(path.join(histDir, revision.revision + ".json"), revision);
+		}
+		await this.trimHistory(histDir, history);
+		// 元数据最后落：它说"有正文"时，正文一定已经在盘上。
+		await this.writeAtomic(this.metaFile(projectId, chapterId), meta);
+
+		project.drafts[chapterId] = meta;
+		project.updatedAt = meta.updatedAt;
+		await this.persist(project);
+		// 写成功了：撤下这一章的待重试标记，也不再留着原文副本。
+		this.clearDirtyChapter(projectId, chapterId);
+		const pending = this.pendingBodies.get(projectId);
+		if (pending) {
+			pending.delete(chapterId);
+			if (pending.size === 0) this.pendingBodies.delete(projectId);
+		}
+		return meta;
+	}
+
+	/** 历史版本只留最近若干版，旧的删掉，免得目录无限膨胀。 */
+	private async trimHistory(histDir: string, history: DraftRevision[]): Promise<void> {
+		const keep = new Set(history.map((revision) => revision.revision + ".json"));
+		const names = await readdir(histDir).catch(() => [] as string[]);
+		for (const name of names) {
+			if (!name.endsWith(".json") || keep.has(name)) continue;
+			await rm(path.join(histDir, name), { force: true });
+		}
+	}
+
+	/**
+	 * 读一章的正文与历史。按需从磁盘取，不常驻内存。
+	 *
+	 * 老工程（正文与历史同处一个 <enc>.json）在这里惰性迁移：
+	 * 写出新的 .meta.json / .txt / .hist/ 之后，把老文件改名成 .migrated 留着。
+	 * 改名而不是删除 —— 迁移万一算错，原件还在。
+	 */
+	async readDraftBody(
+		projectId: string,
+		chapterId: string,
+		options: { history?: boolean } = {},
+	): Promise<DraftBody | undefined> {
+		const meta = this.projects.get(projectId)?.drafts[chapterId];
+		const base = this.draftBase(projectId, chapterId);
+		let content = await readFile(this.bodyFile(projectId, chapterId), "utf8").catch(() => undefined);
+		let history: DraftRevision[] = [];
+		if (options.history) {
+			history = await this.readHistoryFiles(this.histDir(projectId, chapterId));
+		}
+		if (content !== undefined) {
+			return { content, history };
+		}
+		// 没有 .txt：可能是老格式（正文在 <enc>.json 里），也可能这章压根没写过。
+		const legacy = await readFile(base + ".json", "utf8").catch(() => undefined);
+		if (legacy === undefined) {
+			return meta ? { content: "", history } : undefined;
+		}
+		try {
+			const draft = JSON.parse(legacy) as ChapterDraft;
+			if (typeof draft?.content !== "string") throw new Error("老章节文件缺少 content");
+			content = draft.content;
+			history = Array.isArray(draft.history) ? draft.history.slice(-MAX_DRAFT_HISTORY) : [];
+			// 迁移：先写新文件，全部成功后才把老文件改名。
+			await this.migrateLegacyChapter(projectId, draft, content, history);
+			return { content, history };
+		} catch (error) {
+			const kept = base + ".json.corrupt";
+			await rename(base + ".json", kept).catch(() => undefined);
+			console.error("[store] 章节正文损坏，已隔离为 " + path.basename(kept) + ":", error);
+			return meta ? { content: "", history } : undefined;
+		}
+	}
+
+	/** 把老格式的一章拆成 .meta.json / .txt / .hist/，成功后再把老文件改名留存。 */
+	private async migrateLegacyChapter(
+		projectId: string,
+		draft: ChapterDraft,
+		content: string,
+		history: DraftRevision[],
+	): Promise<void> {
+		const chapterId = draft.id;
+		try {
+			await mkdir(this.draftDir(projectId), { recursive: true });
+			await this.writeAtomicText(this.bodyFile(projectId, chapterId), content);
+			const histDir = this.histDir(projectId, chapterId);
+			await mkdir(histDir, { recursive: true });
+			for (const revision of history) {
+				await this.writeAtomic(path.join(histDir, revision.revision + ".json"), revision);
+			}
+			const meta = draftMeta({ ...draft, content, history });
+			await this.writeAtomic(this.metaFile(projectId, chapterId), meta);
+			// 老文件改名留存，不删：迁移万一有偏差，原件还在原地。
+			await rename(this.draftBase(projectId, chapterId) + ".json", this.draftBase(projectId, chapterId) + ".json.migrated");
+		} catch (error) {
+			// 迁移失败就保持老文件原样，下次再试；内容仍能从老文件读出来。
+			console.error("[store] 老章节迁移失败，保留原文件待下次重试:", error);
+		}
+	}
+
+	/** 读历史版本目录，按版本号从旧到新。 */
+	private async readHistoryFiles(histDir: string): Promise<DraftRevision[]> {
+		const names = await readdir(histDir).catch(() => [] as string[]);
+		const out: DraftRevision[] = [];
+		for (const name of names) {
+			if (!name.endsWith(".json")) continue;
+			const raw = await readFile(path.join(histDir, name), "utf8").catch(() => undefined);
+			if (raw === undefined) continue;
+			try {
+				const revision = JSON.parse(raw) as DraftRevision;
+				if (typeof revision?.content !== "string") continue;
+				out.push(revision);
+			} catch {
+				// 历史里坏掉的一版不该牵连别的版本：跳过即可。
+			}
+		}
+		return out.sort((a, b) => a.revision - b.revision);
+	}
+
+	/** 原子写纯文本：写唯一临时文件，再 rename 覆盖。 */
+	private async writeAtomicText(file: string, text: string): Promise<void> {
+		const tmp = file + "." + randomUUID() + ".tmp";
+		await writeFile(tmp, text, "utf8");
+		for (let attempt = 0; ; attempt++) {
+			try {
+				await rename(tmp, file);
+				return;
+			} catch (error) {
+				if (attempt >= 4) {
+					await rm(tmp, { force: true }).catch(() => undefined);
+					throw error;
+				}
+				await new Promise((resolve) => setTimeout(resolve, 20 * (attempt + 1)));
+			}
+		}
 	}
 
 	/** 原子写：写唯一临时文件，再 rename 覆盖。Windows 上 rename 偶发 EPERM，故重试。 */
@@ -866,14 +1155,28 @@ export class ProjectStore {
 					const raw = await readFile(path.join(dir, name), "utf8").catch(() => undefined);
 					if (raw === undefined) return;
 					try {
-					// normalizeProject 会把主文件里内联的旧 drafts 一并读出来（首次迁移的来源），
-					// 这里再叠加按章存放的文件；章节文件优先，它才是拆分后的权威副本。
-					const project = normalizeProject(JSON.parse(raw));
-					const fromFiles = await store.loadDrafts(project);
+					// 老工程的主文件里还内联着正文（拆文件之前的形状）。
+					// 先把这份原始副本取出来，迁移要用；normalizeProject 只留元数据。
+					const parsed = JSON.parse(raw) as unknown;
+					const legacyInline = extractLegacyDrafts(parsed);
+					const project = normalizeProject(parsed);
+					const fromFiles = await store.loadChapterMetas(project);
 					project.drafts = { ...project.drafts, ...fromFiles };
 					store.projects.set(project.id, project);
-					// 老工程第一次打开时把内联正文拆成按章文件，随后主文件不再带正文。
-					// persist 内部先写章节文件再剥主文件，中途失败也只是多留一份冗余。
+					// 把内联正文拆成按章文件：.txt 落正文，.hist/ 落历史，.meta.json 落元数据。
+					// 拆完主文件只剩骨架，正文不再随骨架进出内存。
+					for (const [chapterId, draft] of Object.entries(legacyInline)) {
+						if (!draft.content) continue;
+						await store.saveDraftBody(project.id, chapterId, {
+							title: draft.title,
+							content: draft.content,
+							summary: draft.summary,
+							materialIds: draft.materialIds,
+							keepHistory: false,
+						}).catch((error) => {
+							console.error("[store] 老工程内联正文拆分失败（正文仍在主文件里，不会丢）:", error);
+						});
+					}
 					if (Object.keys(project.drafts).length > 0) void store.persist(project);
 					await store.sweepTemp(path.join(dir, DRAFTS_DIR, project.id));
 					} catch (error) {
@@ -913,27 +1216,66 @@ export class ProjectStore {
 	/**
 	 * 在原对象上实施变更并落盘。传入的对象不应在外部长期持有。
 	 *
-	 * 只重写这一轮真正动过的章：先记住各章 draft 的对象引用与版本号，
-	 * 回调跑完再比一遍。正文已按章拆文件，这里若仍全量重写，
-	 * 一次改标题也会把几十 MB 的正文全部写一遍，等于拆分没做。
+	 * 这里只管骨架（卷、大纲、素材、备注）。正文另有落点：
+	 * 走 saveDraftBody，它自己写 .txt 与 .hist/ 并更新元数据。
 	 */
 	mutate(id: string, mutate: (project: Project) => void): Project {
 		const project = this.projects.get(id);
 		if (!project) throw new Error("工程 " + id + " 不存在");
-		const before = snapshotDrafts(project);
 		mutate(project);
 		project.updatedAt = Date.now();
-		void this.persist(project, changedChapters(before, project));
+		void this.persist(project);
 		return project;
 	}
 
-	/** 读出按章存放的正文。损坏的章节文件隔离保留，不牵连整部作品。 */
-	private async loadDrafts(project: Project): Promise<Record<string, ChapterDraft>> {
-		const out: Record<string, ChapterDraft> = {};
+	/**
+	 * 等排队中的落盘做完。
+	 *
+	 * mutate 与 create 都是"改完就回话，落盘在后面慢慢写"。
+	 * 平常没问题（界面上读的是内存），但要重新打开一个目录读它时，
+	 * 骨架可能还只躺在 .tmp 里 —— 那一步得先把写完的等一等。
+	 */
+	async flush(): Promise<void> {
+		await Promise.all([...this.writeChains.values()]);
+	}
+
+	/**
+	 * 读出各章的元数据。正文不进内存，要看正文另行按需取。
+	 *
+	 * 目录里两种文件都认：新格式的 <enc>.meta.json，以及老格式的 <enc>.json
+	 * （正文与历史同处一文件）。老格式在这里惰性迁移：拆成 .txt 与 .hist/，
+	 * 老文件改名成 .migrated 留存。损坏的章节文件隔离保留，不牵连整部作品。
+	 */
+	private async loadChapterMetas(project: Project): Promise<Record<string, ChapterMeta>> {
+		const out: Record<string, ChapterMeta> = {};
 		const dir = path.join(this.dir, DRAFTS_DIR, project.id);
 		const names = await readdir(dir).catch(() => [] as string[]);
 		for (const name of names) {
-			if (!name.endsWith(".json")) continue;
+			if (name.endsWith(".meta.json")) {
+				const raw = await readFile(path.join(dir, name), "utf8").catch(() => undefined);
+				if (raw === undefined) continue;
+				try {
+					const meta = JSON.parse(raw) as ChapterMeta;
+					if (typeof meta?.id !== "string" || !meta.id) throw new Error("章节元数据缺少 id");
+					out[meta.id] = {
+						id: meta.id,
+						title: typeof meta.title === "string" ? meta.title : "",
+						summary: typeof meta.summary === "string" ? meta.summary : "",
+						words: typeof meta.words === "number" && meta.words >= 0 ? Math.floor(meta.words) : 0,
+						revision: typeof meta.revision === "number" ? meta.revision : 1,
+						updatedAt: typeof meta.updatedAt === "number" ? meta.updatedAt : Date.now(),
+						materialIds: Array.isArray(meta.materialIds) ? meta.materialIds.filter((v) => typeof v === "string") : [],
+						hasDraft: meta.hasDraft !== false,
+					};
+				} catch (error) {
+					const kept = path.join(dir, name + ".corrupt");
+					await rename(path.join(dir, name), kept).catch(() => undefined);
+					console.error("[store] 章节元数据损坏，已隔离为 " + path.basename(kept) + ":", error);
+				}
+				continue;
+			}
+			// 老格式：正文与历史同处一个 <enc>.json。
+			if (!name.endsWith(".json") || name.endsWith(".meta.json")) continue;
 			const file = path.join(dir, name);
 			const raw = await readFile(file, "utf8").catch(() => undefined);
 			if (raw === undefined) continue;
@@ -942,13 +1284,16 @@ export class ProjectStore {
 				if (typeof draft?.id !== "string" || typeof draft.content !== "string") {
 					throw new Error("章节正文缺少 id 或 content");
 				}
-				out[draft.id] = {
+				const history = Array.isArray(draft.history) ? draft.history.slice(-MAX_DRAFT_HISTORY) : [];
+				const meta = draftMeta({
 					...draft,
-					history: Array.isArray(draft.history) ? draft.history.slice(-MAX_DRAFT_HISTORY) : [],
+					history,
 					materialIds: Array.isArray(draft.materialIds) ? draft.materialIds : [],
-					// 老章节文件没有小结字段，缺省空串。
 					summary: typeof draft.summary === "string" ? draft.summary : "",
-				};
+				});
+				out[draft.id] = meta;
+				// 迁移：先写新文件，成功后才把老文件改名留存。
+				await this.migrateLegacyChapter(project.id, { ...draft, history }, draft.content, history);
 			} catch (error) {
 				const kept = file + ".corrupt";
 				await rename(file, kept).catch(() => undefined);
@@ -1007,13 +1352,39 @@ export class ProjectStore {
 	 * 章节内的 history 只覆盖"这一章被反复覆盖"，管不到误删素材、误改大纲、
 	 * 误删整部作品。快照是工程级的退路：调用方在破坏性操作前先拍一份，
 	 * 出问题能整本回滚。
+	 *
+	 * 快照带正文，且用 gzip 落盘。理由有二：
+	 * 一是回滚要能连正文一起退回去 —— 只存骨架的快照能把书救回来却救不回字；
+	 * 二是正文是高度重复的中文文本，压缩后通常只剩原体积的三四成，
+	 * 千万字的书拍一份快照也不再是 GB 级。
 	 */
 	async snapshot(project: Project, label = ""): Promise<string> {
 		const dir = path.join(this.dir, SNAPSHOTS_DIR, project.id);
 		await mkdir(dir, { recursive: true });
 		const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-		const name = stamp + (label ? "-" + encodeFileName(label) : "") + ".json";
-		await this.writeAtomic(path.join(dir, name), project);
+		const name = stamp + (label ? "-" + encodeFileName(label) : "") + ".json.gz";
+		// 正文按需取：快照是显式动作，才付这个读取代价。
+		const bodies: Record<string, DraftBody> = {};
+		for (const chapterId of Object.keys(project.drafts)) {
+			const body = await this.readDraftBody(project.id, chapterId, { history: true });
+			if (body) bodies[chapterId] = body;
+		}
+		const payload = gzipSync(Buffer.from(JSON.stringify({ project, bodies }), "utf8"));
+		const file = path.join(dir, name);
+		const tmp = file + "." + randomUUID() + ".tmp";
+		await writeFile(tmp, payload);
+		for (let attempt = 0; ; attempt++) {
+			try {
+				await rename(tmp, file);
+				break;
+			} catch (error) {
+				if (attempt >= 4) {
+					await rm(tmp, { force: true }).catch(() => undefined);
+					throw error;
+				}
+				await new Promise((resolve) => setTimeout(resolve, 20 * (attempt + 1)));
+			}
+		}
 		await this.trimSnapshots(project.id, dir);
 		return name;
 	}
@@ -1021,7 +1392,7 @@ export class ProjectStore {
 	/** 快照只留最近若干份，旧的清掉，避免 data 目录无限膨胀。 */
 	private async trimSnapshots(projectId: string, dir: string): Promise<void> {
 		const names = (await readdir(dir).catch(() => [] as string[]))
-			.filter((name) => name.endsWith(".json"))
+			.filter((name) => name.endsWith(".json.gz") || name.endsWith(".json"))
 			// 文件名以 ISO 时间戳开头，字典序即时间序。
 			.sort();
 		for (const name of names.slice(0, Math.max(0, names.length - MAX_SNAPSHOTS))) {
@@ -1033,7 +1404,10 @@ export class ProjectStore {
 	/** 列出某部作品的快照，最新的在前。 */
 	async listSnapshots(projectId: string): Promise<{ name: string; at: number; size: number }[]> {
 		const dir = path.join(this.dir, SNAPSHOTS_DIR, projectId);
-		const names = (await readdir(dir).catch(() => [] as string[])).filter((name) => name.endsWith(".json")).sort().reverse();
+		const names = (await readdir(dir).catch(() => [] as string[]))
+			.filter((name) => name.endsWith(".json.gz") || name.endsWith(".json"))
+			.sort()
+			.reverse();
 		const out: { name: string; at: number; size: number }[] = [];
 		for (const name of names) {
 			const info = await stat(path.join(dir, name)).catch(() => undefined);
@@ -1043,14 +1417,47 @@ export class ProjectStore {
 		return out;
 	}
 
-	/** 读回一份快照，供回滚使用。文件损坏时返回 undefined 而不是抛错。 */
-	async readSnapshot(projectId: string, name: string): Promise<Project | undefined> {
+	/**
+	 * 读回一份快照，供回滚使用。文件损坏时返回 undefined 而不是抛错。
+	 *
+	 * 返回骨架与各章正文两份东西：骨架是卷、大纲、素材、备注与元数据，
+	 * 正文是逐章的字。回滚要把两者一起退回去，只退骨架等于字还在原处。
+	 * 老快照（.json，正文内联在 drafts 里）也认：解析出来一并给。
+	 */
+	async readSnapshot(
+		projectId: string,
+		name: string,
+	): Promise<{ project: Project; bodies: Record<string, DraftBody> } | undefined> {
 		// 文件名来自 listSnapshots，但仍要挡一手路径穿越。
 		if (name.includes("/") || name.includes("\\") || name.includes("..")) return undefined;
-		const raw = await readFile(path.join(this.dir, SNAPSHOTS_DIR, projectId, name), "utf8").catch(() => undefined);
-		if (raw === undefined) return undefined;
+		const file = path.join(this.dir, SNAPSHOTS_DIR, projectId, name);
 		try {
-			return normalizeProject(JSON.parse(raw));
+			if (name.endsWith(".gz")) {
+				const raw = await readFile(file);
+				const parsed = JSON.parse(gunzipSync(raw).toString("utf8")) as {
+					project?: unknown;
+					bodies?: Record<string, DraftBody>;
+				};
+				const project = normalizeProject(parsed.project);
+				const bodies: Record<string, DraftBody> = {};
+				for (const [chapterId, body] of Object.entries(parsed.bodies ?? {})) {
+					if (!body || typeof body.content !== "string") continue;
+					bodies[chapterId] = {
+						content: body.content,
+						history: Array.isArray(body.history) ? body.history : [],
+					};
+				}
+				return { project, bodies };
+			}
+			// 老快照：正文内联在 drafts 里。
+			const raw = await readFile(file, "utf8");
+			const parsed = JSON.parse(raw) as unknown;
+			const project = normalizeProject(parsed);
+			const bodies: Record<string, DraftBody> = {};
+			for (const [chapterId, draft] of Object.entries(extractLegacyDrafts(parsed))) {
+				bodies[chapterId] = { content: draft.content, history: draft.history };
+			}
+			return { project, bodies };
 		} catch {
 			return undefined;
 		}
@@ -1069,8 +1476,21 @@ export class ProjectStore {
 				this.dirty.delete(id);
 				continue;
 			}
-			// 只重试真正失败的那几章；主文件无论如何都会再写一遍。
-			await this.persist(project, new Set(pending.chapters));
+			// 正文写在别处（.txt 与 .hist/），骨架无论如何都会再写一遍。
+			await this.persist(project);
+		}
+		// 上一轮没写进磁盘的正文：手里还留着原文，趁这时补写。
+		for (const [projectId, chapters] of [...this.pendingBodies]) {
+			for (const [chapterId, body] of [...chapters]) {
+				try {
+					await this.saveDraftBody(projectId, chapterId, body);
+					chapters.delete(chapterId);
+					this.clearDirtyChapter(projectId, chapterId);
+				} catch (error) {
+					console.error("[store] 补写章节正文仍失败（已标记待重试）:", error);
+				}
+			}
+			if (chapters.size === 0) this.pendingBodies.delete(projectId);
 		}
 	}
 

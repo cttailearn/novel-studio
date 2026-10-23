@@ -439,12 +439,14 @@ export function buildContextDigest(project: Project, options?: { scope?: DigestS
 	if (scope === "writing") {
 		const current = chapterId ? project.outline.find((chapter) => chapter.id === chapterId) : undefined;
 		const volume = current?.volumeId ? volumeTitle(project, current.volumeId) : "";
+		// 字数是元数据里记好的：正文已不在 project.drafts 里，再去扫一遍正文
+		// 就等于每次开对话都把全书读一遍。
+		const written = Object.values(project.drafts).filter((meta) => meta.hasDraft).length;
+		const words = Object.values(project.drafts).reduce((sum, meta) => sum + meta.words, 0);
 		parts.push(
 			section(
 				"当前进度",
-				`- 已写 ${Object.keys(project.drafts).length} 章，共 ${
-					Object.values(project.drafts).reduce((sum, d) => sum + countWords(d.content), 0)
-				} 字` + (volume ? `\n- 本章所在卷：${volume}` : ""),
+				`- 已写 ${written} 章，共 ${words} 字` + (volume ? `\n- 本章所在卷：${volume}` : ""),
 			),
 		);
 		// 本章素材全文不进 digest：系统提示词里已经带了一份（materialBlock），
@@ -462,11 +464,12 @@ export function buildContextDigest(project: Project, options?: { scope?: DigestS
 	}
 
 	// 素材模式：索引而非全文，避免库里素材一多就把窗口占满。
-	const words = Object.values(project.drafts).reduce((sum, draft) => sum + countWords(draft.content), 0);
+	const written = Object.values(project.drafts).filter((meta) => meta.hasDraft).length;
+	const words = Object.values(project.drafts).reduce((sum, meta) => sum + meta.words, 0);
 	parts.push(
 		section(
 			"当前进度",
-			`- 已写 ${Object.keys(project.drafts).length} 章，共 ${words} 字\n- 待办 ${
+			`- 已写 ${written} 章，共 ${words} 字\n- 待办 ${
 				project.notes.filter((n) => n.status === "open").length
 			} 条`,
 		),

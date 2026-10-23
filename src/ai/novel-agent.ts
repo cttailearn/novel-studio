@@ -1,7 +1,7 @@
 import { Agent, type AgentMessage, type ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model, Models } from "@earendil-works/pi-ai";
 import type { AppConfig } from "../config/env.ts";
-import { assembledMaterials, kindLabel, type Project, type ProjectStore } from "../store/project.ts";
+import { assembledMaterials, kindLabel, type ChapterDraft, type ChapterMeta, type Project, type ProjectStore } from "../store/project.ts";
 import type { MaterialLibrary } from "../store/library.ts";
 import {
 	buildContextDigest,
@@ -86,8 +86,11 @@ function withStreamDefaults(models: Models): Models["streamSimple"] {
  * 两个角色共享工具定义的只读部分，但提示词与工具集完全分开：
  * 素材角色拿不到 write_chapter，写作角色拿不到 upsert_material。
  * 这是整个架构的核心约束 —— 工具边界即职责边界。
+ *
+ * 之所以是异步的：写作角色的提示词要带上本章旧稿与上一章的正文，
+ * 而正文按章存在磁盘上（.txt），不在内存里 —— 建会话这一刻才按需取。
  */
-export function createNovelAgent(options: NovelAgentOptions): Agent {
+export async function createNovelAgent(options: NovelAgentOptions): Promise<Agent> {
 	const { store, projectId, model, models, config, sessionId, role } = options;
 	const streamFn = withStreamDefaults(models);
 
@@ -132,7 +135,7 @@ export function createNovelAgent(options: NovelAgentOptions): Agent {
 	const systemPrompt =
 		role === "material"
 			? buildMaterialSystemPrompt(project)
-			: buildWritingSystemPrompt(project, writingContextOf(options, project));
+			: buildWritingSystemPrompt(project, await writingContextOf(options, project));
 
 	return new Agent({
 		initialState: {
@@ -195,8 +198,11 @@ function buildLibraryDigest(library: MaterialLibrary): string {
  *
  * 现算这一支让常驻写作会话也能用（调试、连续改稿），
  * 一次性写作则由服务端预先算好，避免提示词与注入的快照不一致。
+ *
+ * 正文按章从磁盘取：工程骨架里只有元数据，字在 .txt 里。
+ * 这里只取两章 —— 本章旧稿与上一章 —— 不是整本。
  */
-function writingContextOf(options: NovelAgentOptions, project: Project): WritingContext {
+async function writingContextOf(options: NovelAgentOptions, project: Project): Promise<WritingContext> {
 	if (options.writing) return options.writing;
 	const chapterId = options.chapterId;
 	const index = chapterId ? project.outline.findIndex((c) => c.id === chapterId) : -1;
@@ -205,7 +211,15 @@ function writingContextOf(options: NovelAgentOptions, project: Project): Writing
 		throw new Error(`章节 ${chapterId ?? "(未指定)"} 不存在，无法建立写作上下文`);
 	}
 	const previousChapter = index > 0 ? project.outline[index - 1] : undefined;
-	const existing = project.drafts[chapterId];
+	const existingMeta = project.drafts[chapterId];
+	const existing = existingMeta
+		? await loadDraftShape(options.store, project.id, chapterId, existingMeta)
+		: undefined;
+	const previousMeta = previousChapter ? project.drafts[previousChapter.id] : undefined;
+	const previous =
+		previousChapter && previousMeta
+			? await loadDraftShape(options.store, project.id, previousChapter.id, previousMeta)
+			: undefined;
 	return {
 		chapter,
 		materials: assembledMaterials(project, chapterId),
@@ -216,11 +230,31 @@ function writingContextOf(options: NovelAgentOptions, project: Project): Writing
 		// 上一章的两样都给：正文草稿（结尾 + 实际小结）与大纲条目（写前定的要略）。
 		...(previousChapter
 			? {
-					previous: project.drafts[previousChapter.id],
+					previous,
 					previousOutline: previousChapter,
 				}
 			: {}),
 		...(existing ? { existing } : {}),
+	};
+}
+
+/** 把磁盘上的正文组装成提示词与工具之间传的那种形状（正文 + 小结 + 版本）。 */
+async function loadDraftShape(
+	store: ProjectStore,
+	projectId: string,
+	chapterId: string,
+	meta: ChapterMeta,
+): Promise<ChapterDraft> {
+	const body = await store.readDraftBody(projectId, chapterId);
+	return {
+		id: chapterId,
+		title: meta.title,
+		content: body?.content ?? "",
+		summary: meta.summary,
+		revision: meta.revision,
+		updatedAt: meta.updatedAt,
+		materialIds: meta.materialIds,
+		history: body?.history ?? [],
 	};
 }
 

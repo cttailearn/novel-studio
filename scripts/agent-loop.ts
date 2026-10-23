@@ -63,7 +63,7 @@ try {
 		fauxAssistantMessage([fauxText("已备好第一章的料。")], { stopReason: "stop" }),
 	]);
 
-	const materialAgent = createNovelAgent({
+	const materialAgent = await createNovelAgent({
 		store,
 		projectId: project.id,
 		model,
@@ -137,7 +137,7 @@ try {
 		fauxAssistantMessage([fauxText("本章已成稿。")], { stopReason: "stop" }),
 	]);
 
-	const writingAgent = createNovelAgent({
+	const writingAgent = await createNovelAgent({
 		store,
 		projectId: project.id,
 		model,
@@ -165,7 +165,9 @@ try {
 	);
 
 	const afterWriting = store.get(project.id)!;
-	check("正文已落盘", afterWriting.drafts.ch01?.content === "雨停了三天。");
+	// 正文已挪到磁盘上的 .txt，元数据只留字数与版本 —— 断言要去读正文本体。
+	const writtenBody = await store.readDraftBody(project.id, "ch01");
+	check("正文已落盘", writtenBody?.content === "雨停了三天。", String(writtenBody?.content));
 	check("版本号为 1", afterWriting.drafts.ch01?.revision === 1);
 	check("记录用到的素材", afterWriting.drafts.ch01?.materialIds[0] === materialId);
 	check("大纲状态自动更新为 drafted", afterWriting.outline[0]?.status === "drafted", String(afterWriting.outline[0]?.status));

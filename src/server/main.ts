@@ -47,7 +47,7 @@ import {
 	type Settings,
 } from "../config/settings.ts";
 import { loadEnvFile, readConfig, type AppConfig } from "../config/env.ts";
-import { assembledMaterials, CHAPTER_STATUSES, isKnownKind, kindOptions, linkMaterials, MATERIAL_KINDS, MAX_DRAFT_HISTORY, registerCustomKinds, removeMaterial, ProjectStore, type ChapterStatus, type MaterialKind, type Project } from "../store/project.ts";
+import { assembledMaterials, CHAPTER_STATUSES, isKnownKind, kindOptions, linkMaterials, MATERIAL_KINDS, MAX_DRAFT_HISTORY, registerCustomKinds, removeMaterial, ProjectStore, type ChapterDraft, type ChapterMeta, type ChapterStatus, type MaterialKind, type Project } from "../store/project.ts";
 import { KindStore } from "../store/kinds.ts";
 
 loadEnvFile();
@@ -182,9 +182,9 @@ function uploadLimitError(res: ServerResponse): void {
 	json(res, 413, { error: "文件超过 " + Math.round(MAX_UPLOAD_BYTES / 1024 / 1024) + " MB 上限" });
 }
 
-function replaceAgent(session: Session, model: Model<any>): void {
+async function replaceAgent(session: Session, model: Model<any>): Promise<void> {
 	session.model = model;
-	session.agent = createNovelAgent({
+	session.agent = await createNovelAgent({
 		store,
 		projectId: session.projectId,
 		model,
@@ -204,8 +204,11 @@ function replaceAgent(session: Session, model: Model<any>): void {
  *
  * 与 novel-agent.ts 的 writingContextOf 是同一套语义，这里显式传入 mode
  * 并对缺章节报错，因为服务端需要据此返回 404。
+ *
+ * 正文在磁盘上（.txt），这里按需取两章：上一章与本章。
+ * 只取两章而不是整本 —— 千万字的书不可能整本塞进上下文。
  */
-function buildWritingContext(projectId: string, chapterId: string, mode: ChapterWriteMode): WritingContext {
+async function buildWritingContext(projectId: string, chapterId: string, mode: ChapterWriteMode): Promise<WritingContext> {
 	const project = store.get(projectId);
 	if (!project) throw new Error("工程不存在");
 	const index = project.outline.findIndex((c) => c.id === chapterId);
@@ -214,6 +217,8 @@ function buildWritingContext(projectId: string, chapterId: string, mode: Chapter
 	// 只认真正解析得到的素材：装配清单里可能有指向已删素材的悬空 id。
 	const materials = assembledMaterials(project, chapterId);
 	const previousChapter = index > 0 ? project.outline[index - 1] : undefined;
+	const previous = previousChapter ? await loadDraftShape(projectId, previousChapter.id) : undefined;
+	const existing = await loadDraftShape(projectId, chapterId);
 	return {
 		chapter,
 		materials,
@@ -221,11 +226,33 @@ function buildWritingContext(projectId: string, chapterId: string, mode: Chapter
 		// 上一章的两样都给：正文草稿（结尾 + 实际小结）与大纲条目（写前定的要略）。
 		...(previousChapter
 			? {
-					previous: project.drafts[previousChapter.id],
+					previous,
 					previousOutline: previousChapter,
 				}
 			: {}),
-		...(project.drafts[chapterId] ? { existing: project.drafts[chapterId] } : {}),
+		...(existing ? { existing } : {}),
+	};
+}
+
+/**
+ * 把磁盘上的正文组装成工具与提示词之间传的那种形状。
+ *
+ * 正文与历史分开存，但提示词要的是"这一章的正文 + 小结 + 版本"，
+ * 所以这里把两者合起来 —— 只在需要的那一刻读这一章。
+ */
+async function loadDraftShape(projectId: string, chapterId: string): Promise<ChapterDraft | undefined> {
+	const meta = store.get(projectId)?.drafts[chapterId];
+	if (!meta) return undefined;
+	const body = await store.readDraftBody(projectId, chapterId);
+	return {
+		id: chapterId,
+		title: meta.title,
+		content: body?.content ?? "",
+		summary: meta.summary,
+		revision: meta.revision,
+		updatedAt: meta.updatedAt,
+		materialIds: meta.materialIds,
+		history: body?.history ?? [],
 	};
 }
 
@@ -258,12 +285,12 @@ function writingInstruction(assembly: WritingContext, note?: string): string {
  * 作者中途装料或摘料之后若不重建，模型看到的依据就是旧的 ——
  * 新装的料这一轮用不上，已摘掉的料还会被当成已经定下的事实。
  */
-function refreshWritingAgent(session: Session): void {
+async function refreshWritingAgent(session: Session): Promise<void> {
 	if (session.agent.state.isStreaming) return;
 	const messages = session.agent.state.messages;
 	// 对话要留着，只换开头那条系统消息（它携带提示词与工具声明）。
 	const conversation = messages[0]?.role === "system" ? messages.slice(1) : messages;
-	replaceAgent(session, session.model);
+	await replaceAgent(session, session.model);
 	session.agent.state.messages = [...session.agent.state.messages.slice(0, 1), ...conversation];
 }
 
@@ -612,25 +639,36 @@ function sameModelParams(a: ModelConfig, b: ModelConfig): boolean {
  * 别的编辑器或投稿系统，多一层信息比少一层更容易删。没落笔的章节一律跳过：
  * 导出成一片空白没有意义，还得用户自己回头删。
  * 章序用阿拉伯数字：中文数字过了百章就开始别扭，导出件不该有这种上限。
+ *
+ * 正文按章从磁盘取，一章一段地吐出去：整本书先拼成一个大字符串，
+ * 千万字的书光这一份导出就能把内存吃掉几百兆。
  */
-function buildExport(project: Project, chapterId: string | null, markdown: boolean): string {
-	const blocks: string[] = [];
+async function* exportChunks(
+	project: Project,
+	chapterId: string | null,
+	markdown: boolean,
+): AsyncGenerator<string> {
+	let first = true;
+	const yieldBlock = (block: string): string => {
+		const separator = first ? "" : "\n\n";
+		first = false;
+		return separator + block;
+	};
 	if (!chapterId) {
-		blocks.push((markdown ? "# " : "") + project.title);
+		yield yieldBlock((markdown ? "# " : "") + project.title);
 		const meta = [project.genre, project.logline].filter(Boolean).join(" · ");
-		if (meta) blocks.push(meta);
+		if (meta) yield yieldBlock(meta);
 	}
 
-	project.outline.forEach((chapter, index) => {
-		if (chapterId && chapter.id !== chapterId) return;
-		const body = project.drafts[chapter.id]?.content.trim() ?? "";
+	for (const [index, chapter] of project.outline.entries()) {
+		if (chapterId && chapter.id !== chapterId) continue;
+		const body = (await store.readDraftBody(project.id, chapter.id))?.content.trim() ?? "";
 		// 单章导出即使还没落笔也要给出章名，否则用户拿到一个空文件不知所以。
-		if (!body && !chapterId) return;
+		if (!body && !chapterId) continue;
 		const heading = (markdown ? "## " : "") + "第" + (index + 1) + "章 " + chapter.title;
-		blocks.push(body ? heading + "\n\n" + body : heading);
-	});
-
-	return blocks.join("\n\n") + "\n";
+		yield yieldBlock(body ? heading + "\n\n" + body : heading);
+	}
+	yield "\n";
 }
 
 /** 导出文件名。路径分隔符与控制字符一律换成下划线，别让它爬出下载目录。 */
@@ -981,48 +1019,53 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		// 显式保存才归档旧稿 —— 每 1.5 秒一次的自动保存若都进 history，
 		// 最近 10 版会全是零碎片段，真正的版本历史就没了。
 		const autosave = body.autosave === true;
+		const existingMeta = project.drafts[chapterId];
+		const planned = project.outline.find((c) => c.id === chapterId);
 		// 与智能体的 write_chapter 共用同一把按章的锁：两边都是整段覆盖，
 		// 谁后写谁赢会让先写的内容无声消失。
+		// 正文落 .txt、元数据落 .meta.json、历史落 .hist/，主文件只留骨架 ——
+		// 存稿不再需要重写整本书。
 		const saved = await store.withChapterLock(project.id, chapterId, () =>
-			store.mutate(project.id, (draft) => {
-				const existing = draft.drafts[chapterId];
-				const planned = draft.outline.find((c) => c.id === chapterId);
-				// 手动存稿和智能体写稿都会覆盖旧稿，走同一个归档逻辑。
-				const history = [...(existing?.history ?? [])];
-				// 内容没变就不留版本：连点两次"存稿"不该产生一份重复历史。
-				const sameContent = existing !== undefined && existing.content.trim() === content.trim();
-				if (existing && existing.content.trim() && !autosave && !sameContent) {
-					history.push({
-						revision: existing.revision,
-						title: existing.title,
-						content: existing.content,
-						materialIds: existing.materialIds,
-						updatedAt: existing.updatedAt,
-						mode: "manual",
-					});
-					while (history.length > MAX_DRAFT_HISTORY) history.shift();
-				}
-				draft.drafts[chapterId] = {
-					id: chapterId,
-					title: body.title?.trim() || existing?.title || chapterId,
-					content,
-					// 手动存稿是作者手改正文，不是重写这一章：旧小结一律留着。
-					// 它可能略旧（正文改了、小结没跟着改），但比空着强 ——
-					// 下一章接续靠的就是它。作者显式补了小结才用新值。
-					summary:
-						typeof body.summary === "string" && body.summary.trim()
-							? body.summary
-							: (existing?.summary ?? ""),
-					revision: (existing?.revision ?? 0) + 1,
-					updatedAt: Date.now(),
-					// 首次存稿时继承该章的装配清单：正文是拿这些料写的，
-					// 留空会让"这段正文从什么料来"的回溯断掉。
-					materialIds: existing?.materialIds ?? planned?.materialIds ?? [],
-					history,
-				};
+			store.saveDraftBody(project.id, chapterId, {
+				title: body.title?.trim() || existingMeta?.title || planned?.title || chapterId,
+				content,
+				// 手动存稿是作者手改正文，不是重写这一章：旧小结一律留着。
+				// 它可能略旧（正文改了、小结没跟着改），但比空着强 ——
+				// 下一章接续靠的就是它。作者显式补了小结才用新值。
+				summary:
+					typeof body.summary === "string" && body.summary.trim() ? body.summary : undefined,
+				// 首次存稿时继承该章的装配清单：正文是拿这些料写的，
+				// 留空会让"这段正文从什么料来"的回溯断掉。
+				materialIds: existingMeta?.materialIds ?? planned?.materialIds ?? [],
+				keepHistory: !autosave,
 			}),
 		);
-		return json(res, 200, { chapter: saved.drafts[chapterId], stats: store.stats(saved) });
+		const current = store.get(project.id);
+		return json(res, 200, { chapter: saved, stats: current ? store.stats(current) : undefined });
+	}
+
+	// 取一章的正文：正文按需取，不再随整本响应一起过来。
+	const draftMatch = pathname.match(/^\/api\/projects\/([\w-]+)\/chapters\/([^/]+)\/draft$/);
+	if (draftMatch && req.method === "GET") {
+		const project = store.get(draftMatch[1]!);
+		if (!project) return json(res, 404, { error: "工程不存在" });
+		const chapterId = decodeURIComponent(draftMatch[2]!);
+		const meta = project.drafts[chapterId];
+		if (!meta) return json(res, 404, { error: "章节不存在" });
+		const withHistory = url.searchParams.get("history") === "1";
+		const body = await store.readDraftBody(project.id, chapterId, { history: withHistory });
+		return json(res, 200, {
+			chapter: {
+				id: chapterId,
+				title: meta.title,
+				content: body?.content ?? "",
+				summary: meta.summary,
+				revision: meta.revision,
+				updatedAt: meta.updatedAt,
+				materialIds: meta.materialIds,
+				...(withHistory ? { history: body?.history ?? [] } : {}),
+			},
+		});
 	}
 
 	// 导出：整本或单章。正文原样给出，不重排、不加字数标记 —— 导出的稿子要能直接进别的编辑器。
@@ -1036,15 +1079,17 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		}
 		const markdown = url.searchParams.get("format") === "md";
 		const ext = markdown ? "md" : "txt";
-		const text = buildExport(project, chapterId, markdown);
+		// 边读边写：正文按章从磁盘取，不先拼成一个大字符串。
 		res.writeHead(200, {
 			"content-type": "text/plain; charset=utf-8",
-			"content-length": Buffer.byteLength(text),
 			// 文件名里有中文，只能走 RFC 5987 的 filename*：塞进 filename= 的非 ASCII 会被浏览器整个丢掉。
 			"content-disposition":
 				`attachment; filename="novel.${ext}"; filename*=UTF-8''${encodeURIComponent(exportFilename(project, chapterId, ext))}`,
 		});
-		res.end(text);
+		for await (const chunk of exportChunks(project, chapterId, markdown)) {
+			res.write(chunk);
+		}
+		res.end();
 		return;
 	}
 
@@ -1054,7 +1099,14 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		const project = store.get(projectId);
 		if (!project) return json(res, 404, { error: "工程不存在" });
 
-		if (req.method === "GET") return json(res, 200, { project, stats: store.stats(project) });
+		if (req.method === "GET") {
+			// 整本响应只给骨架与各章元数据，正文按需另取。
+			// 附一份按大纲顺序排好的章目清单：前端不必自己从 drafts 里拼。
+			const chapters = project.outline
+				.map((chapter) => project.drafts[chapter.id])
+				.filter((meta): meta is ChapterMeta => meta !== undefined);
+			return json(res, 200, { project, chapters, stats: store.stats(project) });
+		}
 
 		if (req.method === "DELETE") {
 			// 只删这部作品，不动素材库：库里记的取用情况是从工程现算的，会自己跟上。
@@ -1135,7 +1187,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 			createdAt: Date.now(),
 		};
 		try {
-			replaceAgent(session, model);
+			await replaceAgent(session, model);
 		} catch (error) {
 			return json(res, 400, { error: (error as Error).message });
 		}
@@ -1164,7 +1216,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 			if (body.thinkingLevel) session.thinkingLevel = body.thinkingLevel;
 			// 保留对话历史，只更换模型与推理档位。
 			const messages = [...session.agent.state.messages];
-			replaceAgent(session, model);
+			await replaceAgent(session, model);
 			session.agent.state.messages = messages;
 			return json(res, 200, { model: session.modelRef, thinkingLevel: session.thinkingLevel });
 		} catch (error) {
@@ -1207,7 +1259,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		if (!input) return json(res, 400, { error: "请求空白" });
 		if (session.agent.state.isStreaming) return json(res, 409, { error: "上一条消息还在生成中" });
 		// 写作会话的组装上下文会随装料变化，每轮重建让提示词跟上。
-		if (session.role === "writing") refreshWritingAgent(session);
+		if (session.role === "writing") await refreshWritingAgent(session);
 		return streamNdjson(res, session.agent, session.modelRef, input);
 	}
 
@@ -1238,7 +1290,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 
 		let assembly: WritingContext;
 		try {
-			assembly = buildWritingContext(projectId, chapterId, mode);
+			assembly = await buildWritingContext(projectId, chapterId, mode);
 		} catch (error) {
 			return json(res, 404, { error: (error as Error).message });
 		}
@@ -1256,7 +1308,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		}
 
 		const instruction = writingInstruction(assembly, body.note?.trim());
-		const agent = createNovelAgent({
+		const agent = await createNovelAgent({
 			store,
 			projectId,
 			model,
@@ -1918,19 +1970,30 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		// 回滚前先给当前状态拍一份，否则回滚本身就成了不可逆操作。
 		await store.snapshot(current, "before-restore");
 		store.mutate(projectId, (draft) => {
-			// 逐字段覆盖而不是整体替换对象：drafts 需按 id 合并，
-			// 替换整个对象会让引用比较误判，从而触发全量重写。
-			draft.title = restored.title;
-			draft.genre = restored.genre;
-			draft.logline = restored.logline;
-			draft.synopsis = restored.synopsis;
-			draft.styleGuide = restored.styleGuide;
-			draft.targetWords = restored.targetWords;
-			draft.materials = restored.materials;
-			draft.outline = restored.outline;
-			draft.notes = restored.notes;
-			draft.drafts = { ...restored.drafts };
+			// 逐字段覆盖而不是整体替换对象。
+			draft.title = restored.project.title;
+			draft.genre = restored.project.genre;
+			draft.logline = restored.project.logline;
+			draft.synopsis = restored.project.synopsis;
+			draft.styleGuide = restored.project.styleGuide;
+			draft.targetWords = restored.project.targetWords;
+			draft.materials = restored.project.materials;
+			draft.outline = restored.project.outline;
+			draft.volumes = restored.project.volumes;
+			draft.notes = restored.project.notes;
+			draft.drafts = { ...restored.project.drafts };
 		});
+		// 正文逐章退回去：只退骨架等于书还在原处，字没回来。
+		for (const [chapterId, body] of Object.entries(restored.bodies)) {
+			const meta = restored.project.drafts[chapterId];
+			await store.saveDraftBody(projectId, chapterId, {
+				title: meta?.title ?? chapterId,
+				content: body.content,
+				summary: meta?.summary,
+				materialIds: meta?.materialIds ?? [],
+				keepHistory: false,
+			});
+		}
 		return json(res, 200, { project: store.get(projectId) });
 	}
 

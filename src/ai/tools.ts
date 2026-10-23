@@ -228,28 +228,58 @@ function sharedTools(deps: NovelToolDeps): AgentTool<any>[] {
 		defineTool({
 			name: "list_chapters",
 			label: "查看章节与作进度",
-			description: "列出大纲的全部章节、每章状态、已写字数与已装配的素材数。写新章节前应先调用它确认章节号与状态。",
-			parameters: Type.Object({}, { description: "无参数" }),
-			execute: async () => {
+			description:
+				"列出大纲的章节、每章状态、已写字数与已装配的素材数。写新章节前应先调用它确认章节号与状态。" +
+				"章多时用 offset 与 limit 分段取；要看每章要略再加 withSummary —— 要略最占篇幅，" +
+				"没必要时不要带。",
+			parameters: Type.Object(
+				{
+					scope: Type.Optional(
+						Type.Union([Type.Literal("all"), Type.Literal("drafted"), Type.Literal("undrafted")], {
+							description: "取哪一批章：all 全部（默认）、drafted 只看已落笔、undrafted 只看还没写的",
+						}),
+					),
+					offset: Type.Optional(Type.Number({ description: "从第几章开始（0 起，默认 0）" })),
+					limit: Type.Optional(Type.Number({ description: "最多列多少章（默认 40，上限 200）" })),
+					withSummary: Type.Optional(Type.Boolean({ description: "是否带上每章要略（默认不带）" })),
+				},
+				{ description: "无参数即列前 40 章，不带要略" },
+			),
+			execute: async (_toolCallId, params: { scope?: string; offset?: number; limit?: number; withSummary?: boolean }) => {
 				const p = getProject(deps);
 				if (p.outline.length === 0) return result("大纲还是空的，需要先用 update_outline 建立。", p.outline);
 				const volumeName = (volumeId: string) =>
 					volumeId ? (p.volumes.find((volume) => volume.id === volumeId)?.title ?? "") : "";
+				// 先按范围筛，再分段取。
+				// 一千章的书一次全列出来，光是章号与标题就够把上下文窗撑爆，
+				// 而模型多数时候只想看"前面那几章"或"哪些还没写"。
+				const scope = params.scope ?? "all";
+				const scoped = p.outline.filter((chapter) => {
+					const written = p.drafts[chapter.id]?.hasDraft === true;
+					if (scope === "drafted") return written;
+					if (scope === "undrafted") return !written;
+					return true;
+				});
+				const offset = Math.max(0, Math.floor(params.offset ?? 0));
+				const limit = Math.min(200, Math.max(1, Math.floor(params.limit ?? 40)));
+				const page = scoped.slice(offset, offset + limit);
 				const chapters = lines(
-					p.outline.map((chapter, index) => {
+					page.map((chapter, index) => {
 						const draft = p.drafts[chapter.id];
-						const written = draft ? countWords(draft.content) : 0;
+						// 字数是元数据里记好的，不必再扫一遍正文。
+						const written = draft?.words ?? 0;
 						const pct = chapter.targetWords > 0 ? Math.min(100, Math.round((written / chapter.targetWords) * 100)) : 0;
 						const rev = draft ? " · 第" + draft.revision + "版" : "";
 						const mats = chapter.materialIds.length > 0 ? " · 装料" + chapter.materialIds.length + "条" : " · 未装料";
 						const volume = volumeName(chapter.volumeId);
+						const summary = params.withSummary && chapter.summary ? "—— " + chapter.summary : "";
 						return (
-							index + 1 + ". " + (volume ? "〔" + volume + "〕" : "") +
+							(offset + index + 1) + ". " + (volume ? "〔" + volume + "〕" : "") +
 							"[" + chapter.id + "] " + chapter.title +
 							"（" + chapter.status + "） 已写" + written + "字" +
 							(chapter.targetWords ? "/" + chapter.targetWords : "") +
 							(pct ? " " + pct + "%" : "") + rev + mats +
-							"—— " + chapter.summary
+							summary
 						);
 					}),
 				);
@@ -268,24 +298,61 @@ function sharedTools(deps: NovelToolDeps): AgentTool<any>[] {
 								}),
 							) + "\n\n章：\n"
 						: "";
-				return result(volumes + chapters, { outline: p.outline, drafts: p.drafts, volumes: p.volumes });
+				const more = scoped.length > offset + page.length
+					? "\n（还有 " + (scoped.length - offset - page.length) + " 章没列，用 offset 继续取）"
+					: "";
+				return result(volumes + chapters + more, { outline: p.outline, drafts: p.drafts, volumes: p.volumes });
 			},
 		}),
 
 		defineTool({
 			name: "read_chapter",
 			label: "读取章节正文",
-			description: "读取指定章节的已写正文。续写、改稿、评估前必须先读原文，不要凭印象猜写。",
-			parameters: Type.Object({ chapterId: nonEmpty("章节 id，用 list_chapters 获取") }, { description: "读取章节" }),
-			execute: async (_toolCallId, params) => {
+			description:
+				"读取指定章节的已写正文。续写、改稿、评估前必须先读原文，不要凭印象猜写。" +
+				"正文很长时用 part 与 chars 取一段：head 取开头、tail 取结尾（接文气用）；" +
+				"start 可以把取段的位置往后挪。",
+			parameters: Type.Object(
+				{
+					chapterId: nonEmpty("章节 id，用 list_chapters 获取"),
+					part: Type.Optional(
+						Type.Union([Type.Literal("full"), Type.Literal("head"), Type.Literal("tail")], {
+							description: "取哪一段：full 全文（默认）、head 开头、tail 结尾",
+						}),
+					),
+					chars: Type.Optional(Type.Number({ description: "取多少字（默认 6000，上限 20000）" })),
+					start: Type.Optional(Type.Number({ description: "part 为 head/tail 时的起始字位（默认 0）" })),
+				},
+				{ description: "读取章节" },
+			),
+			execute: async (_toolCallId, params: { chapterId: string; part?: string; chars?: number; start?: number }) => {
 				const p = getProject(deps);
-				const draft = p.drafts[params.chapterId];
-				if (!draft) return result("章节 " + params.chapterId + " 还没有正文。");
+				const draftMeta = p.drafts[params.chapterId];
+				if (!draftMeta) return result("章节 " + params.chapterId + " 还没有正文。");
+				// 正文在磁盘上（.txt），按需取这一章，不牵动别的章。
+				const body = await deps.store.readDraftBody(p.id, params.chapterId);
+				const content = body?.content ?? "";
 				const meta = p.outline.find((chapter) => chapter.id === params.chapterId);
 				const head = meta ? "《" + meta.title + "》大纲要点：" + meta.summary + "\n" : "";
+				// 分段取：整章几万字塞进上下文，后面的对话就没地方放了。
+				const limit = Math.min(20_000, Math.max(200, Math.floor(params.chars ?? 6000)));
+				const start = Math.max(0, Math.floor(params.start ?? 0));
+				const part = params.part ?? "full";
+				let slice = content;
+				let note = "";
+				if (part === "head") {
+					slice = content.slice(start, start + limit);
+					note = content.length > slice.length ? "\n（正文较长，这里只给了开头一段；要中段就再取一次）" : "";
+				} else if (part === "tail") {
+					slice = content.slice(Math.max(0, content.length - limit - start));
+					note = content.length > slice.length ? "\n（正文较长，这里只给了结尾一段）" : "";
+				} else if (content.length > limit) {
+					slice = content.slice(0, limit);
+					note = "\n（正文较长，这里只给了开头一段；要中段就再取一次）";
+				}
 				return result(
-					"《" + draft.title + "》（第" + draft.revision + "版，" + countWords(draft.content) + " 字）\n" + head + "\n---\n" + draft.content,
-					draft,
+					"《" + draftMeta.title + "》（第" + draftMeta.revision + "版，" + draftMeta.words + " 字）\n" + head + "\n---\n" + slice + note,
+					{ id: draftMeta.id, title: draftMeta.title, revision: draftMeta.revision, words: draftMeta.words },
 				);
 			},
 		}),
@@ -813,52 +880,43 @@ function writeChapterTool(deps: NovelToolDeps): AgentTool<any> {
 					"章节 " + params.chapterId + " 不在本章目里，不能凭空写入；请先用 update_outline 立章，或改用已有章节的 id。",
 				);
 			}
-			const written = await deps.store.withChapterLock(deps.projectId, params.chapterId, () => {
+			const written = await deps.store.withChapterLock(deps.projectId, params.chapterId, async () => {
 				const p = getProject(deps);
 				const existing = p.drafts[params.chapterId];
 				const planned = p.outline.find((chapter) => chapter.id === params.chapterId);
-			return deps.store.mutate(deps.projectId, (draft) => {
-					// 覆盖前先把旧稿归档。rewrite / continue 都建立在旧稿之上，
-					// 一次写坏就是整章丢失，而 revision 只是个计数器，找不回内容。
-					const history = [...(existing?.history ?? [])];
-					if (existing && existing.content.trim()) {
-						history.push({
-							revision: existing.revision,
-							title: existing.title,
-							content: existing.content,
-							materialIds: existing.materialIds,
-							updatedAt: existing.updatedAt,
-							mode,
-						});
-						// 只留最近若干版：正文动辄数万字，全量留档会把工程文件撑爆。
-						while (history.length > MAX_DRAFT_HISTORY) history.shift();
-					}
-					draft.drafts[params.chapterId] = {
-						id: params.chapterId,
-						title: params.title,
-						content: params.content,
-						// 小结没交就沿用旧的那份：作者手改过正文时旧小结可能略旧，
-						// 但比空着强 —— 下一章接续靠的就是它。
-						summary: params.summary ?? existing?.summary ?? "",
-						revision: (existing?.revision ?? 0) + 1,
-						updatedAt: Date.now(),
-						// 没显式传素材时，依次回落到上一版记录、本章装配清单。
-						materialIds: params.materialIds ?? existing?.materialIds ?? planned?.materialIds ?? [],
-						history,
-					};
-					const meta = draft.outline.find((chapter) => chapter.id === params.chapterId);
-					// 有正文就该是 drafted：素材智能体常把章节留在 outlined，
-					// 只认 planned 会让写完的章在界面上仍显示"未成稿"。
-					if (meta && (meta.status === "planned" || meta.status === "outlined")) meta.status = "drafted";
+				// 覆盖前先把旧稿归档。rewrite / continue 都建立在旧稿之上，
+				// 一次写坏就是整章丢失，而 revision 只是个计数器，找不回内容。
+				// 归档由 saveDraftBody 自己做（历史每版一个文件，存在 .hist/ 下）。
+				const meta = await deps.store.saveDraftBody(deps.projectId, params.chapterId, {
+					title: params.title,
+					content: params.content,
+					// 小结没交就沿用旧的那份：作者手改过正文时旧小结可能略旧，
+					// 但比空着强 —— 下一章接续靠的就是它。
+					summary: params.summary ?? existing?.summary,
+					// 没显式传素材时，依次回落到上一版记录、本章装配清单。
+					materialIds: params.materialIds ?? existing?.materialIds ?? planned?.materialIds ?? [],
+					mode,
+					keepHistory: true,
 				});
+				// 有正文就该是 drafted：素材智能体常把章节留在 outlined，
+				// 只认 planned 会让写完的章在界面上仍显示"未成稿"。
+				const outlineMeta = p.outline.find((chapter) => chapter.id === params.chapterId);
+				if (outlineMeta && (outlineMeta.status === "planned" || outlineMeta.status === "outlined")) {
+					deps.store.mutate(deps.projectId, (draft) => {
+						const target = draft.outline.find((chapter) => chapter.id === params.chapterId);
+						if (target && (target.status === "planned" || target.status === "outlined")) {
+							target.status = "drafted";
+						}
+					});
+				}
+				return meta;
 			});
-			const draft = written.drafts[params.chapterId]!;
-			const summaryNote = draft.summary.trim()
+			const summaryNote = written.summary.trim()
 				? "小结已记下，下一章靠它接续。"
 				: "本次没有小结，下一章会拿不到上一章的交代 —— 补交时请带上 summary。";
 			return result(
-				"已写入《" + draft.title + "》：第 " + draft.revision + " 版，" + countWords(draft.content) + " 字（" + mode + "）。" + summaryNote,
-				draft,
+				"已写入《" + written.title + "》：第 " + written.revision + " 版，" + written.words + " 字（" + mode + "）。" + summaryNote,
+				written,
 			);
 		},
 	});
