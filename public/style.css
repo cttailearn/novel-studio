@@ -14,9 +14,13 @@
 	--ink-2:       #5b5347;   /* 淡墨 */
 	/* ink-3 / ink-4 是「淡墨 / 飞白」两级：前者承担可读的次要文字（≥4.5:1），
 	   后者是纯装饰的最淡一级（≥3:1）。两级都推满 4.5 就会糊成同一个色，
-	   水墨的浓淡关系反而没了。 */
-	--ink-3:       #6d665c;   /* 淡墨（次要文字，可读） */
-	--ink-4:       #8a8274;   /* 飞白（最淡，装饰性） */
+	   水墨的浓淡关系反而没了。
+	   所以 ink-4 只许用于描边、分隔、圆点、滚动条这些不成句的地方；
+	   凡是能读的句子（含占位符、标签、字数、时间）一律降到 ink-3 或更高。
+	   ink-3 原为 #6d665c，在 paper-lo / paper-sunk 上只有 4.12 / 3.85，够不着自己
+	   承诺的 4.5；压深一档后四种纸面上是 5.16 / 5.64 / 4.58 / 4.28。 */
+	--ink-3:       #665f55;   /* 淡墨（次要文字，可读） */
+	--ink-4:       #8a8274;   /* 飞白（最淡，只做描边与点缀，不承载文字） */
 	--rule:        rgba(42, 38, 32, 0.13);
 	--rule-soft:   rgba(42, 38, 32, 0.07);
 	--rule-strong: rgba(42, 38, 32, 0.22);
@@ -24,6 +28,12 @@
 
 	--cinnabar:    #a8392b;   /* 朱砂 */
 	--cinnabar-lt: #c2543f;
+	/* 朱砂当字用的时候另有一档：印、底、边用 --cinnabar 都合式，
+	   但同一支朱砂落到自家染出来的浅红底（cinnabar-wash）上，
+	   要够得着 4.5:1 才行。浅色纸上 #a8392b 本身就有 4.70–5.24，
+	   所以这一档只对暗色有意义（暗色 #d1594a 在洗红底上只有 3.91）。
+	   --cinnabar 仍然负责一切「填」的地方，字一律走 --cinnabar-ink。 */
+	--cinnabar-ink: #a8392b;
 	--cinnabar-wash: rgba(168, 57, 43, 0.09);
 	--indigo:      #3b4c66;   /* 靛青 */
 	--moss:        #55684a;   /* 苔绿 */
@@ -168,6 +178,10 @@
 	/* 朱砂在黑底上要提亮，否则发闷 */
 	--cinnabar:    #d1594a;
 	--cinnabar-lt: #e07a68;
+	/* 夜里当字用的朱砂再抬一档：#d1594a 压在自家洗红底上只有 3.91:1，
+	   #e07a68 在洗红底上是 5.34、在纸面高光上是 5.60、在纸上是 6.22。
+	   填色（印、底、边）照旧用 --cinnabar。 */
+	--cinnabar-ink: #e07a68;
 	--cinnabar-wash: rgba(209, 89, 74, 0.14);
 	--indigo:      #8fa6c4;
 	--moss:        #9db488;
@@ -236,7 +250,16 @@
 * { box-sizing: border-box; }
 html, body { height: 100%; }
 /* 文字放大要听用户的，别被浏览器自己按屏幕宽度缩一遍 */
-html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+html {
+	-webkit-text-size-adjust: 100%;
+	text-size-adjust: 100%;
+	/* 右案（≤1240 改成抽屉）收起时停在视口外：right: 0 再 translateX(102%)。
+	   这一停，整张纸就被撑宽了抽屉的宽度 —— 1100 的窗口里文档宽 1467，
+	   整页能被拖出桌面三百来像素，左边的栏目标题跟着一起滑走。
+	   抽屉本身不能改（它得从右边滑进来），所以改根元素：横向裁掉。
+	   用 clip 而不是 hidden —— hidden 会造出一个滚动容器，clip 只裁不滚。 */
+	overflow-x: clip;
+}
 
 body {
 	margin: 0;
@@ -444,7 +467,7 @@ body::before {
 	padding-bottom: var(--sp-5);
 	font-size: var(--fs-sm);
 	line-height: 1.9;
-	color: var(--ink-4);
+	color: var(--ink-3);
 	font-family: var(--serif);
 	/* 空卷底下一痕远山：写不写得出字还不知道，先给个开门见山 */
 	background-image: var(--mountains);
@@ -538,13 +561,13 @@ body::before {
 	/* 楷体的「一二三」才有书口题号的味道，宋体的数字偏印刷体 */
 	font-family: var(--kai);
 	font-size: var(--fs-sm);
-	color: var(--ink-4);
+	color: var(--ink-3);
 	font-variant-numeric: tabular-nums;
 	letter-spacing: 0.02em;
 }
-.chapter-item.is-on .ord { color: var(--cinnabar); }
+.chapter-item.is-on .ord { color: var(--cinnabar-ink); }
 .chapter-item .ct { flex: 1; min-width: 0; font-family: var(--serif); font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chapter-item .cw { flex: none; font-size: 10.5px; color: var(--ink-4); font-variant-numeric: tabular-nums; }
+.chapter-item .cw { flex: none; font-size: 10.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
 /* 未落笔的记号从实心朱点改成空心小印：空的那一格也得像个记号，不能像杂质 */
 .chapter-item .dotmark {
 	flex: none;
@@ -615,7 +638,7 @@ body::before {
 .tab b { font-family: var(--kai); font-size: 16px; font-weight: 600; letter-spacing: 0.1em; }
 .tab span { font-size: 11.5px; letter-spacing: 0.08em; }
 .tab:hover { color: var(--ink-2); background: var(--hover); }
-.tab.is-on { color: var(--cinnabar); background: var(--cinnabar-wash); }
+.tab.is-on { color: var(--cinnabar-ink); background: var(--cinnabar-wash); }
 
 .stage-actions { display: flex; align-items: center; gap: 8px; }
 
@@ -716,7 +739,7 @@ body::before {
 .ms-blank {
 	padding: 54px 0;
 	text-align: center;
-	color: var(--ink-4);
+	color: var(--ink-3);
 	font-family: var(--kai);
 	font-size: 15px;
 	letter-spacing: 0.1em;
@@ -767,12 +790,12 @@ body::before {
 	top: 16px;
 	font-family: var(--serif);
 	font-size: 13px;
-	color: var(--cinnabar);
+	color: var(--cinnabar-ink);
 }
 .toc-item:hover { opacity: 0.7; }
 .toc-item h3 { margin: 0 0 5px; font-family: var(--kai); font-size: 16.5px; font-weight: 600; letter-spacing: 0.04em; }
 .toc-item p { margin: 0; font-family: var(--serif); font-size: 13.5px; line-height: 1.9; color: var(--ink-2); }
-.toc-item .toc-meta { margin-top: 7px; font-size: 11px; color: var(--ink-4); font-variant-numeric: tabular-nums; }
+.toc-item .toc-meta { margin-top: 7px; font-size: 11px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
 
 /* ── 对议 ────────────────────────────────────────────────── */
 
@@ -789,7 +812,7 @@ body::before {
 }
 
 .msg { max-width: 40em; margin: 0 auto; width: 100%; }
-.msg-role { font-size: 10.5px; letter-spacing: 0.2em; color: var(--ink-4); margin-bottom: 9px; }
+.msg-role { font-size: 10.5px; letter-spacing: 0.2em; color: var(--ink-3); margin-bottom: 9px; }
 
 /* 墨客的话：直接排成正文，不装进气泡 */
 .msg.assistant .msg-body {
@@ -813,7 +836,7 @@ body::before {
 	font-family: var(--serif);
 	font-size: 14px;
 	line-height: 1.9;
-	color: var(--cinnabar);
+	color: var(--cinnabar-ink);
 	white-space: pre-wrap;
 	padding-left: 14px;
 	border-left: 2px solid var(--cinnabar);
@@ -847,7 +870,7 @@ body::before {
 	list-style: none;
 	font-family: var(--kai);
 	font-size: 12px;
-	color: var(--ink-4);
+	color: var(--ink-3);
 	letter-spacing: 0.06em;
 }
 .thinking-head::-webkit-details-marker { display: none; }
@@ -871,11 +894,11 @@ body::before {
 	font-size: 12.5px;
 }
 .tool + .tool { margin-top: 3px; }
-.tool-mark { flex: none; font-family: var(--serif); color: var(--ink-4); width: 1em; }
+.tool-mark { flex: none; font-family: var(--serif); color: var(--ink-3); width: 1em; }
 .tool-name { font-family: var(--kai); font-size: 13px; color: var(--ink-2); letter-spacing: 0.04em; }
-.tool-preview { color: var(--ink-4); font-size: 11.5px; line-height: 1.7; margin-top: 2px; white-space: pre-wrap; }
+.tool-preview { color: var(--ink-3); font-size: 11.5px; line-height: 1.7; margin-top: 2px; white-space: pre-wrap; }
 .tool.is-failed { border-left-color: var(--cinnabar); }
-.tool.is-failed .tool-mark, .tool.is-failed .tool-name { color: var(--cinnabar); }
+.tool.is-failed .tool-mark, .tool.is-failed .tool-name { color: var(--cinnabar-ink); }
 
 /* ── 智能体提问 ───────────────────────────────────────────────
    模型在行笔途中问作者一件事。卡片自带输入框 —— 主输入框这一轮是禁的，
@@ -896,7 +919,7 @@ body::before {
 	font-family: var(--kai);
 	font-size: var(--fs-xs);
 	letter-spacing: 0.16em;
-	color: var(--ink-4);
+	color: var(--ink-3);
 	margin-bottom: var(--sp-1);
 }
 .ask-text {
@@ -925,7 +948,7 @@ body::before {
 	cursor: pointer;
 	transition: color var(--wash), border-color var(--wash), background var(--wash);
 }
-.ask-option:hover:not(:disabled) { color: var(--cinnabar); border-color: var(--cinnabar); background: var(--cinnabar-wash); }
+.ask-option:hover:not(:disabled) { color: var(--cinnabar-ink); border-color: var(--cinnabar); background: var(--cinnabar-wash); }
 .ask-option:disabled { opacity: 0.5; cursor: not-allowed; }
 .ask-form {
 	display: flex;
@@ -962,7 +985,7 @@ body::before {
 .ask-card.is-closed,
 .ask-card.is-timeout { border-left-color: var(--ink-4); }
 .ask-card.is-closed .ask-head,
-.ask-card.is-timeout .ask-head { color: var(--ink-4); }
+.ask-card.is-timeout .ask-head { color: var(--ink-3); }
 .bench-talk .ask-card { max-width: min(46em, 100%); }
 
 .msg-foot {
@@ -970,7 +993,7 @@ body::before {
 	margin: 0 auto;
 	width: 100%;
 	font-size: 10.5px;
-	color: var(--ink-4);
+	color: var(--ink-3);
 	font-variant-numeric: tabular-nums;
 	letter-spacing: 0.06em;
 }
@@ -1007,7 +1030,7 @@ body::before {
 	transition: color var(--wash), border-color var(--wash);
 }
 .bible-tab:hover { color: var(--ink-2); }
-.bible-tab.is-on { color: var(--cinnabar); border-bottom-color: var(--cinnabar); }
+.bible-tab.is-on { color: var(--cinnabar-ink); border-bottom-color: var(--cinnabar); }
 
 .bible { flex: 1; overflow-y: auto; padding: 16px 16px 40px; }
 
@@ -1023,11 +1046,11 @@ body::before {
 	align-items: baseline;
 	gap: 8px;
 }
-.card h4 .role { font-family: var(--sans); font-size: 10.5px; font-weight: 400; color: var(--ink-4); letter-spacing: 0.06em; }
+.card h4 .role { font-family: var(--sans); font-size: 10.5px; font-weight: 400; color: var(--ink-3); letter-spacing: 0.06em; }
 .card dl { margin: 0; display: grid; grid-template-columns: 3.4em 1fr; gap: 3px 10px; }
-.card dt { font-size: 11px; color: var(--ink-4); letter-spacing: 0.06em; }
+.card dt { font-size: 11px; color: var(--ink-3); letter-spacing: 0.06em; }
 .card dd { margin: 0; font-family: var(--serif); font-size: 12.5px; line-height: 1.8; color: var(--ink-2); word-break: break-word; }
-.card .tagline { font-size: 11px; color: var(--ink-4); margin-top: 6px; }
+.card .tagline { font-size: 11px; color: var(--ink-3); margin-top: 6px; }
 
 .note {
 	display: flex;
@@ -1045,7 +1068,7 @@ body::before {
 .note-where { font-family: var(--kai); font-size: 13px; color: var(--ink-2); }
 .note-text { font-family: var(--serif); font-size: 12px; line-height: 1.75; color: var(--ink-3); margin-top: 2px; }
 
-.bible-empty { padding: 40px 0; text-align: center; font-family: var(--kai); font-size: 14px; color: var(--ink-4); letter-spacing: 0.08em; line-height: 2; }
+.bible-empty { padding: 40px 0; text-align: center; font-family: var(--kai); font-size: 14px; color: var(--ink-3); letter-spacing: 0.08em; line-height: 2; }
 
 /* ── 素材（料）──────────────────────────────────────────── */
 
@@ -1084,7 +1107,7 @@ body::before {
 	border-bottom: 1px solid var(--rule-soft);
 }
 .mat-group-head h3 { margin: 0; font-family: var(--kai); font-size: 14px; font-weight: 600; letter-spacing: 0.1em; color: var(--ink); }
-.mat-group-head .count { font-size: 11px; color: var(--ink-4); }
+.mat-group-head .count { font-size: 11px; color: var(--ink-3); }
 
 /* 素材库两列并排。列宽用 minmax(0,1fr)：不加 0 下限，长标题会把格子撑破。
    列数由下面「素材卡按栏宽排布」一节的容器查询按实测栏宽定，这里给的是兜底。 */
@@ -1106,7 +1129,9 @@ body::before {
 	border-radius: 2px;
 	padding: 0 5px;
 }
-.card.mat h4 .ok, .mat-head .ok { font-size: 10.5px; font-family: var(--sans); color: var(--cinnabar); }
+/* 徽章永远靠右首：标题占满一行时它跟在同一行右端，标题放不下折行时它仍贴右首 */
+.mat-head .kind { margin-left: auto; }
+.card.mat h4 .ok, .mat-head .ok { font-size: 10.5px; font-family: var(--sans); color: var(--cinnabar-ink); }
 .card.mat .usage {
 	font-size: 12.5px;
 	color: var(--ink-2);
@@ -1146,7 +1171,7 @@ body::before {
 	line-height: 1.9;
 	transition: border-color var(--wash), background var(--wash);
 }
-.composer textarea::placeholder { color: var(--ink-4); font-size: 14px; }
+.composer textarea::placeholder { color: var(--ink-3); font-size: 14px; }
 .composer textarea:focus { outline: none; border-color: var(--ink-3); background: var(--focus-paper); }
 .composer-side { display: flex; flex-direction: column; gap: 7px; }
 
@@ -1202,8 +1227,8 @@ body::before {
 .btn-sm { padding: 4px 11px; font-size: var(--fs-xs); }
 .btn:disabled { opacity: 0.4; cursor: not-allowed; }
 /* 危险动作：朱砂描边的空印，不填色 —— 填了就成了主按钮，权重会压过「保存」 */
-.btn-danger { color: var(--cinnabar); border-color: var(--cinnabar-edge); background: transparent; box-shadow: none; }
-.btn-danger:hover:not(:disabled) { background: var(--cinnabar-wash); border-color: var(--cinnabar); color: var(--cinnabar); box-shadow: inset 0 -7px 10px -7px var(--cinnabar-faint); }
+.btn-danger { color: var(--cinnabar-ink); border-color: var(--cinnabar-edge); background: transparent; box-shadow: none; }
+.btn-danger:hover:not(:disabled) { background: var(--cinnabar-wash); border-color: var(--cinnabar); color: var(--cinnabar-ink); box-shadow: inset 0 -7px 10px -7px var(--cinnabar-faint); }
 
 .ink-btn {
 	width: 100%;
@@ -1219,7 +1244,7 @@ body::before {
 	cursor: pointer;
 	transition: color var(--wash), border-color var(--wash), background var(--wash);
 }
-.ink-btn:hover { color: var(--cinnabar); border-color: var(--cinnabar); background: var(--cinnabar-wash); }
+.ink-btn:hover { color: var(--cinnabar-ink); border-color: var(--cinnabar); background: var(--cinnabar-wash); }
 
 /* ── 表单件 ──────────────────────────────────────────────── */
 
@@ -1243,7 +1268,7 @@ select { max-width: 230px; cursor: pointer; }
 .field { margin-bottom: 14px; }
 .field > label { display: block; font-size: 11.5px; color: var(--ink-3); letter-spacing: 0.08em; margin-bottom: 5px; }
 .field input, .field select, .field textarea { width: 100%; max-width: none; }
-.field .hint { font-size: 11px; color: var(--ink-4); margin-top: 4px; line-height: 1.6; }
+.field .hint { font-size: 11px; color: var(--ink-3); margin-top: 4px; line-height: 1.6; }
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 /* 落盘失败横幅：唯一的"你的东西没存上"提示，用朱砂色把它从水墨里拎出来。 */
 .storage-banner {
@@ -1321,7 +1346,7 @@ select { max-width: 230px; cursor: pointer; }
 	flex-direction: column;
 	gap: 2px;
 }
-.settings-providers .group-label { font-size: 10.5px; letter-spacing: 0.16em; color: var(--ink-4); padding: 12px 10px 5px; }
+.settings-providers .group-label { font-size: 10.5px; letter-spacing: 0.16em; color: var(--ink-3); padding: 12px 10px 5px; }
 
 .provider-row {
 	display: flex;
@@ -1346,8 +1371,8 @@ select { max-width: 230px; cursor: pointer; }
 	flex: none;
 }
 .provider-row .badge.ok { color: var(--moss); background: var(--moss-wash); }
-.provider-row .badge.custom { color: var(--cinnabar); background: var(--cinnabar-wash); }
-.provider-row .badge.err-badge { color: var(--cinnabar); background: var(--cinnabar-faint); }
+.provider-row .badge.custom { color: var(--cinnabar-ink); background: var(--cinnabar-wash); }
+.provider-row .badge.err-badge { color: var(--cinnabar-ink); background: var(--cinnabar-faint); }
 
 .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-4); flex: none; }
 .dot.on { background: var(--moss); }
@@ -1372,7 +1397,7 @@ select { max-width: 230px; cursor: pointer; }
 	white-space: pre-wrap;
 }
 .notice.ok { color: var(--moss); border-color: var(--moss-edge); background: var(--moss-soft); }
-.notice.err { color: var(--cinnabar); border-color: var(--cinnabar-edge); background: var(--cinnabar-soft); }
+.notice.err { color: var(--cinnabar-ink); border-color: var(--cinnabar-edge); background: var(--cinnabar-soft); }
 
 .model-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 6px; }
 .model-table th {
@@ -1380,7 +1405,7 @@ select { max-width: 230px; cursor: pointer; }
 	font-weight: 500;
 	font-size: 10.5px;
 	letter-spacing: 0.1em;
-	color: var(--ink-4);
+	color: var(--ink-3);
 	padding: 7px 8px;
 	border-bottom: 1px solid var(--rule);
 	white-space: nowrap;
@@ -1401,11 +1426,11 @@ select { max-width: 230px; cursor: pointer; }
 	cursor: pointer;
 }
 .model-table .levels input { width: auto; margin: 0; }
-.model-table .levels .level-code { color: var(--ink-4); font-family: var(--mono); font-size: 9.5px; }
+.model-table .levels .level-code { color: var(--ink-3); font-family: var(--mono); font-size: 9.5px; }
 .model-table tr.is-default td { background: var(--cinnabar-tint); }
 .model-id { font-family: var(--mono); font-size: 11.5px; }
 .row-actions { display: flex; gap: 4px; justify-content: flex-end; }
-.empty-hint { color: var(--ink-4); font-size: 12.5px; padding: 22px 0; text-align: center; font-family: var(--kai); line-height: 2; }
+.empty-hint { color: var(--ink-3); font-size: 12.5px; padding: 22px 0; text-align: center; font-family: var(--kai); line-height: 2; }
 
 /* ── 响应式 ──────────────────────────────────────────────── */
 
@@ -1465,12 +1490,12 @@ select { max-width: 230px; cursor: pointer; }
 .provider-search { width: 100%; max-width: none; font-size: 12.5px; padding: 6px 9px; }
 .provider-search::-webkit-search-cancel-button { cursor: pointer; }
 
-.add-row { color: var(--cinnabar); margin-top: 4px; }
+.add-row { color: var(--cinnabar-ink); margin-top: 4px; }
 .add-row .dot { background: transparent; border: 1px dashed var(--cinnabar); }
-.add-row .name { color: var(--cinnabar); font-family: var(--kai); }
+.add-row .name { color: var(--cinnabar-ink); font-family: var(--kai); }
 
-.form-hint { margin: -8px 0 14px; font-size: 11px; color: var(--ink-4); line-height: 1.7; }
-.form-error { margin: 0 0 4px; font-size: 12px; color: var(--cinnabar); min-height: 1.2em; }
+.form-hint { margin: -8px 0 14px; font-size: 11px; color: var(--ink-3); line-height: 1.7; }
+.form-error { margin: 0 0 4px; font-size: 12px; color: var(--cinnabar-ink); min-height: 1.2em; }
 .checkline { display: flex !important; align-items: center; gap: 8px; font-size: 12.5px; color: var(--ink-2); }
 .checkline input { width: auto; margin: 0; accent-color: var(--cinnabar); }
 
@@ -1765,7 +1790,7 @@ body.is-splitting * {
 	flex: none;
 	font-family: var(--kai);
 	font-size: var(--fs-xs);
-	color: var(--cinnabar);
+	color: var(--cinnabar-ink);
 	padding: 1px 5px;
 	border: 1px solid var(--cinnabar-edge);
 	border-radius: 2px;
@@ -1805,7 +1830,7 @@ body.is-splitting * {
 	font-family: var(--serif);
 	font-size: 13px;
 	line-height: 1.95;
-	color: var(--ink-4);
+	color: var(--ink-3);
 	white-space: pre-wrap;
 }
 
@@ -1835,13 +1860,13 @@ body.is-splitting * {
 .snap-why {
 	font-family: var(--kai);
 	font-size: 12px;
-	color: var(--ink-4);
+	color: var(--ink-3);
 	margin-top: 1px;
 }
 .snap-size {
 	font-family: var(--mono);
 	font-size: 11px;
-	color: var(--ink-4);
+	color: var(--ink-3);
 	flex: none;
 }
 
@@ -1863,7 +1888,7 @@ body.is-splitting * {
 	transition: background var(--wash), border-color var(--wash);
 }
 .dropzone p { margin: 0; font-family: var(--kai); font-size: 13px; color: var(--ink-3); letter-spacing: 0.06em; }
-.dropzone .dropzone-hint { margin-top: 6px; font-family: var(--serif); font-size: 11px; color: var(--ink-4); letter-spacing: 0; }
+.dropzone .dropzone-hint { margin-top: 6px; font-family: var(--serif); font-size: 11px; color: var(--ink-3); letter-spacing: 0; }
 .dropzone:hover, .dropzone.is-over { border-color: var(--cinnabar); background: var(--cinnabar-wash); }
 
 .upload-list { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
@@ -1885,9 +1910,9 @@ body.is-splitting * {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
-.upload-state { flex: none; font-size: 11px; color: var(--ink-4); font-variant-numeric: tabular-nums; }
-.upload-note { margin-top: 5px; font-size: 11px; line-height: 1.7; color: var(--ink-4); }
-.upload-note.warn { color: var(--cinnabar); }
+.upload-state { flex: none; font-size: 11px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.upload-note { margin-top: 5px; font-size: 11px; line-height: 1.7; color: var(--ink-3); }
+.upload-note.warn { color: var(--cinnabar-ink); }
 .upload-preview {
 	margin-top: 5px;
 	font-family: var(--song);
@@ -1922,16 +1947,30 @@ body.is-splitting * {
 /* ── 素材与装配清单 ──────────────────────────────────────── */
 
 .material-list, .assembly-list, .pool-list { display: flex; flex-direction: column; }
+
+/* 库空着的时候这一栏只有一句话，底下压着六七百像素的纸。
+   让那句话落在这段空白的中线上 —— 空得像留白，而不是像没加载完。
+   空着也把「裱纸」的那圈内框去掉（style.css 书斋层给 .material-list 的
+   inset 1px），否则撑满整栏之后就是一个装空气的巨大空框。
+   还是 auto 外边距：内容一高就退成 0，不会裁掉顶。 */
+.bench-pane > .material-list:has(> .bench-empty:only-child) { flex: 1; min-height: 0; box-shadow: none; }
+/* 这一句落到了这一栏的中线上，底下那痕远山就会悬在半空；
+   它本来是该压在文字脚下的。空着的时候不要山，只要一句干净的话。 */
+.bench-pane > .material-list > .bench-empty:only-child { margin-block: auto; background-image: none; }
+
+/* 标题先给足一整行：flex-basis 用 auto（按内容宽）而不是 0 —— 标题放不下时，
+   种类徽章自己折到下一行，标题就不会被挤成「末行只剩一个字」。
+   徽章靠 margin-left: auto 钉右首，折下来也还在右首。 */
 .mat-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-.mat-head h4 { flex: 1; min-width: 0; }
+.mat-head h4 { flex: 1 1 auto; min-width: 0; text-wrap: balance; }
 .mat-actions { display: flex; gap: 4px; margin-top: 9px; flex-wrap: wrap; }
 
 .btn-xs { padding: 2px 9px; font-size: 11.5px; border-radius: 3px; }
-.btn-quiet.is-danger { color: var(--cinnabar); border-color: var(--cinnabar-edge); }
+.btn-quiet.is-danger { color: var(--cinnabar-ink); border-color: var(--cinnabar-edge); }
 .btn-quiet.is-danger:hover:not(:disabled) { background: var(--cinnabar-wash); }
 
 .card.mat.is-compact { cursor: pointer; transition: color var(--wash); }
-.card.mat.is-compact:hover h4 { color: var(--cinnabar); }
+.card.mat.is-compact:hover h4 { color: var(--cinnabar-ink); }
 
 /* 写作作业条：选章 → 定写法 → 落笔。
    它挂在执笔者栏、紧贴输入框之上 —— 眼睛在看这一栏，手就不该跑回左栏按按钮。
@@ -1960,7 +1999,7 @@ body.is-splitting * {
 	font-size: 12px;
 	cursor: pointer;
 }
-.actions-note { font-size: 11px; color: var(--ink-4); }
+.actions-note { font-size: 11px; color: var(--ink-3); }
 
 /* ── 工作台里的对议栏 ────────────────────────────────────── */
 
@@ -1970,6 +2009,37 @@ body.is-splitting * {
 /* 46em 是舒适阅读宽，但栏被拖窄时它不能大过栏本身，否则正文会横向溢出 */
 .bench-talk .msg, .bench-talk .msg-foot { max-width: min(46em, 100%); }
 .bench-talk .msg.assistant .msg-body { font-size: 15px; line-height: 1.95; }
+
+/* 开席之前：三块对议栏里一个字都没有，只剩一片约七百像素的白。
+   「料」「文」两席进书时会收到一句招呼话（app.js 的 appendMessage），
+   「库」这一席没有，于是案头右栏一直空着 —— 这就是那块空白的来历。
+   流的子节点为空只发生在一种时候：还没说过话、也没在生成，正好是该给一句话的时候。
+   话放在样式里而不是 DOM 里：mountStream 会用快照覆盖 box.innerHTML，
+   塞进去的元素第一次挂载就被抹掉；::before 不占快照，也不进对话记录。 */
+.bench-talk .stream:empty::before {
+	display: block;
+	max-width: 27em;
+	/* auto 外边距把这句话按到这一栏的中线上，而不是贴在上面留底下六百像素的纸。
+	   用 auto 而不是 justify-content: center —— 内容长过栏高时 auto 退成 0，
+	   照常从顶上流下来；center 会把开头裁出可见区。 */
+	margin: auto;
+	font-family: var(--kai);
+	font-size: 14px;
+	line-height: 2.15;
+	letter-spacing: 0.06em;
+	color: var(--ink-3);
+	white-space: pre-wrap;
+	text-align: left;
+}
+#library-stream:empty::before {
+	content: "还没有一席。\A这里是案头的设定官：备通用素材，不写正文。\A把一个题材、一类人物、一种世界观交代下来，就成了下一部书的底子。";
+}
+#material-stream:empty::before {
+	content: "还没有一席。\A上传资料，或直接交代要立什么设定 —— 素材是一切之先。";
+}
+#writing-stream:empty::before {
+	content: "还没有一席。\A在左栏装配本章素材，或直接交代这一章要写什么。";
+}
 
 .actions-center { justify-content: center; padding: 18px 0 0; margin: 0; }
 /* 章节操作条钉在稿台顶部，排在正文之前。
@@ -2067,7 +2137,7 @@ body.is-splitting * {
 	font-style: normal;
 	font-family: var(--sans);
 	font-size: 10.5px;
-	color: var(--ink-4);
+	color: var(--ink-3);
 	margin-left: 6px;
 	letter-spacing: 0.04em;
 }
@@ -2084,7 +2154,7 @@ body.is-splitting * {
 	margin-top: 6px;
 	font-size: 11px;
 	line-height: 1.7;
-	color: var(--ink-4);
+	color: var(--ink-3);
 }
 
 .sheet-form .form-row { display: grid; grid-template-columns: 152px minmax(0, 1fr); gap: 14px; }
@@ -2111,7 +2181,7 @@ body.is-splitting * {
 	font-family: var(--serif);
 	font-size: 12px;
 	line-height: 1.85;
-	color: var(--ink-4);
+	color: var(--ink-3);
 }
 
 .record-list { display: flex; flex-direction: column; }
@@ -2121,11 +2191,11 @@ body.is-splitting * {
 .record-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .card.record h4 { margin: 0; font-family: var(--kai); font-size: 16px; font-weight: 600; letter-spacing: 0.04em; }
 .card.record .tagline { font-size: 11.5px; color: var(--ink-3); margin-top: 5px; line-height: 1.7; }
-.card.record .tagline + .tagline { color: var(--ink-4); }
+.card.record .tagline + .tagline { color: var(--ink-3); }
 
 /* ── 新建作品时的库勾选 ──────────────────────────────────── */
 
-.pick-count { margin-left: 6px; font-family: var(--sans); font-size: 10.5px; color: var(--cinnabar); letter-spacing: 0; }
+.pick-count { margin-left: 6px; font-family: var(--sans); font-size: 10.5px; color: var(--cinnabar-ink); letter-spacing: 0; }
 
 .pick-search { margin-top: 6px; }
 
@@ -2171,7 +2241,7 @@ body.is-splitting * {
 	padding: 0 4px;
 }
 .pick-title > span:last-child { font-family: var(--serif); font-size: 13.5px; color: var(--ink); }
-.pick-usage { margin-top: 3px; font-size: 11px; line-height: 1.65; color: var(--ink-4); }
+.pick-usage { margin-top: 3px; font-size: 11px; line-height: 1.65; color: var(--ink-3); }
 
 /* ── 存入素材库 ──────────────────────────────────────────── */
 
@@ -2254,14 +2324,14 @@ body.is-splitting * {
 	content: "＋";
 	flex: none;
 	font-family: var(--sans);
-	color: var(--ink-4);
+	color: var(--ink-3);
 }
 .sheet-form .form-more[open] > summary::before { content: "－"; }
 .sheet-form .form-more > summary:hover { color: var(--ink); }
 .sheet-form .form-more > summary em {
 	font-style: normal;
 	font-size: 11px;
-	color: var(--ink-4);
+	color: var(--ink-3);
 	letter-spacing: 0;
 }
 .sheet-form .form-more[open] > summary {
@@ -2295,7 +2365,7 @@ body.is-splitting * {
 	padding: 1px 7px;
 }
 .picked-bar .btn { margin-left: auto; }
-.btn-quiet.is-on { color: var(--cinnabar); border-color: var(--cinnabar); background: var(--cinnabar-wash); }
+.btn-quiet.is-on { color: var(--cinnabar-ink); border-color: var(--cinnabar); background: var(--cinnabar-wash); }
 .card.mat.is-picked { background: var(--ink-wash); box-shadow: inset 2px 0 0 var(--cinnabar); }
 
 /* 立一章：章节是装料的落点，没有章就看不了也装不了料 */
@@ -2312,7 +2382,7 @@ body.is-splitting * {
 	letter-spacing: 0.04em;
 	cursor: pointer;
 }
-.rail-add:hover { color: var(--cinnabar); border-color: var(--cinnabar); background: var(--cinnabar-wash); }
+.rail-add:hover { color: var(--cinnabar-ink); border-color: var(--cinnabar); background: var(--cinnabar-wash); }
 /* 装配区的立章按钮：居中，别贴着空状态文案 */
 .bench-empty + .btn { display: table; margin: 14px auto 0; }
 .bench-hint {
@@ -2389,7 +2459,7 @@ body.is-splitting * {
 	box-shadow: 0 4px 16px var(--shadow);
 	border-color: var(--cinnabar-edge);
 }
-.card.mat.is-peek:hover h4 { color: var(--cinnabar); }
+.card.mat.is-peek:hover h4 { color: var(--cinnabar-ink); }
 
 /*
  * 动作条平时不占位，悬停或键盘焦点落在卡内时才显出来。
@@ -2438,7 +2508,7 @@ body.is-splitting * {
 	font-family: var(--kai);
 	font-size: 13px;
 	letter-spacing: 0.12em;
-	color: var(--cinnabar);
+	color: var(--cinnabar-ink);
 	pointer-events: none;
 	z-index: 3;
 }
@@ -2522,7 +2592,7 @@ kbd {
 	border-bottom-width: 2px;
 	border-radius: 3px;
 	background: var(--paper-hi);
-	color: var(--ink-4);
+	color: var(--ink-3);
 }
 
 /* ── 检索框（左卷、料、右案）──────────────────────────────── */
@@ -2537,6 +2607,10 @@ kbd {
 	font-size: 12.5px;
 }
 .mat-filter:empty { display: none; }
+/* 库里一条料都没有时，分类条只剩末尾那个「＋」（增删种类）。空着的时候没有种类可加，
+   它只是把空状态往下推了三十来像素 —— 和「没有内容就别摆支撑性控件」同一条道理。
+   等有了第一条料，分类条自然带着种类回来，那个「＋」也就跟着有了用处。 */
+.mat-filter:has(> .chip-add:only-child) { display: none; }
 /* 默认的搜索清除按钮是系统蓝，和纸墨不搭；清空用 Esc 或退格即可。 */
 .rail-filter::-webkit-search-cancel-button,
 .mat-search::-webkit-search-cancel-button,
@@ -2546,7 +2620,7 @@ kbd {
 	list-style: none;
 	padding: 14px 4px;
 	font-size: 11.5px;
-	color: var(--ink-4);
+	color: var(--ink-3);
 	font-family: var(--kai);
 }
 .bible-head {
@@ -2612,7 +2686,7 @@ kbd {
 	line-height: 1;
 	color: var(--ink-3);
 }
-.toast-error .toast-mark { color: var(--cinnabar); }
+.toast-error .toast-mark { color: var(--cinnabar-ink); }
 .toast-ok .toast-mark { color: var(--moss); }
 .toast-warn .toast-mark { color: var(--amber); }
 /* 关闭口：整条可点也能关，但手机上一眼看不出「点哪儿算关」，
@@ -2625,10 +2699,10 @@ kbd {
 	border-radius: var(--r-1);
 	font-size: 12px;
 	line-height: 1.5;
-	color: var(--ink-4);
+	color: var(--ink-3);
 	cursor: pointer;
 }
-.toast-close:hover { color: var(--cinnabar); background: var(--cinnabar-wash); }
+.toast-close:hover { color: var(--cinnabar-ink); background: var(--cinnabar-wash); }
 .toast-close:focus-visible { outline: 2px solid var(--cinnabar); outline-offset: 1px; }
 .toast-text { min-width: 0; }
 @keyframes toast-in {
@@ -2642,11 +2716,11 @@ kbd {
 	align-self: center;
 	min-width: 4.8em;
 	font-size: 11px;
-	color: var(--ink-4);
+	color: var(--ink-3);
 	font-variant-numeric: tabular-nums;
 	letter-spacing: 0.04em;
 }
-.ms-save-state.is-dirty { color: var(--cinnabar); }
+.ms-save-state.is-dirty { color: var(--cinnabar-ink); }
 
 /* ── 等待首字：三点墨依次晕开 ────────────────────────────────
    转圈的齿轮太像工具了；蘸墨点纸才对味 —— 三点依次涨落，
@@ -2738,9 +2812,9 @@ kbd {
 	color: var(--ink-3);
 }
 .history-version { font-family: var(--kai); font-size: 14.5px; color: var(--ink); letter-spacing: 0.06em; }
-.history-mode { color: var(--cinnabar); }
-.history-when { color: var(--ink-4); font-variant-numeric: tabular-nums; }
-.history-words { margin-left: auto; color: var(--ink-4); font-variant-numeric: tabular-nums; }
+.history-mode { color: var(--cinnabar-ink); }
+.history-when { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.history-words { margin-left: auto; color: var(--ink-3); font-variant-numeric: tabular-nums; }
 .history-row > .btn { margin-top: 8px; }
 .history-preview { margin-top: 6px; }
 .history-preview > summary {
@@ -2750,7 +2824,7 @@ kbd {
 	list-style: none;
 }
 .history-preview > summary::-webkit-details-marker { display: none; }
-.history-preview > summary::before { content: "▸ "; color: var(--ink-4); }
+.history-preview > summary::before { content: "▸ "; color: var(--ink-3); }
 .history-preview[open] > summary::before { content: "▾ "; }
 .history-text {
 	max-height: 300px;
@@ -2764,8 +2838,8 @@ kbd {
 	line-height: 1.9;
 	white-space: pre-wrap;
 }
-.history-empty { padding: 10px 0; font-size: 12px; color: var(--ink-4); }
-.history-hint { margin: 6px 0 0; font-size: 11px; color: var(--ink-4); }
+.history-empty { padding: 10px 0; font-size: 12px; color: var(--ink-3); }
+.history-hint { margin: 6px 0 0; font-size: 11px; color: var(--ink-3); }
 
 /* ── 导出 / 排版 / 快捷键 ─────────────────────────────────── */
 .export-dialog,
@@ -2798,7 +2872,7 @@ kbd {
 }
 .seg label:has(input:checked) {
 	border-color: var(--cinnabar);
-	color: var(--cinnabar);
+	color: var(--cinnabar-ink);
 	background: var(--cinnabar-wash);
 }
 .seg label:has(input:disabled) { opacity: 0.45; cursor: not-allowed; }
@@ -2838,7 +2912,7 @@ kbd {
 .keys dt { display: flex; align-items: center; gap: 4px; }
 .keys dd { margin: 0; font-size: 12.5px; color: var(--ink-3); }
 
-.front-progress { margin-top: 8px !important; color: var(--cinnabar) !important; font-variant-numeric: tabular-nums; }
+.front-progress { margin-top: 8px !important; color: var(--cinnabar-ink) !important; font-variant-numeric: tabular-nums; }
 
 /* ── 检索面板 ─────────────────────────────────────────────── */
 .palette {
@@ -2890,7 +2964,7 @@ kbd {
 	border: 1px solid var(--rule);
 	border-radius: 3px;
 	font-size: 10.5px;
-	color: var(--ink-4);
+	color: var(--ink-3);
 }
 .palette-main { min-width: 0; }
 .palette-label { font-size: 13.5px; color: var(--ink); }
@@ -2898,12 +2972,12 @@ kbd {
 	max-width: 520px;
 	margin-top: 2px;
 	font-size: 11.5px;
-	color: var(--ink-4);
+	color: var(--ink-3);
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
-.palette-empty { padding: 28px 16px; text-align: center; font-size: 12.5px; color: var(--ink-4); font-family: var(--kai); }
+.palette-empty { padding: 28px 16px; text-align: center; font-size: 12.5px; color: var(--ink-3); font-family: var(--kai); }
 
 /* ── 专注模式 ─────────────────────────────────────────────── */
 .desk.is-focus {
@@ -3015,7 +3089,7 @@ body.focus-mode { background: var(--paper); }
 	border: 1px solid var(--cinnabar-edge);
 	border-radius: 2px;
 	background: var(--cinnabar-soft);
-	color: var(--cinnabar);
+	color: var(--cinnabar-ink);
 	font-family: var(--kai);
 	font-size: var(--fs-xs);
 	line-height: 1.5;
@@ -3348,6 +3422,10 @@ body.focus-mode { background: var(--paper); }
 	}
 	.stream { padding: 20px 14px 10px; }
 	.bench-pane:not(.bench-talk) { padding: 0 14px 32px; }
+	/* 案头三栏在手机上竖着排，每栏本来平分一屏。可对议栏还要装头部与输入框，
+	   平分下来流里只剩二十六像素 —— 一句引导话都读不全，只露出最后半行。
+	   给对议栏多分一倍，流里才容得下四五行字。 */
+	.bench.bench-three { grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 2fr); }
 	.composer { padding: 12px 12px calc(12px + var(--safe-b)); }
 	.composer textarea { font-size: 16px; }
 	.bench-talk .composer { padding: 10px 12px calc(10px + var(--safe-b)); }
@@ -3464,6 +3542,10 @@ body.focus-mode { background: var(--paper); }
 		padding: 0;
 		min-width: var(--tap-lg);
 		height: var(--tap-lg);
+		/* 撑满高度但不居中，单字就贴在钮的上沿 —— 旁边「搜」「设置」是居中的，
+		   一排看过去这三位矮了半截。方形钮里的字本来就该落在正中。 */
+		align-items: center;
+		justify-content: center;
 	}
 }
 
@@ -3544,7 +3626,7 @@ body.focus-mode { background: var(--paper); }
 .kind-row .kind-count {
 	flex: none;
 	font-size: var(--fs-xs);
-	color: var(--ink-4);
+	color: var(--ink-3);
 }
 
 /* 行内改名：宽度跟着格子走，别把两个按钮挤出去 */
@@ -3578,7 +3660,7 @@ body.focus-mode { background: var(--paper); }
 	flex: none;
 	font-size: var(--fs-xs);
 	letter-spacing: 0.14em;
-	color: var(--ink-4);
+	color: var(--ink-3);
 	padding: 1px 6px;
 	border: 1px solid var(--rule-soft);
 	border-radius: var(--r-1);
@@ -3631,7 +3713,7 @@ body.focus-mode { background: var(--paper); }
 	color: var(--ink-2);
 	cursor: pointer;
 }
-.chapter-volume:hover { color: var(--cinnabar); }
+.chapter-volume:hover { color: var(--cinnabar-ink); }
 .chapter-volume .cv-title {
 	flex: 1;
 	min-width: 0;
@@ -3644,9 +3726,9 @@ body.focus-mode { background: var(--paper); }
 	font-family: var(--sans);
 	font-size: var(--fs-xs);
 	letter-spacing: 0;
-	color: var(--ink-4);
+	color: var(--ink-3);
 }
-.chapter-volume:hover .cv-meta { color: var(--cinnabar); }
+.chapter-volume:hover .cv-meta { color: var(--cinnabar-ink); }
 
 /* 稿面上那行卷名：比题签小一号、比「第几章」重一点，读的时候知道自己在哪一卷 */
 .ms-volume {
@@ -3654,7 +3736,7 @@ body.focus-mode { background: var(--paper); }
 	font-family: var(--kai);
 	font-size: 12px;
 	letter-spacing: 0.18em;
-	color: var(--cinnabar);
+	color: var(--cinnabar-ink);
 	opacity: 0.85;
 }
 
@@ -3679,7 +3761,7 @@ body.focus-mode { background: var(--paper); }
 .volume-row.is-editing { border-color: var(--cinnabar); }
 .volume-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .volume-name { font-family: var(--serif); font-size: 13.5px; color: var(--ink); }
-.volume-meta { font-size: var(--fs-xs); color: var(--ink-4); }
+.volume-meta { font-size: var(--fs-xs); color: var(--ink-3); }
 .volume-summary { font-size: var(--fs-xs); color: var(--ink-3); line-height: 1.6; overflow-wrap: anywhere; }
 .volume-acts { flex: none; display: flex; gap: var(--sp-1); }
 .volume-empty { padding: var(--sp-2) 0; font-size: var(--fs-sm); color: var(--ink-3); }
@@ -3792,14 +3874,14 @@ body.focus-mode { background: var(--paper); }
 	color: var(--ink);
 	overflow-wrap: anywhere;
 }
-.records-when { flex: none; font-size: var(--fs-xs); color: var(--ink-4); white-space: nowrap; }
+.records-when { flex: none; font-size: var(--fs-xs); color: var(--ink-3); white-space: nowrap; }
 .records-flag {
 	flex: none;
 	padding: 0 5px;
 	border: 1px solid var(--cinnabar-edge);
 	border-radius: var(--r-1);
 	font-size: var(--fs-xs);
-	color: var(--cinnabar);
+	color: var(--cinnabar-ink);
 }
 
 .records-preview {
@@ -3818,7 +3900,7 @@ body.focus-mode { background: var(--paper); }
 	gap: var(--sp-2);
 	margin-top: 2px;
 }
-.records-count { font-size: var(--fs-xs); color: var(--ink-4); }
+.records-count { font-size: var(--fs-xs); color: var(--ink-3); }
 .records-actions { display: flex; gap: var(--sp-1); }
 
 .records-empty {
@@ -3840,10 +3922,10 @@ body.focus-mode { background: var(--paper); }
 	border-radius: var(--r-3);
 	background: var(--cinnabar-wash);
 	font-size: var(--fs-xs);
-	color: var(--cinnabar);
+	color: var(--cinnabar-ink);
 }
 .write-record-text { white-space: nowrap; }
-.write-record-bar .icon-btn { color: var(--cinnabar); }
+.write-record-bar .icon-btn { color: var(--cinnabar-ink); }
 
 /* 圆一点的小方格按钮：× 这一类只占一个字形。 */
 .icon-btn {
@@ -3860,7 +3942,7 @@ body.focus-mode { background: var(--paper); }
 .msg.is-toolnote .msg-body {
 	font-size: var(--fs-sm);
 	font-style: italic;
-	color: var(--ink-4);
+	color: var(--ink-3);
 }
 
 /* 头部多了一颗「记录」：pane-tools 原先只放一颗按钮，现在要自己排一行。 */

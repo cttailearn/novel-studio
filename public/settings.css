@@ -59,7 +59,10 @@
 /* 副标题做成淡墨小签：左侧一道朱砂短线，读者一眼知道这是"注"不是"正文" */
 .settings-dialog .settings-head p {
 	display: inline-block;
-	max-width: 52ch;
+	/* 原来卡在 52ch。ch 是西文「0」的宽度，中文一行只摊得下二十来个字，
+	   于是这行注脚折成两行，末行孤零零剩一个「量」。
+	   小签的意义在左边那道朱砂线，不在宽度 —— 让它按内容铺开，一行放得下就一行。 */
+	max-width: 100%;
 	margin: var(--sp-2, 8px) 0 0;
 	padding: 2px 10px 2px 9px;
 	border-left: 2px solid var(--cinnabar-edge);
@@ -68,6 +71,7 @@
 	font-size: var(--fs-xs, 11.5px);
 	line-height: 1.75;
 	letter-spacing: 0.03em;
+	text-wrap: pretty;
 }
 
 .settings-dialog .settings-head .btn {
@@ -172,7 +176,7 @@
 
 .default-cost .cost-unit {
 	font-size: var(--fs-xs, 11.5px);
-	color: var(--ink-4);
+	color: var(--ink-3);
 	letter-spacing: 0.02em;
 }
 
@@ -207,7 +211,7 @@
 	font-family: var(--kai);
 	font-size: var(--fs-xs, 11.5px);
 	letter-spacing: 0.18em;
-	color: var(--ink-4);
+	color: var(--ink-3);
 }
 
 .settings-providers .group-label:empty {
@@ -254,7 +258,7 @@
 
 .provider-row.is-off .name,
 .provider-row.is-off .badge {
-	color: var(--ink-4);
+	color: var(--ink-3);
 }
 
 .provider-row:hover {
@@ -543,12 +547,21 @@
 	color: var(--ink-2);
 }
 
+/* 模型区这处空状态原本是一整条 746×89 的窄带，背后铺着 --mountains（远山，
+   见 style.css「空状态：一痕远山」）。三个椭圆在这个比例下摊成一条横灰影，
+   看着像纸被蹭脏 —— 与其糊着一团，不如让它干净：只留一句话。
+   山影交还给窄栏里那些真用得上的空状态。底给方一些，字落在中间，不贴边。 */
 .empty-hint {
 	padding: var(--sp-6, 32px) var(--sp-4, 16px);
 	font-family: var(--kai);
 	font-size: var(--fs-sm, 13px);
 	line-height: 2;
-	color: var(--ink-4);
+	color: var(--ink-3);
+	min-height: 148px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background-image: none;
 }
 
 /* 窄屏详情页的「← 返回」，宽屏两栏并排时它没有意义 */
@@ -868,7 +881,7 @@
 }
 
 .model-badge.is-off {
-	color: var(--ink-4);
+	color: var(--ink-3);
 	border-color: var(--rule);
 	border-style: dashed;
 }
@@ -894,7 +907,7 @@
 .model-unit {
 	margin-left: 5px;
 	font-size: var(--fs-xs, 11.5px);
-	color: var(--ink-4);
+	color: var(--ink-3);
 	letter-spacing: 0.02em;
 }
 
@@ -1069,7 +1082,7 @@
 .level-chip .level-code {
 	font-family: var(--mono);
 	font-size: var(--fs-xs, 11px);
-	color: var(--ink-4);
+	color: var(--ink-3);
 	letter-spacing: 0;
 }
 
@@ -1098,7 +1111,7 @@
 .level-chip.is-locked {
 	border-style: dashed;
 	background: var(--paper-lo);
-	color: var(--ink-4);
+	color: var(--ink-3);
 	box-shadow: none;
 }
 
@@ -1110,7 +1123,7 @@
 
 .level-chip.is-locked:hover {
 	border-color: var(--rule);
-	color: var(--ink-4);
+	color: var(--ink-3);
 	background: var(--paper-lo);
 }
 
