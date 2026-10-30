@@ -87,8 +87,11 @@ const view = {
 	modelContext: null,
 	/** 窄屏的两页：list = 供应商列表，detail = 某一家的详情。宽屏两栏并排，这个字段不起作用。 */
 	pane: "list",
+	section: "models",
 	/** 上一次画出的供应商。换了一家就把详情滚回顶部，同一次刷新则保留滚动位置。 */
 	lastSelected: null,
+	/** 打开设置前的焦点，关闭时还回去。 */
+	returnFocus: null,
 };
 
 function el(tag, className, text) {
@@ -121,12 +124,20 @@ function notifyChanged() {
 // ---------------------------------------------------------------- 打开 / 刷新
 
 export async function openSettings() {
+	view.returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
 	// 手机上每次打开都从供应商列表起步：上次停在谁家是上一段的语境，
 	// 直接落进详情会让人一睁眼就在陌生的表单里。
 	view.pane = "list";
+	setSection("models");
 	await refresh();
 	applyPane();
-	$("settings-dialog").showModal();
+	const dialog = $("settings-dialog");
+	dialog.showModal();
+	const heading = dialog.querySelector("h3");
+	if (heading) {
+		heading.tabIndex = -1;
+		heading.focus({ preventScroll: true });
+	}
 }
 
 /**
@@ -151,6 +162,19 @@ async function refresh() {
 	renderAll();
 }
 
+function setSection(section) {
+	view.section = section === "web" ? "web" : "models";
+	for (const name of ["models", "web"]) {
+		const active = view.section === name;
+		const tab = $(`settings-tab-${name}`);
+		const panel = $(`settings-${name}-panel`);
+		tab.classList.toggle("is-on", active);
+		tab.setAttribute("aria-selected", String(active));
+		tab.tabIndex = active ? 0 : -1;
+		panel.hidden = !active;
+	}
+}
+
 function statusOf(id) {
 	return view.data.statuses.find((status) => status.id === id);
 }
@@ -164,7 +188,40 @@ function renderAll() {
 	renderDefaults();
 	renderProviderList();
 	renderDetail();
+	renderWebSettings();
+	renderReadySummary();
+	setSection(view.section);
 	applyPane();
+}
+
+function renderReadySummary() {
+	const configured = view.data.providers.filter((provider) => provider.enabled && !unavailableReason(provider)).length;
+	$("provider-summary").textContent = `${configured} 家已就绪`;
+	const web = view.data.webSearch ?? {};
+	const badge = $("settings-web-nav-status");
+	badge.textContent = web.enabled ? (web.configured ? "已开启" : "缺密钥") : "";
+	badge.className = `settings-nav-dot${web.enabled ? web.configured ? " is-ok" : " is-warn" : ""}`;
+}
+
+let statusTimer;
+function saveStatus(message, kind = "") {
+	const node = $("settings-save-status");
+	clearTimeout(statusTimer);
+	node.textContent = message;
+	node.className = `settings-save-status${kind ? ` is-${kind}` : ""}`;
+	if (kind === "ok") statusTimer = setTimeout(() => { node.textContent = ""; }, 5000);
+}
+
+async function operation(message, task) {
+	saveStatus(message);
+	try {
+		const result = await task();
+		saveStatus("已保存", "ok");
+		return result;
+	} catch (error) {
+		saveStatus(error.message, "err");
+		throw error;
+	}
 }
 
 // ---------------------------------------------------------------- 默认笔与思深
@@ -424,9 +481,11 @@ async function saveDefaults() {
 	if (modelSelect && !modelSelect.disabled && modelSelect.value) body.defaultModel = modelSelect.value;
 	if (thinking && thinking.value) body.defaultThinkingLevel = thinking.value;
 	if (Object.keys(body).length === 0) return;
-	await api("/api/settings", { method: "PUT", body });
-	await refresh();
-	notifyChanged();
+	await operation("正在保存默认配置…", async () => {
+		await api("/api/settings", { method: "PUT", body });
+		await refresh();
+		notifyChanged();
+	});
 }
 
 // ---------------------------------------------------------------- 供应商列表
@@ -451,7 +510,7 @@ function renderProviderList() {
 	const builtin = view.data.providers.filter((p) => p.kind === "builtin");
 	const custom = view.data.providers.filter((p) => p.kind === "custom");
 
-	// 新增入口固定在最上。内置 41 个之后它会被挤到列表底部，等于没有。
+	// 新增入口固定在最上。内置 42 个之后它会被挤到列表底部，等于没有。
 	const addRow = el("li", "provider-row add-row");
 	addRow.append(el("span", "dot on"));
 	addRow.append(el("span", "name", "＋ 添加自定义供应商"));
@@ -464,7 +523,7 @@ function renderProviderList() {
 	}
 
 	// 内置供应商按分组展开，命中搜索时只显示命中的
-	const order = ["国际通用", "国内厂商", "云平台与推理"];
+	const order = ["推荐", "国际通用", "国内厂商", "云平台与推理"];
 	for (const group of order) {
 		const items = builtin.filter((p) => statusOf(p.id)?.group === group && matches(p, view.query));
 		if (items.length === 0) continue;
@@ -663,8 +722,9 @@ function renderBuiltinDetail(box, provider, status) {
 			"sub",
 			status?.error
 				? `注册失败：${status.error}`
-				: `内置供应商，模型目录由 pi-ai 内置维护（当前 ${status?.modelCount ?? 0} 个）。` +
-					`环境变量：${(status?.envVars ?? []).join("、") || "无"}`,
+				: `内置供应商，模型目录由应用维护（当前 ${status?.modelCount ?? 0} 个）。` +
+					`环境变量：${(status?.envVars ?? []).join("、") || "无"}` +
+					(status?.baseUrl ? ` · 接入点：${status.baseUrl}` : ""),
 		),
 	);
 
@@ -672,12 +732,28 @@ function renderBuiltinDetail(box, provider, status) {
 
 	const keyInput = document.createElement("input");
 	keyInput.type = "password";
+	keyInput.autocomplete = "off";
 	keyInput.placeholder =
 		status?.authSource === "app" ? `已保存 ${status.maskedKey}，留空则不修改` : "粘贴 API Key，覆盖环境变量";
+	const reveal = document.createElement("button");
+	reveal.type = "button";
+	reveal.className = "btn btn-quiet btn-sm";
+	reveal.textContent = "显示";
+	reveal.setAttribute("aria-label", "显示 API Key");
+	reveal.setAttribute("aria-pressed", "false");
+	reveal.addEventListener("click", () => {
+		const visible = keyInput.type === "text";
+		keyInput.type = visible ? "password" : "text";
+		reveal.textContent = visible ? "显示" : "隐藏";
+		reveal.setAttribute("aria-pressed", String(!visible));
+		reveal.setAttribute("aria-label", `${visible ? "显示" : "隐藏"} API Key`);
+	});
+	const keyRow = el("div", "key-input-row");
+	keyRow.append(keyInput, reveal);
 	box.append(
 		field(
 			"API Key",
-			keyInput,
+			keyRow,
 			status?.authSource === "env" ? `当前来自环境变量 ${status.envVars[0]}` : "仅保存在本机 data/credentials.json",
 		),
 	);
@@ -696,9 +772,11 @@ function renderBuiltinDetail(box, provider, status) {
 	if (status?.authSource === "app") {
 		const clear = el("button", "btn btn-ghost btn-sm", "清除已保存的 Key");
 		clear.addEventListener("click", async () => {
-			await api(`/api/providers/${provider.id}/key`, { method: "DELETE" });
-			await refresh();
-			notifyChanged();
+			await operation("正在清除密钥…", async () => {
+				await api(`/api/providers/${provider.id}/key`, { method: "DELETE" });
+				await refresh();
+				notifyChanged();
+			});
 		});
 		actions.append(clear);
 	}
@@ -706,7 +784,7 @@ function renderBuiltinDetail(box, provider, status) {
 	actions.append(toggleButton(provider));
 	box.append(actions);
 
-	// 内置目录只读展示：模型清单由 pi-ai 维护，改了也不生效，只给检索与查看。
+	// 内置目录只读展示：模型清单由应用维护，改了也不生效，只给检索与查看。
 	renderModelZone(box, provider, false);
 }
 
@@ -746,11 +824,25 @@ function renderCustomDetail(box, provider, status) {
 
 	const keyInput = document.createElement("input");
 	keyInput.type = "password";
+	keyInput.autocomplete = "off";
 	keyInput.placeholder = status?.authSource === "app" ? `已保存 ${status.maskedKey}，留空则不修改` : "粘贴 API Key";
+	const revealKey = el("button", "btn btn-quiet btn-sm", "显示");
+	revealKey.type = "button";
+	revealKey.setAttribute("aria-label", "显示 API Key");
+	revealKey.setAttribute("aria-pressed", "false");
+	revealKey.addEventListener("click", () => {
+		const visible = keyInput.type === "text";
+		keyInput.type = visible ? "password" : "text";
+		revealKey.textContent = visible ? "显示" : "隐藏";
+		revealKey.setAttribute("aria-pressed", String(!visible));
+		revealKey.setAttribute("aria-label", `${visible ? "显示" : "隐藏"} API Key`);
+	});
+	const keyRow = el("div", "key-input-row");
+	keyRow.append(keyInput, revealKey);
 	box.append(
 		field(
 			"API Key",
-			keyInput,
+			keyRow,
 			hintLine(
 				"仅存本机；勾选下方开关后可留空",
 				"仅保存在本机 data/credentials.json。勾选「该服务不需要鉴权」后，此字段可留空。",
@@ -906,7 +998,7 @@ function isPlaceholder(model, summary) {
 /**
  * 供应商详情里的模型区：检索 + 统计 + 批量 + 卡片行。
  *
- * editable = false 时（内置供应商）只读展示：目录由 pi-ai 维护，改了也不生效。
+ * editable = false 时（内置供应商）只读展示：目录由应用维护，改了也不生效。
  */
 function renderModelZone(box, provider, editable) {
 	const entries = modelEntries(provider);
@@ -1034,7 +1126,9 @@ function renderModelList() {
 					? "没有匹配的模型。"
 					: ctx.editable
 						? "还没有模型。填好 Base URL 与 Key 后点「拉取模型」，或用下方「＋ 手动添加模型」。"
-						: "该供应商没有内置模型目录。",
+						: statusOf(ctx.provider.id)?.authSource === "none"
+							? "保存 API Key 后，即可列出内置模型。"
+							: "该供应商当前没有可用模型。",
 			),
 		);
 	} else {
@@ -1116,6 +1210,9 @@ function modelCard(provider, entry, editable) {
 	if (entry.key === view.data.defaultModel) head.append(el("span", "model-badge is-ok", "默认"));
 	if (!entry.available) head.append(el("span", "model-badge is-off", entry.reason));
 	card.append(head);
+	const summary = el("div", "model-card-summary");
+	summary.append(el("span", "", `${formatTokens(entry.contextWindow)} 上下文`), el("span", "", `${formatTokens(entry.maxTokens)} 输出`), el("span", "", entry.reasoning ? "支持思考" : "标准生成"));
+	card.append(summary);
 
 	const body = el("div", "model-card-body");
 
@@ -1213,7 +1310,10 @@ function modelCard(provider, entry, editable) {
 		body.append(costField);
 	}
 
-	card.append(body);
+	const details = el("details", "model-card-details");
+	details.append(el("summary", "", "参数与思考设置"));
+	details.append(body);
+	card.append(details);
 
 	const actions = el("div", "model-card-actions");
 	const pick = el("button", "btn btn-sm", entry.key === view.data.defaultModel ? "当前默认" : "设为默认");
@@ -1546,15 +1646,23 @@ function formatTokens(value) {
 // ---------------------------------------------------------------- 操作
 
 async function saveProvider(id, body) {
-	await api(`/api/providers/${id}`, { method: "PATCH", body });
-	await refresh();
-	notifyChanged();
+	await operation("正在保存供应商…", async () => {
+		await api(`/api/providers/${id}`, { method: "PATCH", body });
+		await refresh();
+		notifyChanged();
+	});
 }
 
 async function saveModel(providerId, model) {
-	await api(`/api/providers/${providerId}/models`, { method: "POST", body: model });
-	await refresh();
-	notifyChanged();
+	try {
+		await operation("正在保存模型参数…", async () => {
+			await api(`/api/providers/${providerId}/models`, { method: "POST", body: model });
+			await refresh();
+			notifyChanged();
+		});
+	} catch {
+		// 错误由顶部状态条持续显示；当前值由 refresh 回读，避免失败后假装已保存。
+	}
 }
 
 /** 改模型 id：先建新的，再删旧的；默认笔若指着旧 id，一并指到新 id。 */
@@ -1718,6 +1826,117 @@ export function bindProviderForm() {
 	});
 }
 
+// ---------------------------------------------------------------- 联网资料
+
+function renderWebSettings() {
+	const host = $("settings-web-panel");
+	const web = view.data.webSearch ?? { enabled: false, configured: false, maxResults: 5, includeContent: false };
+	host.replaceChildren();
+	const intro = el("div", "web-intro");
+	const eyebrow = el("span", "settings-eyebrow", "DEEPSEEK SEARCH / FETCH");
+	const title = el("h4", "", "让资料有据可查");
+	intro.append(eyebrow, title, el("p", "", "设定官可以按需检索公开网页，提炼为素材并保留来源。执笔者仍只使用本章已装配的素材，不直接联网。"));
+	const state = el("span", `web-state${web.enabled && web.configured ? " is-on" : ""}`, web.enabled ? (web.configured ? "已就绪" : "等待密钥") : "未开启");
+	intro.append(state);
+	host.append(intro);
+
+	const enable = document.createElement("input");
+	enable.type = "checkbox";
+	enable.id = "web-search-enabled";
+	enable.checked = web.enabled === true;
+	const enableLabel = el("label", "web-enable");
+	const copy = el("span", "", "");
+	copy.append(el("strong", "", "允许设定官联网检索"), el("small", "", "仅在任务需要现实资料时调用，不会自动上传作品或素材全文。"));
+	enableLabel.append(enable, copy);
+	enable.addEventListener("change", () => void saveWebSettings({ enabled: enable.checked }));
+	host.append(enableLabel);
+
+	const connection = el("section", "web-section");
+	connection.append(el("h5", "", "01 · 连接与密钥"), el("p", "settings-section-note", "使用 DeepSeek 官方 Search / Fetch API。可复用环境变量 DEEPSEEK_API_KEY，也可以在这里单独保存。"));
+	const key = document.createElement("input");
+	key.type = "password";
+	key.id = "web-search-key";
+	key.autocomplete = "off";
+	key.placeholder = web.authSource === "app" ? "已保存密钥 · 留空保持不变" : web.authSource === "env" ? "正在使用环境变量 · 可覆盖" : "粘贴 DeepSeek API Key";
+	const keyLine = el("div", "web-key-line");
+	keyLine.append(key);
+	const reveal = el("button", "btn btn-quiet btn-sm", "显示");
+	reveal.type = "button";
+	reveal.setAttribute("aria-label", "显示或隐藏联网 API Key");
+	reveal.addEventListener("click", () => {
+		key.type = key.type === "password" ? "text" : "password";
+		reveal.textContent = key.type === "password" ? "显示" : "隐藏";
+	});
+	keyLine.append(reveal);
+	connection.append(field("DeepSeek API Key", keyLine));
+	const actions = el("div", "actions");
+	const saveKey = el("button", "btn btn-primary btn-sm", "保存密钥");
+	saveKey.addEventListener("click", () => {
+		if (!key.value.trim()) return void saveStatus("请输入 API Key；留空表示不修改。", "err");
+		void saveWebSettings({}, key.value.trim());
+	});
+	actions.append(saveKey);
+	if (web.authSource === "app") {
+		const clear = el("button", "btn btn-ghost btn-sm", "清除密钥");
+		clear.addEventListener("click", () => void saveWebSettings({}, ""));
+		actions.append(clear);
+	}
+	const test = el("button", "btn btn-sm", "测试联网检索");
+	test.disabled = !(web.enabled && web.configured);
+	test.title = test.disabled ? "请先保存 API Key 并开启联网检索。" : "";
+	test.addEventListener("click", async () => {
+		test.disabled = true;
+		saveStatus("正在执行一次真实搜索…");
+		try {
+			const result = await api("/api/settings/web-search/test", { method: "POST" });
+			saveStatus(result.message, "ok");
+		} catch (error) { saveStatus(error.message, "err"); }
+		finally { test.disabled = false; }
+	});
+	actions.append(test);
+	connection.append(actions);
+	host.append(connection);
+
+	const limits = el("section", "web-section");
+	limits.append(el("h5", "", "02 · 检索方式"), el("p", "settings-section-note", "控制单次调用的信息量，减少不必要的上下文与网页抓取。"));
+	const count = document.createElement("select");
+	count.id = "web-search-count";
+	for (const n of [3, 5, 8, 10]) { const option = el("option", "", `${n} 条`); option.value = String(n); count.append(option); }
+	count.value = String(web.maxResults ?? 5);
+	count.addEventListener("change", () => void saveWebSettings({ maxResults: Number(count.value) }));
+	limits.append(field("单次搜索结果", count, "摘要足够时无需抓取网页正文。"));
+	const content = document.createElement("input");
+	content.type = "checkbox";
+	content.id = "web-search-content";
+	content.checked = web.includeContent === true;
+	const contentLabel = el("label", "switch web-content-switch");
+	contentLabel.append(content, document.createTextNode("搜索时附网页正文摘录（摘要不足时再开启）"));
+	content.addEventListener("change", () => void saveWebSettings({ includeContent: content.checked }));
+	limits.append(contentLabel);
+	host.append(limits);
+
+	const billing = el("aside", "web-billing");
+	billing.append(el("strong", "", "按次计费 · 默认关闭"), el("p", "", "Search 与 Fetch 是独立服务，不使用创作模型的 Key 权限推断。按官方当前价格，成功的搜索或网页抓取各为 5 元 / 1000 次；空结果与失败请求不计费。“测试联网检索”会发起真实搜索。"));
+	const link = el("a", "", "查看 DeepSeek 官方接口与价格 ↗");
+	link.href = "https://api-docs.deepseek.com/zh-cn/guides/search";
+	link.target = "_blank";
+	link.rel = "noopener noreferrer";
+	billing.append(link);
+	host.append(billing);
+}
+
+async function saveWebSettings(patch, apiKey) {
+	try {
+		await operation("正在保存联网设置…", async () => {
+			await api("/api/settings", { method: "PUT", body: { webSearch: patch, ...(apiKey !== undefined ? { webApiKey: apiKey } : {}) } });
+			await refresh();
+		});
+	} catch {
+		// 保存失败时控件已经先被用户改过；重新读一次服务端状态，避免开关看起来已开启。
+		try { await refresh(); } catch { /* 顶部状态条已展示保存失败原因 */ }
+	}
+}
+
 // ---------------------------------------------------------------- 绑定
 
 /**
@@ -1727,34 +1946,34 @@ export function bindProviderForm() {
  * index.html 由别人在改，这里不碰它。
  */
 function ensureDefaultsExtras() {
-	const host = document.querySelector(".settings-defaults");
+	const host = document.querySelector(".settings-defaults .defaults-fields");
 	if (!host || $("settings-default-extra")) return;
 	const extra = el("div", "default-extra");
 	extra.id = "settings-default-extra";
+	const hint = el("p", "default-hint");
+	hint.id = "settings-default-hint";
+	hint.setAttribute("role", "status");
+	const cost = el("p", "default-cost");
+	cost.id = "settings-default-cost";
+	extra.append(hint, cost);
+	host.append(extra);
 
+	const details = document.createElement("details");
+	details.className = "default-filter";
+	const summary = el("summary", "", "按供应商或模型名筛选");
 	const search = document.createElement("input");
 	search.type = "search";
 	search.id = "settings-default-search";
 	search.className = "default-search-input";
-	search.placeholder = "搜默认模型：id 或名称";
+	search.placeholder = "输入模型 id 或名称";
 	search.autocomplete = "off";
-	search.setAttribute("aria-label", "搜索默认模型");
+	search.setAttribute("aria-label", "筛选默认模型");
 	search.addEventListener("input", (event) => {
 		view.defaultSearch = event.target.value;
 		renderDefaults();
 	});
-	const searchWrap = el("div", "default-search");
-	searchWrap.append(search);
-
-	const hint = el("p", "default-hint");
-	hint.id = "settings-default-hint";
-	hint.setAttribute("role", "status");
-
-	const cost = el("p", "default-cost");
-	cost.id = "settings-default-cost";
-
-	extra.append(searchWrap, hint, cost);
-	host.append(extra);
+	details.append(summary, search);
+	host.append(details);
 }
 
 export function bindSettings() {
@@ -1768,8 +1987,23 @@ export function bindSettings() {
 		$("provider-form-api").append(option);
 	}
 	$("settings-close").addEventListener("click", () => $("settings-dialog").close());
-	$("settings-default-model").addEventListener("change", () => void saveDefaults());
-	$("settings-default-thinking").addEventListener("change", () => void saveDefaults());
+	$("settings-dialog").addEventListener("close", () => {
+		const target = view.returnFocus;
+		view.returnFocus = null;
+		if (target instanceof HTMLElement && target.isConnected) target.focus({ preventScroll: true });
+	});
+	for (const name of ["models", "web"]) {
+		$(`settings-tab-${name}`).addEventListener("click", () => setSection(name));
+	}
+	document.querySelector(".settings-nav").addEventListener("keydown", (event) => {
+		if (event.isComposing || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+		event.preventDefault();
+		const next = event.key === "Home" ? "models" : event.key === "End" ? "web" : view.section === "models" ? "web" : "models";
+		setSection(next);
+		$(`settings-tab-${next}`).focus();
+	});
+	$("settings-default-model").addEventListener("change", () => void saveDefaults().catch(() => {}));
+	$("settings-default-thinking").addEventListener("change", () => void saveDefaults().catch(() => {}));
 	// 搜索只重画列表，搜索框本身不动，焦点才留得住
 	$("provider-search").addEventListener("input", (event) => {
 		view.query = event.target.value.trim().toLowerCase();

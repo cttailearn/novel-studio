@@ -25,6 +25,7 @@ import { SettingsStore } from "../src/config/settings-store.ts";
 import { ensureDefaultSettings } from "../src/ai/models.ts";
 import { extractText, MAX_INFLATED_BYTES, MAX_TEXT_CHARS, UnsupportedUploadError, UploadTooLargeError } from "../src/server/upload.ts";
 import { deflateRawSync } from "node:zlib";
+import { DeepSeekWebSearchClient, createWebSearchTools, normalizeWebSearch } from "../src/ai/web-search.ts";
 
 /**
  * 把一章的"正文 + 元数据"重新拼成 ChapterDraft。
@@ -142,9 +143,70 @@ try {
 	check("素材工具集含 upsert_material", materialNames.includes("upsert_material"));
 	check("素材工具集含 attach_materials", materialNames.includes("attach_materials"));
 	check("写作工具集含 write_chapter", writingNames.includes("write_chapter"));
+	check("写作工具集含 append_chapter", writingNames.includes("append_chapter"));
 	check("两套都读得到素材", materialNames.includes("list_materials") && writingNames.includes("list_materials"));
 	check("两套都有大纲查询", materialNames.includes("list_chapters") && writingNames.includes("list_chapters"));
 	check("工具名不重复", new Set(materialNames).size === materialNames.length, materialNames.join(","));
+
+	console.log("\n联网检索");
+	const webConfig = normalizeWebSearch({ enabled: true, maxResults: 99, includeContent: true });
+	check("联网配置条数有上限", webConfig.enabled && webConfig.maxResults === 10 && webConfig.includeContent);
+	check("旧设置默认不联网", normalizeWebSearch(undefined).enabled === false);
+	const webRequests: Array<{ url: string; auth: string; body: any }> = [];
+	const webClient = new DeepSeekWebSearchClient({
+		apiKey: "offline-key",
+		fetchImpl: async (url, init) => {
+			const endpoint = String(url);
+			webRequests.push({ url: endpoint, auth: String((init?.headers as any)?.Authorization ?? ""), body: JSON.parse(String(init?.body)) });
+			if (endpoint.endsWith("/v1/tools/fetch")) {
+				return new Response(JSON.stringify({ title: "渡口考", content: "# 渡口考\n\n古渡口的通行与税收记载。" }), { status: 200, headers: { "content-type": "application/json" } });
+			}
+			return new Response(JSON.stringify({ results: [{ title: "古代渡口", url: "https://example.com/ferry", snippet: "渡口简介", summary: "可核验的渡口资料", site_name: "地方志", date: "2026-01-02", authority: 3, rerank_score: 2.6 }] }), { status: 200, headers: { "content-type": "application/json" } });
+		},
+	});
+	const webTools = createWebSearchTools(webClient, webConfig);
+	const webToolNames = webTools.map((tool) => tool.name);
+	check("设定官获得搜索与网页读取", webToolNames.includes("web_search") && webToolNames.includes("web_fetch"));
+	check("执笔者没有联网工具", !createWritingTools({ store, projectId: project.id }).some((tool) => webToolNames.includes(tool.name)));
+	check("未开启时设定官也没有联网工具", !createMaterialTools({ store, projectId: project.id }).some((tool) => webToolNames.includes(tool.name)));
+	const webSearchTool = webTools.find((tool) => tool.name === "web_search")!;
+	const searchResult = await webSearchTool.execute("web-test", { query: "古代渡口", count: 3 }, undefined);
+	const searchText = searchResult.content.map((item: { type: string; text?: string }) => item.type === "text" ? item.text ?? "" : "").join("\n");
+	const searchDetails = searchResult.details as { results: Array<{ authority?: number; rerankScore?: number }> };
+	check("搜索返回结构化来源", searchText.includes("https://example.com/ferry") && searchDetails.results.length === 1);
+	check("搜索协议与鉴权正确", webRequests[0]?.url === "https://api.deepseek.com/v1/tools/search" && webRequests[0]?.auth === "Bearer offline-key" && webRequests[0]?.body.need_content === true);
+	check("保留来源可信度与日期", searchText.includes("权威性：3/4") && searchText.includes("日期：2026-01-02") && searchDetails.results[0]?.rerankScore === 2.6);
+	const webFetchTool = webTools.find((tool) => tool.name === "web_fetch")!;
+	const fetched = await webFetchTool.execute("web-fetch-test", { url: "https://example.com/ferry" }, undefined);
+	const fetchedText = fetched.content.map((item: { type: string; text?: string }) => item.type === "text" ? item.text ?? "" : "").join("\n");
+	check("网页读取保留 Markdown 与来源", webRequests[1]?.url === "https://api.deepseek.com/v1/tools/fetch" && fetchedText.includes("# 渡口考") && fetchedText.includes("https://example.com/ferry"));
+	let privateUrlRejected = "";
+	try { await webClient.fetch("https://user:pass@example.com/private"); } catch (error) { privateUrlRejected = (error as Error).message; }
+	check("拒绝带账号密码的网页地址", privateUrlRejected.includes("账号密码"));
+	let flakyAttempts = 0;
+	const flakyClient = new DeepSeekWebSearchClient({
+		apiKey: "offline-key", retryBaseDelayMs: 0,
+		fetchImpl: async () => {
+			flakyAttempts += 1;
+			if (flakyAttempts < 3) return new Response(JSON.stringify({ error: { message: "busy" } }), { status: 503 });
+			return new Response(JSON.stringify({ results: [{ title: "重试成功", url: "https://example.com/retry", summary: "第二次重试后返回。" }] }), { status: 200 });
+		},
+	});
+	const webRetried = await flakyClient.search("古代渡口");
+	check("瞬时 5xx 自动重试后成功", flakyAttempts === 3 && webRetried.length === 1 && webRetried[0]?.title === "重试成功");
+	let badAttempts = 0;
+	const badClient = new DeepSeekWebSearchClient({
+		apiKey: "offline-key", retryBaseDelayMs: 0,
+		fetchImpl: async () => {
+			badAttempts += 1;
+			return new Response(JSON.stringify({ error: { message: "bad request" } }), { status: 400 });
+		},
+	});
+	let badError = "";
+	try { await badClient.search("古代渡口"); } catch (error) { badError = (error as Error).message; }
+	check("参数错误不重试", badAttempts === 1 && badError.includes("bad request"));
+	check("联网提示词要求溯源", buildMaterialSystemPrompt(project, true).includes("来源：标题 — URL"));
+	check("关闭联网不添加资料纪律", !buildMaterialSystemPrompt(project).includes("联网资料纪律"));
 
 	// ---- 通用素材库作用域 ----
 	console.log("\n通用素材库作用域");
@@ -288,6 +350,8 @@ try {
 	// list_materials
 	const listed = await call("list_materials", {});
 	check("list_materials 列出素材", textOf(listed).includes("林晓") && textOf(listed).includes("湾区的雨"));
+	check("list_materials details 不含正文", !JSON.stringify(listed.details).includes("痕迹鉴定员"), JSON.stringify(listed.details));
+	check("list_materials details 带分页", (listed.details as { pagination?: { total?: number } }).pagination?.total === 2);
 	const byKind = await call("list_materials", { kind: "world" });
 	check("按 kind 筛选生效", textOf(byKind).includes("湾区的雨") && !textOf(byKind).includes("林晓"));
 	const full = await call("list_materials", { kind: "world", full: true });
@@ -298,8 +362,13 @@ try {
 	const writingTools = createWritingTools({ store, projectId: project.id });
 
 	// 只改标题不该把该章的装料抖掉：chapterIds 不传时保持原样。
+	store.mutate(project.id, (draft) => {
+		const chapter = draft.outline.find((item) => item.id === "ch01")!;
+		chapter.pov = "林晓";
+		chapter.notes = "保留这条批注";
+	});
 	await call("update_outline", {
-		chapters: [{ id: "ch01", title: "第一章 雨夜（改）", summary: "主角发现一件异常的事。", targetWords: 3000 }],
+		chapters: [{ id: "ch01", title: "第一章 雨夜（改）", summary: "主角发现一件异常的事。" }],
 	});
 	check(
 		"改标题不动装配清单",
@@ -307,6 +376,12 @@ try {
 		String(store.get(project.id)!.outline.find((c) => c.id === "ch01")!.materialIds.length),
 	);
 	check("标题确实改了", store.get(project.id)!.outline.find((c) => c.id === "ch01")!.title === "第一章 雨夜（改）");
+	const partiallyMerged = store.get(project.id)!.outline.find((c) => c.id === "ch01")!;
+	check("已有章只合并显式字段", partiallyMerged.pov === "林晓" && partiallyMerged.notes === "保留这条批注" && partiallyMerged.targetWords === 3000 && partiallyMerged.status === "planned", JSON.stringify(partiallyMerged));
+	await call("update_outline", { chapters: [{ id: "ch-new", title: "新章", summary: "新章要略" }] });
+	const newChapter = store.get(project.id)!.outline.find((c) => c.id === "ch-new")!;
+	check("新章才补默认字段", newChapter.status === "planned" && newChapter.pov === "" && newChapter.targetWords === 0 && newChapter.notes === "");
+	store.mutate(project.id, (draft) => { draft.outline = draft.outline.filter((c) => c.id !== "ch-new"); });
 
 	// 挂一条不存在的素材不该污染章节的装配清单。
 	await call("attach_materials", { chapterId: "ch01", materialIds: ["ghost-id"], mode: "add" });
@@ -363,14 +438,28 @@ try {
 	check("正文内容一致", bodyCh01?.content === draftText, String(bodyCh01?.content?.slice(0, 20)));
 	check("版本号为 1", stored.drafts.ch01?.revision === 1);
 	check("记录用到的素材", stored.drafts.ch01?.materialIds.length === 2);
+	check("正文改变且未交小结时生成自动摘要", stored.drafts.ch01?.summary.startsWith("【自动摘要】") === true && stored.drafts.ch01.summary.includes("异常的比子"), stored.drafts.ch01?.summary);
+	check("write_chapter 报告自动摘要", textOf(written).includes("自动尾部摘要"), textOf(written));
 	check("中文字数统计", countWords(draftText) > 0, String(countWords(draftText)));
 
 	await callWriting("write_chapter", { chapterId: "ch01", title: "雨夜", content: draftText + "更多。", mode: "rewrite" });
 	check("重写后版本号为 2", store.get(project.id)!.drafts.ch01?.revision === 2);
+	let createRejected = "";
+	try {
+		await callWriting("write_chapter", { chapterId: "ch01", title: "雨夜", content: "覆盖旧稿", mode: "create" });
+	} catch (error) { createRejected = (error as Error).message; }
+	check("create 拒绝非空旧稿", createRejected.includes("只能用于没有旧稿") && (await store.readDraftBody(project.id, "ch01"))?.content === draftText + "更多。", createRejected);
+	const appended = await callWriting("append_chapter", { chapterId: "ch01", title: "雨夜", content: "雨后有人敲门。", materialIds: [materialId, "ghost-id"] });
+	check("append_chapter 拼接增量", (await store.readDraftBody(project.id, "ch01"))?.content.endsWith("\n\n雨后有人敲门。") === true);
+	check("未知素材被丢弃且提示", store.get(project.id)!.drafts.ch01?.materialIds.join() === materialId && textOf(appended).includes("ghost-id"), textOf(appended));
+	await callWriting("write_chapter", { chapterId: "ch01", title: "雨夜", content: (await store.readDraftBody(project.id, "ch01"))!.content + "完整旧稿加增量。", mode: "continue" });
+	const afterContinue = (await store.readDraftBody(project.id, "ch01"))!.content;
+	check("continue 接受纯增量并去重完整旧稿", (afterContinue.match(/雨后有人敲门/g) ?? []).length === 1 && afterContinue.endsWith("完整旧稿加增量。"), afterContinue.slice(-100));
+	check("continue 更新自动摘要", store.get(project.id)!.drafts.ch01?.summary.includes("完整旧稿加增量") === true, store.get(project.id)!.drafts.ch01?.summary);
 	// 覆盖写必须留退路：旧稿进 history，否则 rewrite 写坏就是整章不可恢复地丢失。
 	const afterRewrite = await store.readDraftBody(project.id, "ch01", { history: true });
-	check("重写后旧稿进入历史", (afterRewrite?.history.length ?? 0) === 1 && afterRewrite?.history[0]?.content === draftText, String(afterRewrite?.history.length));
-	check("历史记录了作业类型", afterRewrite?.history[0]?.mode === "rewrite", String(afterRewrite?.history[0]?.mode));
+	check("覆盖写保留历史", (afterRewrite?.history.length ?? 0) > 0);
+	check("create 拒绝后旧稿仍在历史中", afterRewrite?.history[0]?.content === draftText, String(afterRewrite?.history.length));
 	// 首次写入时若未显式传素材，应继承本章的装配清单 —— 否则正文与素材的
 	// 回溯链会在第一次落笔时就断掉。
 	await call("attach_materials", { chapterId: "ch02", materialIds: [worldId], mode: "add" });
@@ -386,7 +475,7 @@ try {
 		String(store.get(project.id)!.outline.find((c) => c.id === "ch02")!.status),
 	);
 	check("重写后大纲状态自动更新", store.get(project.id)!.outline[0]?.status === "drafted");
-	check("重写未传素材时沿用上一版的记录", store.get(project.id)!.drafts.ch01?.materialIds.length === 2);
+	check("显式 materialIds 覆盖上一版记录", store.get(project.id)!.drafts.ch01?.materialIds.length === 1);
 
 	// 模型偶尔会自由发挥一个章号。写入工具必须以章目为准，
 	// 否则会凭空造出一份不在大纲里的正文，界面上查不到、也删不掉。
@@ -404,6 +493,20 @@ try {
 
 	const chapters = await callWriting("list_chapters");
 	check("list_chapters 显示装料数", textOf(chapters).includes("装料2条"), textOf(chapters));
+	check("list_chapters details 不带正文和全量 drafts", !("drafts" in (chapters.details as object)) && !JSON.stringify(chapters.details).includes(afterContinue), "");
+	const scopedTools = createWritingTools({ store, projectId: project.id, allowedChapterId: "ch01", previousChapterId: "ch02" });
+	const scopedByName = new Map(scopedTools.map((tool) => [tool.name, tool]));
+	const callScoped = (name: string, params: unknown) => scopedByName.get(name)!.execute("scoped", params as never, undefined, undefined);
+	check("read_chapter 允许本章和上一章", textOf(await callScoped("read_chapter", { chapterId: "ch01" })).includes("完整旧稿加增量") && textOf(await callScoped("read_chapter", { chapterId: "ch02" })).includes("第二天"));
+	let readDenied = "";
+	try { await callScoped("read_chapter", { chapterId: "ghost" }); } catch (error) { readDenied = (error as Error).message; }
+	check("read_chapter 拒绝范围外章节", readDenied.includes("只能读取本章"), readDenied);
+	let reviseDenied = "";
+	try { await callScoped("revise_chapter", { chapterId: "ch02", find: "第二天", replace: "第三天" }); } catch (error) { reviseDenied = (error as Error).message; }
+	check("revise_chapter 强校验当前章", reviseDenied.includes("只允许操作章节 ch01"), reviseDenied);
+	let appendDenied = "";
+	try { await callScoped("append_chapter", { chapterId: "ch02", title: "追查", content: "不该追加" }); } catch (error) { appendDenied = (error as Error).message; }
+	check("append_chapter 强校验当前章", appendDenied.includes("只允许操作章节 ch01"), appendDenied);
 
 	// ---- 待办 ----
 	console.log("\n待办");
@@ -808,7 +911,7 @@ try {
 	check("写作提示词声明唯一事实来源", writingPrompt.includes("唯一"));
 	const sessionPrompt = buildWritingSystemPrompt(final, { chapter, materials: assembled, mode: "create", interactive: true });
 	check("工作台提示词不预设整章重写", sessionPrompt.includes("等作者交代"));
-	check("工作台提示词声明整章落地", sessionPrompt.includes("整章落地"));
+	check("工作台提示词说明按模式落地", sessionPrompt.includes("按模式落地") && sessionPrompt.includes("append_chapter"));
 	check("工作台提示词不出现一次写完", !sessionPrompt.includes("**一次写完**"));
 	const oneShotPrompt = buildWritingSystemPrompt(final, { chapter, materials: assembled, mode: "rewrite" });
 	// rewrite / continue 建立在旧稿之上，模型必须看得见原文 ——
@@ -824,7 +927,7 @@ try {
 	// 没有旧稿时不该留一节空的「现有正文」。
 	check("无旧稿时不带该节", !writingPrompt.includes("# 现有正文"), "");
 	check("一次性成文仍要求整章重写", oneShotPrompt.includes("整章重写"));
-	check("一次性成文仍要求一次写完", oneShotPrompt.includes("**一次写完**"));
+	check("一次性成文仍要求完整落地", oneShotPrompt.includes("**完整落地**"));
 	check("一次性成文不含工作台规矩", !oneShotPrompt.includes("工作台上的规矩"));
 
 	// ---- 长素材分流与检索 ----
@@ -870,11 +973,12 @@ try {
 	check("预算内至少注入了若干条", inlined >= 10, String(inlined));
 
 	// 检索工具：中文二元组要能命中。
-	const searchTool = createWritingTools({ store, projectId: project.id }).find((t) => t.name === "search_materials")!;
+	const searchTool = createWritingTools({ store, projectId: project.id, allowedChapterId: chapter.id }).find((t) => t.name === "search_materials")!;
 	check("写作工具集含 search_materials", searchTool !== undefined);
 	// 检索搜的是工程里的素材，所以先把这两条放进去。
 	store.mutate(project.id, (draft) => {
 		draft.materials.push(shortMat, longMat);
+		draft.outline.find((item) => item.id === chapter.id)!.materialIds.push(shortMat.id, longMat.id);
 	});
 	const hit = await searchTool.execute("s1", { query: "霓虹" });
 	const hitText = JSON.stringify(hit);
@@ -892,7 +996,8 @@ try {
 		id: "mat-stray",
 		title: "未装配的料",
 		content: "独有标记词：孤舟蓑笠。",
-		chapterIds: [],
+		// 反向 chapterIds 也不能扩大事实池，唯一依据是 outline.materialIds。
+		chapterIds: [chapter.id],
 	};
 	store.mutate(project.id, (draft) => {
 		draft.materials.push(strayMat);
@@ -903,7 +1008,9 @@ try {
 	const byId = await searchTool.execute("s5", { query: "霓虹", materialId: "mat-long" });
 	check("可按 materialId 限定检索", JSON.stringify(byId).includes("霓虹招牌"));
 	const badId = await searchTool.execute("s6", { query: "霓虹", materialId: "no-such-id" });
-	check("materialId 不存在时明说", JSON.stringify(badId).includes("找不到素材"));
+	check("materialId 不存在时明说", JSON.stringify(badId).includes("不存在"));
+	const outOfPoolId = await searchTool.execute("s6b", { query: "孤舟蓑笠", materialId: "mat-stray" });
+	check("materialId 未装配到本章也拒绝", JSON.stringify(outOfPoolId).includes("未装配到本章"), JSON.stringify(outOfPoolId));
 	const capped = await searchTool.execute("s7", { query: "酸雨", limit: 999 });
 	// limit 要有上限，免得一次把整库吐出来。
 
@@ -932,6 +1039,17 @@ try {
 	// 同一段文字在一次请求里出现两次，等于白白花掉一半上下文预算。
 	check("写作快照不重复注入素材全文", !writingDigest.includes("游离区常年大雨"));
 	check("写作快照不含全库索引", !writingDigest.includes("素材库索引"));
+	const longIndexProject = {
+		...store.get(project.id)!,
+		materials: Array.from({ length: 50 }, (_, index) => ({
+			...store.get(project.id)!.materials[0]!,
+			id: "digest-" + index,
+			title: "长索引素材" + index + "题".repeat(30),
+			usage: "用".repeat(30),
+		})),
+	};
+	const cappedDigest = buildContextDigest(longIndexProject, { scope: "material", maxChars: 1000 });
+	check("工程 digest 有硬上限且提示可检索", cappedDigest.length <= 1020 && cappedDigest.includes("长索引已截断") && cappedDigest.includes("search_materials"), String(cappedDigest.length));
 
 	// ---- 厂商注册 ----
 	console.log("\n模型接入层");
@@ -941,8 +1059,8 @@ try {
 	initModelRuntime(settingsStore, credentialStore);
 	const models = getModels();
 	check("注册 provider 数量 > 0", models.getProviders().length > 0, String(models.getProviders().length));
-	check("BUILTIN_PROVIDERS 已声明", BUILTIN_PROVIDERS.length === 41, String(BUILTIN_PROVIDERS.length));
-	check("首次启动预置了内置供应商", settingsStore.get().providers.length === 41, String(settingsStore.get().providers.length));
+	check("BUILTIN_PROVIDERS 已声明", BUILTIN_PROVIDERS.length === 42, String(BUILTIN_PROVIDERS.length));
+	check("首次启动预置了内置供应商", settingsStore.get().providers.length === 42, String(settingsStore.get().providers.length));
 	check("全部预置为 builtin", settingsStore.get().providers.every((p) => p.kind === "builtin"));
 	check("能列出模型目录", models.getModels().length > 0, String(models.getModels().length));
 } finally {

@@ -11,7 +11,7 @@ import path from "node:path";
 import { createModels } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import type { AgentEvent, AgentMessage } from "@earendil-works/pi-agent-core";
-import { createNovelAgent } from "../src/ai/novel-agent.ts";
+import { createNovelAgent, trimConversation } from "../src/ai/novel-agent.ts";
 import type { AskBroker, AskRequest } from "../src/ai/ask.ts";
 import { ProjectStore } from "../src/store/project.ts";
 import { readConfig } from "../src/config/env.ts";
@@ -356,7 +356,7 @@ try {
 	const patchGhostEnd = lastPatchToolEnd();
 	check("不存在的章节：工具报错", patchGhostEnd?.isError === true);
 	check("不存在的章节：正文没变", (await store.readDraftBody(project.id, "ch01"))?.content === patchBeforeGhost);
-	check("不存在的章节：文案点明不在本章目里", patchToolText(patchGhostEnd).includes("不在本章目里"), patchToolText(patchGhostEnd));
+	check("不存在的章节：文案点明章节范围", patchToolText(patchGhostEnd).includes("只允许操作章节"), patchToolText(patchGhostEnd));
 
 	// 空 replace：删掉那一段，和"替换成空串"逐字等价。
 	const patchDeleteFind = "他没再往下数。\n\n";
@@ -404,6 +404,47 @@ try {
 	check("第二轮后系统提示词仍在头部", afterSecond[0]?.role === "system");
 	check("第二轮后无残留错误", materialAgent.state.errorMessage === undefined);
 	check("第二轮素材也落盘", store.get(project.id)!.materials.length === 2);
+
+	const systemMessage = { role: "system", content: "系统头", timestamp: 1 } as AgentMessage;
+	const userMessage = (text: string) => ({ role: "user", content: text, timestamp: 2 }) as AgentMessage;
+	const callMessage = (id: string) => ({ role: "assistant", content: [{ type: "toolCall", id, name: "read_chapter", arguments: {} }], timestamp: 3 }) as AgentMessage;
+	const resultMessage = (id: string, text = "结果") => ({ role: "toolResult", toolCallId: id, toolName: "read_chapter", content: [{ type: "text", text }], isError: false, timestamp: 4 }) as AgentMessage;
+	const digestMessage = { role: "system", content: "digest", timestamp: 5 } as AgentMessage;
+	const paired = trimConversation([systemMessage, callMessage("a"), resultMessage("a"), userMessage("最新问题")], digestMessage);
+	check("配对裁剪保留完整工具组", paired.some((m) => m.role === "assistant") && paired.some((m) => m.role === "toolResult"));
+	check("孤儿结果与悬空调用都移除", !trimConversation([systemMessage, resultMessage("orphan"), callMessage("dangling"), userMessage("最新")], digestMessage).some((m) => m.role === "toolResult" || m.role === "assistant"));
+	const many: AgentMessage[] = [systemMessage];
+	for (let i = 0; i < 30; i += 1) many.push(callMessage("call-" + i), resultMessage("call-" + i));
+	many.push(userMessage("最后一轮"));
+	const capped = trimConversation(many, digestMessage);
+	const callIds = new Set(capped.flatMap((m) => m.role === "assistant" ? m.content.filter((p) => p.type === "toolCall").map((p) => p.id) : []));
+	const resultIds = capped.flatMap((m) => m.role === "toolResult" ? [m.toolCallId] : []);
+	check("工具组上限按配对裁剪", resultIds.length === 24 && callIds.size === 24 && resultIds.every((id) => callIds.has(id)), resultIds.length + "/" + callIds.size);
+	check("裁剪保留系统头/digest/最新用户", capped[0] === systemMessage && capped[1] === digestMessage && capped.at(-1)?.role === "user");
+	const huge: AgentMessage[] = [systemMessage];
+	for (let i = 0; i < 5; i += 1) huge.push(callMessage("huge-" + i), resultMessage("huge-" + i, "字".repeat(25_000)));
+	huge.push(userMessage("大问题" + "新".repeat(1000)));
+	const budgeted = trimConversation(huge, digestMessage);
+	const budgetCalls = new Set(budgeted.flatMap((m) => m.role === "assistant" ? m.content.filter((p) => p.type === "toolCall").map((p) => p.id) : []));
+	const budgetResults = budgeted.flatMap((m) => m.role === "toolResult" ? [m.toolCallId] : []);
+	check("字符预算不产生孤儿", budgetCalls.size === budgetResults.length && budgetResults.every((id) => budgetCalls.has(id)), budgetCalls.size + "/" + budgetResults.length);
+	check("字符预算仍保留最新用户", budgeted.at(-1)?.role === "user");
+
+	store.mutate(project.id, (draft) => {
+		draft.outline.push({ id: "ch02", title: "第二章", summary: "接续", pov: "", volumeId: "", status: "planned", targetWords: 1000, notes: "", materialIds: [] });
+	});
+	faux.setResponses([
+		fauxAssistantMessage(fauxToolCall("write_chapter", { chapterId: "ch01", title: "越章", content: "不该覆盖", mode: "rewrite" })),
+		fauxAssistantMessage(fauxToolCall("read_chapter", { chapterId: "ch03" })),
+		fauxAssistantMessage([fauxText("本章范围已限制。")], { stopReason: "stop" }),
+	]);
+	const scopedAgent = await createNovelAgent({ store, projectId: project.id, model, models, config, sessionId: "scoped-writing", role: "writing", chapterId: "ch02" });
+	const scopedEvents: AgentEvent[] = [];
+	scopedAgent.subscribe((event) => { scopedEvents.push(event); });
+	await scopedAgent.prompt("测试章节边界。");
+	const scopedErrors = scopedEvents.filter((e): e is Extract<AgentEvent, { type: "tool_execution_end" }> => e.type === "tool_execution_end" && e.isError);
+	check("writing 会话强校验 write_chapter 当前章", scopedErrors.some((e) => e.toolName === "write_chapter"), String(scopedErrors.length));
+	check("writing 会话 read_chapter 限制本章/上一章", scopedErrors.some((e) => e.toolName === "read_chapter"), String(scopedErrors.length));
 
 	// ───────────────────────────────── 提问
 	console.log("\n提问");

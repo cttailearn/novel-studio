@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { gunzipSync } from "node:zlib";
 import { ProjectStore, encodeFileName, projectStats, type ChapterDraft } from "../src/store/project.ts";
+import { MaterialLibrary } from "../src/store/library.ts";
 import { createWritingTools } from "../src/ai/tools.ts";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { RECORDS_KEEP, RecordStore } from "../src/server/records.ts";
@@ -190,6 +191,26 @@ const histNames = await readdir(histDir).catch(() => [] as string[]);
 check("覆盖写留下历史版本", histNames.length === 1, histNames.join(","));
 const histBody = await readFile(path.join(histDir, histNames[0]!), "utf8").catch(() => "");
 check("历史里存的是旧正文", histBody.includes("雨落在铁皮棚上"), histBody.slice(0, 20));
+
+// 自动存稿不读取或重写历史；显式存稿只新增当前旧版，不重写保留版本。
+const autosaveStart = await readFile(path.join(draftDir, encodeFileName("ch0001") + ".txt"), "utf8");
+await store.saveDraftBody(project.id, "ch0001", {
+	title: "第1章 夜航",
+	content: autosaveStart + "\n自动保存的一小段。",
+	materialIds: [],
+	keepHistory: false,
+});
+check("自动存稿不改写历史", histNames.length === (await readdir(histDir)).length);
+const retainedHistoryFile = path.join(histDir, histNames[0]!);
+const retainedHistoryStat = await stat(retainedHistoryFile);
+await store.saveDraftBody(project.id, "ch0001", {
+	title: "第1章 夜航",
+	content: autosaveStart + "\n另一次显式保存。",
+	materialIds: [],
+	mode: "rewrite",
+});
+check("显式存稿只新增当前旧版", (await readdir(histDir)).length === 2);
+check("保留的历史文件不被重写", (await stat(retainedHistoryFile)).mtimeMs === retainedHistoryStat.mtimeMs);
 
 // ───────────────────────────────────────────── 4. 老工程惰性迁移
 console.log("\n老工程惰性迁移");
@@ -369,6 +390,60 @@ check(
 	JSON.stringify(recordsRaw).slice(0, 80),
 );
 await rm(recordsDir, { recursive: true, force: true });
+
+// ───────────────────────────────────────────── 8. 落盘失败与恢复
+console.log("\n落盘失败与恢复");
+const failureDir = await mkdtemp(path.join(tmpdir(), "novel-failure-"));
+const failureStore = await ProjectStore.open(failureDir);
+const failureProject = failureStore.create({ title: "故障注入" });
+await failureStore.flush();
+await mkdir(path.join(failureDir, "drafts", failureProject.id), { recursive: true });
+await rm(path.join(failureDir, failureProject.id + ".json"), { force: true });
+await mkdir(path.join(failureDir, failureProject.id + ".json"), { recursive: true });
+failureStore.mutate(failureProject.id, (p) => { p.title = "故障后的内存标题"; });
+await failureStore.flushForProject(failureProject.id).then(
+	() => check("ProjectStore 落盘失败会向 flush 抛错", false, "flush 意外成功"),
+	() => check("ProjectStore 落盘失败会向 flush 抛错", true),
+);
+check("ProjectStore 失败后仍保留内存工程", failureStore.get(failureProject.id)?.title === "故障后的内存标题");
+check("ProjectStore 失败后保留 dirty", failureStore.pendingWrites().includes(failureProject.id));
+await rm(path.join(failureDir, failureProject.id + ".json"), { recursive: true, force: true });
+await failureStore.retryPending();
+await failureStore.flushForProject(failureProject.id);
+check("ProjectStore 后台重试不清除内存且可恢复", failureStore.pendingWrites().length === 0);
+
+const failureLibrary = await MaterialLibrary.open(failureDir);
+const failureEntry = failureLibrary.create({ title: "不能丢的素材", content: "原文" });
+await failureLibrary.flush();
+await rm(path.join(failureDir, "library.json"), { force: true });
+await mkdir(path.join(failureDir, "library.json"), { recursive: true });
+failureLibrary.update(failureEntry.id, { content: "修改后" });
+await failureLibrary.flush().then(
+	() => check("MaterialLibrary 落盘失败会向 flush 抛错", false, "flush 意外成功"),
+	() => check("MaterialLibrary 落盘失败会向 flush 抛错", true),
+);
+check("MaterialLibrary 失败后仍保留内存修改", failureLibrary.get(failureEntry.id)?.content === "修改后");
+await rm(path.join(failureDir, "library.json"), { recursive: true, force: true });
+await failureLibrary.retryPending();
+check("MaterialLibrary 后续写入可恢复", (await MaterialLibrary.open(failureDir)).get(failureEntry.id)?.content === "修改后");
+
+const trashDir = await mkdtemp(path.join(tmpdir(), "novel-trash-"));
+const trashStore = await ProjectStore.open(trashDir);
+const trashProject = trashStore.create({ title: "可恢复作品" });
+trashStore.mutate(trashProject.id, (p) => p.outline.push({
+	id: "chapter", title: "一章", summary: "", pov: "", volumeId: "", status: "drafted", targetWords: 0, notes: "", materialIds: [],
+}));
+await trashStore.saveDraftBody(trashProject.id, "chapter", { title: "一章", content: "删除前的正文", keepHistory: false });
+await trashStore.flush();
+await trashStore.remove(trashProject.id);
+check("删除后工程不再在活动列表", trashStore.get(trashProject.id) === undefined);
+check("删除后快照进入独立回收站", (await trashStore.listDeleted()).some((item) => item.id === trashProject.id));
+const restoredTrash = await trashStore.restoreDeleted(trashProject.id);
+check("恢复后工程回到活动列表", restoredTrash.id === trashProject.id && trashStore.get(trashProject.id)?.title === "可恢复作品");
+check("恢复后正文仍可读", (await trashStore.readDraftBody(trashProject.id, "chapter"))?.content === "删除前的正文");
+check("恢复后回收站条目消失", !(await trashStore.listDeleted()).some((item) => item.id === trashProject.id));
+await rm(trashDir, { recursive: true, force: true });
+await rm(failureDir, { recursive: true, force: true });
 
 await rm(dir, { recursive: true, force: true });
 

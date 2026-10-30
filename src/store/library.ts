@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { copyFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isKnownKind, type Material, type MaterialKind, type MaterialStatus } from "./project.ts";
 
@@ -96,6 +96,8 @@ export function libraryFieldsOf(material: Material): LibraryMaterialInput {
 export class MaterialLibrary {
 	private materials: LibraryMaterial[];
 	private writeChain: Promise<void> = Promise.resolve();
+	private dirty = false;
+	private writeError: unknown;
 	private readonly file: string;
 
 	private constructor(file: string, materials: LibraryMaterial[]) {
@@ -199,26 +201,48 @@ export class MaterialLibrary {
 		// 快照必须在调用这一刻拍，不能等链上轮到它再读 this.materials ——
 		// payload 若只是引用，排队期间后续改动会把它一起改掉，
 		// 于是每一次写入序列化的都是"最后那个状态"，备份也就永远等于当前内容。
+		this.dirty = true;
 		const snapshot: LibraryFile = { materials: this.materials.map((entry) => ({ ...entry, tags: [...entry.tags] })) };
 		this.writeChain = this.writeChain
 			.catch(() => undefined)
 			.then(async () => {
 				const tmp = this.file + "." + randomUUID() + ".tmp";
-				await writeFile(tmp, JSON.stringify(snapshot, null, 2), "utf8");
-				// 备份失败不该挡住正事：拿不到旧内容也要把新内容写下去。
-				await copyFile(this.file, this.file + ".bak").catch(() => undefined);
-				for (let attempt = 0; ; attempt++) {
-					try {
-						await rename(tmp, this.file);
-						return;
-					} catch (error) {
-						if (attempt >= 4) throw error;
-						await new Promise((resolve) => setTimeout(resolve, 20 * (attempt + 1)));
+				try {
+					await writeFile(tmp, JSON.stringify(snapshot, null, 2), "utf8");
+					// 备份失败不该挡住正事：拿不到旧内容也要把新内容写下去。
+					await copyFile(this.file, this.file + ".bak").catch(() => undefined);
+					for (let attempt = 0; ; attempt++) {
+						try {
+							await rename(tmp, this.file);
+							break;
+						} catch (error) {
+							if (attempt >= 4) throw error;
+							await new Promise((resolve) => setTimeout(resolve, 20 * (attempt + 1)));
+						}
 					}
+					this.dirty = false;
+					this.writeError = undefined;
+				} catch (error) {
+					this.dirty = true;
+					this.writeError = error;
+					await rm(tmp, { force: true }).catch(() => undefined);
+					console.error("[library] 落盘失败（已标记待重试）:", error);
 				}
-			})
-			.catch((error) => console.error("[library] 落盘失败:", error))
-			.then(() => undefined);
+			});
 		return this.writeChain;
+	}
+
+	/** 等全部已排队写入；本次或此前写入仍未落盘时抛错。 */
+	async flush(): Promise<void> {
+		await this.writeChain;
+		if (!this.dirty) return;
+		throw new Error("通用素材库仍有未落盘数据", { cause: this.writeError });
+	}
+
+	/** 不改内存地补写最近状态，供启动或显式恢复流程使用。 */
+	async retryPending(): Promise<void> {
+		await this.writeChain;
+		if (this.dirty) this.persist();
+		await this.flush();
 	}
 }

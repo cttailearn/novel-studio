@@ -1576,3 +1576,96 @@
 		padding-right: var(--sp-3, 12px);
 	}
 }
+
+/* ── 设置总览：模型与联网资料分区，参数按需展开 ─────────────── */
+.settings-dialog { max-width: 1180px; }
+/* 打开时把焦点交给标题，是为读屏交代上下文；标题不是可操作控件，不画焦点框。 */
+.settings-dialog .settings-head h3:focus { outline: none; }
+.settings-nav { display: flex; align-items: center; gap: 4px; padding: 0 var(--sp-5, 24px); border-bottom: 1px solid var(--rule-soft); background: var(--paper); }
+.settings-tab { min-height: 46px; padding: 0 15px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--ink-3); font: 500 13px var(--sans); cursor: pointer; }
+.settings-tab:hover { color: var(--ink); background: var(--hover); }
+.settings-tab.is-on { color: var(--ink); border-bottom-color: var(--cinnabar); }
+.settings-nav-dot { margin-left: 6px; font-size: 10px; color: var(--ink-3); }
+.settings-nav-dot.is-ok { color: var(--moss); }
+.settings-nav-dot.is-warn { color: var(--cinnabar); }
+.settings-save-status { margin-left: auto; max-width: 45%; font-size: 11.5px; line-height: 1.5; color: var(--ink-3); }
+.settings-save-status.is-ok { color: var(--moss); }
+.settings-save-status.is-err { color: var(--cinnabar); }
+#settings-models-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+#settings-models-panel[hidden], #settings-web-panel[hidden] { display: none; }
+.settings-defaults { display: grid; grid-template-columns: minmax(190px, .34fr) minmax(0, 1fr); align-items: start; }
+.defaults-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 7px 22px; min-width: 0; }
+.defaults-fields > label { display: flex; flex-direction: column; align-items: stretch; min-width: 0; }
+.defaults-fields > label > span { margin-bottom: 5px; font-size: 10.5px; letter-spacing: .12em; }
+.defaults-fields select { min-width: 0; max-width: none; width: 100%; }
+.defaults-caption { display: flex; flex-direction: column; gap: 4px; padding: 18px 0 0; }
+.defaults-caption > span { font: 600 14px var(--kai); color: var(--ink); letter-spacing: .08em; }
+.defaults-caption small { color: var(--ink-3); font-size: 11px; line-height: 1.6; }
+.default-extra { grid-column: 1 / -1; display: flex; flex-direction: row; align-items: baseline; flex-wrap: wrap; gap: 4px 18px; }
+.default-extra .default-hint, .default-extra .default-cost { margin: 0; font-size: 11px; }
+.default-filter { grid-column: 1 / -1; color: var(--ink-3); font-size: 11px; }
+.default-filter > summary { padding: 5px 0; cursor: pointer; }
+.default-filter > summary:hover { color: var(--ink); }
+.default-filter .default-search-input { width: min(100%, 360px); min-height: 36px; margin-top: 6px; padding: 6px 9px; background: var(--paper-hi); border: 1px solid var(--rule); color: var(--ink); }
+.providers-rail-title { display: flex; align-items: baseline; justify-content: space-between; padding: 17px 20px 4px; font: 600 13px var(--kai); color: var(--ink-2); }
+.providers-rail-title small { font: 10.5px var(--sans); color: var(--ink-3); }
+.provider-row .dot.on { box-shadow: 0 0 0 3px var(--moss-wash); }
+.model-card-summary { display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 0 12px 10px; font-size: 11px; color: var(--ink-3); }
+.model-card-summary span + span::before { content: "·"; margin-right: 18px; color: var(--ink-4); }
+.model-card-details > summary { margin: 0 12px; padding: 9px 0; border-top: 1px solid var(--rule-soft); color: var(--ink-3); font-size: 11.5px; cursor: pointer; }
+.model-card-details > summary:hover { color: var(--ink); }
+.model-card-details[open] > summary { color: var(--ink-2); }
+.model-card-details .model-card-body { border-top: 0; }
+.settings-web-panel { flex: 1; min-height: 0; overflow-y: auto; padding: 32px clamp(22px, 5vw, 72px) 48px; overscroll-behavior: contain; }
+.web-intro { position: relative; max-width: 760px; padding-bottom: 24px; border-bottom: 1px solid var(--rule-soft); }
+.settings-eyebrow { display: block; margin-bottom: 8px; font: 10px var(--mono); letter-spacing: .12em; color: var(--cinnabar); }
+.web-intro h4 { margin: 0 0 9px; font: 600 25px var(--kai); letter-spacing: .08em; color: var(--ink); }
+.web-intro p { max-width: 590px; margin: 0; font-size: 12.5px; line-height: 1.9; color: var(--ink-3); }
+.web-state { position: absolute; right: 0; top: 2px; padding: 3px 8px; border: 1px solid var(--rule); color: var(--ink-3); font-size: 11px; }
+.web-state.is-on { color: var(--moss); border-color: var(--moss); background: var(--moss-wash); }
+.web-enable { display: flex; align-items: flex-start; gap: 12px; max-width: 760px; padding: 22px 0; cursor: pointer; }
+.web-enable input { width: 18px; height: 18px; margin: 3px 0 0; accent-color: var(--cinnabar); }
+.web-enable strong, .web-enable small { display: block; }
+.web-enable strong { font-size: 14px; color: var(--ink); }
+.web-enable small { margin-top: 5px; font-size: 11.5px; line-height: 1.7; color: var(--ink-3); }
+.web-section { max-width: 760px; padding: 20px 0; border-top: 1px solid var(--rule-soft); }
+.web-section h5 { margin: 0; font: 600 13px var(--kai); letter-spacing: .08em; color: var(--ink-2); }
+.settings-section-note { margin: 6px 0 18px; font-size: 11.5px; line-height: 1.8; color: var(--ink-3); }
+.web-section .field { display: grid; grid-template-columns: 130px minmax(0, 1fr); align-items: center; gap: 4px 16px; margin: 12px 0; }
+.web-section .field > label { font-size: 12px; color: var(--ink-2); }
+.web-section .field > .hint { grid-column: 2; font-size: 11px; color: var(--ink-3); }
+.web-section select, .web-section input[type=password], .web-section input[type=text] { min-height: 40px; width: 100%; background: var(--paper-hi); border: 1px solid var(--rule); color: var(--ink); }
+.key-input-row { display: flex; align-items: stretch; gap: 6px; }
+.key-input-row input { flex: 1; min-width: 0; font-family: var(--mono); }
+.web-key-line { display: flex; align-items: stretch; gap: 6px; }
+.web-key-line input { min-width: 0; font-family: var(--mono); }
+.web-content-switch { display: flex; align-items: center; gap: 9px; margin: 16px 0 0 146px; font-size: 12px; line-height: 1.7; color: var(--ink-2); }
+.web-content-switch input { flex: none; }
+.web-billing { max-width: 760px; margin-top: 14px; padding: 16px 18px; border-left: 2px solid var(--tea); background: var(--paper-lo); }
+.web-billing strong { font: 600 12px var(--kai); letter-spacing: .08em; color: var(--ink-2); }
+.web-billing p { margin: 7px 0 10px; font-size: 11px; line-height: 1.8; color: var(--ink-3); }
+.web-billing a { color: var(--cinnabar); font-size: 11.5px; text-underline-offset: 3px; }
+@media (max-width: 760px) {
+	.settings-nav { padding: 0 14px; }
+	.settings-tab { padding: 0 9px; }
+	.settings-save-status { max-width: 35%; font-size: 10.5px; }
+	.settings-defaults { grid-template-columns: 1fr; padding: 14px; gap: 10px; }
+	.defaults-caption { grid-column: auto; padding-top: 0; }
+	.defaults-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+	.default-extra { grid-template-columns: 1fr; }
+	.default-search { grid-row: auto; }
+	.settings-web-panel { padding: 24px 18px 36px; }
+	.web-section .field { grid-template-columns: 1fr; }
+	.web-section .field > .hint { grid-column: 1; }
+	.web-content-switch { margin-left: 0; }
+}
+@media (max-width: 460px) {
+	.settings-save-status { position: absolute; top: 15px; left: 16px; right: 76px; max-width: none; }
+	.settings-head { padding-top: 38px !important; }
+	.settings-tab { font-size: 12px; }
+	.settings-defaults { grid-template-columns: 1fr; }
+	.defaults-fields { grid-template-columns: 1fr; }
+	.defaults-caption { grid-column: auto; }
+	.web-intro h4 { font-size: 22px; }
+	.web-state { position: static; display: inline-block; margin-top: 12px; }
+}

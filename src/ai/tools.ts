@@ -16,6 +16,7 @@ import {
 } from "../store/project.ts";
 import type { LibraryMaterial, MaterialLibrary } from "../store/library.ts";
 import type { AskBroker } from "./ask.ts";
+import { createWebSearchTools, type WebSearchClient, type WebSearchConfig } from "./web-search.ts";
 
 /** 工具执行结果：content 是模型看到的文本，details 给前端展示。 */
 function result(text: string, details: unknown = undefined): AgentToolResult<unknown> {
@@ -93,12 +94,51 @@ export interface NovelToolDeps {
 	 * 给模型一个问不出去的工具，比不给更糟。
 	 */
 	ask?: AskBroker;
+	/** writing 会话允许读取、检索和写入的章节范围；低层工具测试可不传。 */
+	allowedChapterId?: string;
+	previousChapterId?: string;
+	/** 由服务端授权后注入，仅供设定官使用。 */
+	webSearch?: { client: WebSearchClient; config: WebSearchConfig };
 }
 
 function getProject(deps: NovelToolDeps): Project {
 	const found = deps.store.get(deps.projectId);
 	if (!found) throw new Error("工程已被删除，无法继续操作");
 	return found;
+}
+
+function assertWritableChapter(deps: NovelToolDeps, chapterId: string): void {
+	if (deps.allowedChapterId && chapterId !== deps.allowedChapterId) {
+		throw new Error("本次写作只允许操作章节 " + deps.allowedChapterId + "，不能写入或修改 " + chapterId + "。");
+	}
+}
+
+function assertReadableChapter(deps: NovelToolDeps, chapterId: string): void {
+	if (deps.allowedChapterId && chapterId !== deps.allowedChapterId && chapterId !== deps.previousChapterId) {
+		throw new Error("本次写作只能读取本章 " + deps.allowedChapterId + (deps.previousChapterId ? " 或上一章 " + deps.previousChapterId : "") + "，不能读取 " + chapterId + "。");
+	}
+}
+
+/** 续写只交增量；模型若交回完整旧稿 + 新增，去掉旧稿前缀，避免重复。 */
+function appendContent(oldContent: string, incoming: string): string {
+	if (!oldContent) return incoming;
+	if (incoming.startsWith(oldContent)) return oldContent + incoming.slice(oldContent.length);
+	const oldTrimmed = oldContent.trimEnd();
+	if (oldTrimmed && incoming.startsWith(oldTrimmed)) {
+		return oldContent + incoming.slice(oldTrimmed.length);
+	}
+	return oldContent + (/[\r\n]$/.test(oldContent) || /^[\r\n]/.test(incoming) ? "" : "\n\n") + incoming;
+}
+
+const AUTOMATIC_SUMMARY_PREFIX = "【自动摘要】";
+function automaticSummary(content: string): string {
+	const tail = content.trim().replace(/\s+/g, " ").slice(-240);
+	return AUTOMATIC_SUMMARY_PREFIX + (tail || "正文已更新，但没有可提取的正文内容。");
+}
+
+function knownMaterialIds(project: Project, ids: string[]): { ids: string[]; dropped: string[] } {
+	const known = new Set(project.materials.map((material) => material.id));
+	return { ids: [...new Set(ids.filter((id) => known.has(id)))], dropped: [...new Set(ids.filter((id) => !known.has(id)))] };
 }
 
 /** 素材的一行摘要，用于工具结果与快照。 */
@@ -346,7 +386,21 @@ function sharedTools(deps: NovelToolDeps): AgentTool<any>[] {
 				const more = scoped.length > offset + page.length
 					? "\n（还有 " + (scoped.length - offset - page.length) + " 章没列，用 offset 继续取）"
 					: "";
-				return result(volumes + chapters + more, { outline: p.outline, drafts: p.drafts, volumes: p.volumes });
+				return result(volumes + chapters + more, {
+					chapters: page.map((chapter) => ({
+						id: chapter.id,
+						title: chapter.title,
+						status: chapter.status,
+						volumeId: chapter.volumeId,
+						targetWords: chapter.targetWords,
+						materialCount: chapter.materialIds.length,
+						words: p.drafts[chapter.id]?.words ?? 0,
+						revision: p.drafts[chapter.id]?.revision ?? 0,
+						...(params.withSummary ? { summary: chapter.summary } : {}),
+					})),
+					volumes: p.volumes.map(({ id, title, targetWords }) => ({ id, title, targetWords })),
+					pagination: { offset, limit, total: scoped.length, returned: page.length, hasMore: scoped.length > offset + page.length },
+				});
 			},
 		}),
 
@@ -371,6 +425,7 @@ function sharedTools(deps: NovelToolDeps): AgentTool<any>[] {
 				{ description: "读取章节" },
 			),
 			execute: async (_toolCallId, params: { chapterId: string; part?: string; chars?: number; start?: number }) => {
+				assertReadableChapter(deps, params.chapterId);
 				const p = getProject(deps);
 				const draftMeta = p.drafts[params.chapterId];
 				if (!draftMeta) return result("章节 " + params.chapterId + " 还没有正文。");
@@ -411,6 +466,8 @@ function sharedTools(deps: NovelToolDeps): AgentTool<any>[] {
 					kind: Type.Optional(Type.String({ description: "按种类筛选，如 character / world / plot" })),
 					query: optionalText("按标题或用途筛选"),
 					full: Type.Optional(Type.Boolean({ description: "为 true 时返回素材全文，默认只给摘要" })),
+					offset: Type.Optional(Type.Number({ description: "从第几条开始（0 起，默认 0）" })),
+					limit: Type.Optional(Type.Number({ description: "最多列多少条（默认 40，上限 200）" })),
 				},
 				{ description: "查看素材" },
 			),
@@ -436,10 +493,16 @@ function sharedTools(deps: NovelToolDeps): AgentTool<any>[] {
 						[],
 					);
 				}
-				const text = found
+				const offset = Math.max(0, Math.floor(params.offset ?? 0));
+				const limit = Math.min(200, Math.max(1, Math.floor(params.limit ?? 40)));
+				const page = found.slice(offset, offset + limit);
+				const text = page
 					.map((m) => materialLine(m) + (params.full === true ? materialBody(m) : ""))
-					.join("\n");
-				return result(text, found);
+					.join("\n") + (found.length > offset + page.length ? "\n（还有 " + (found.length - offset - page.length) + " 条，用 offset 继续取）" : "");
+				return result(text, {
+					materials: page.map(({ id, kind, title, usage, tags, chapterIds, status }) => ({ id, kind, title, usage, tags, chapterIds, status })),
+					pagination: { offset, limit, total: found.length, returned: page.length, hasMore: found.length > offset + page.length },
+				});
 			},
 		}),
 
@@ -473,6 +536,7 @@ function sharedTools(deps: NovelToolDeps): AgentTool<any>[] {
 				deps.store.mutate(deps.projectId, (p) => {
 					p.notes.push(note);
 				});
+				await deps.store.flushForProject(deps.projectId);
 				return result("已记录待办（" + note.severity + "）：" + note.category + " / " + note.subject, note);
 			},
 		}),
@@ -510,6 +574,7 @@ function sharedTools(deps: NovelToolDeps): AgentTool<any>[] {
 					const target = draft.notes.find((n) => n.id === params.id);
 					if (target) target.status = "resolved";
 				});
+				await deps.store.flushForProject(deps.projectId);
 				return result("已关闭待办：" + note.category + " / " + note.subject, note);
 			},
 		}),
@@ -533,16 +598,20 @@ function sharedTools(deps: NovelToolDeps): AgentTool<any>[] {
 			),
 			execute: async (_toolCallId, params) => {
 				const p = getProject(deps);
-				// 只搜本章装配的素材：它们是这一章唯一的事实来源，
-				// 未装配的料即使相关也不该被拿来写这一章。
-				const assembled = p.materials.filter((m) => m.chapterIds.length > 0);
+				const allowedId = deps.allowedChapterId;
+				if (!allowedId) return result("未指定本章范围，不能检索素材。请由写作会话提供 allowedChapterId。", []);
+				const chapter = p.outline.find((item) => item.id === allowedId);
+				if (!chapter) return result("找不到允许章节 " + allowedId + "。", []);
+				const assembledIds = new Set(chapter.materialIds);
+				// 章节大纲的 materialIds 是唯一事实池，不能用素材卡的 chapterIds 代替。
+				const assembled = p.materials.filter((m) => assembledIds.has(m.id));
 				const pool = params.materialId
-					? p.materials.filter((m) => m.id === params.materialId)
+					? assembled.filter((m) => m.id === params.materialId)
 					: assembled;
 				if (pool.length === 0) {
 					return result(
 						params.materialId
-							? "找不到素材 " + params.materialId + "。"
+							? "素材 " + params.materialId + " 不存在，或未装配到本章 " + allowedId + "，不能检索。"
 							: "本章还没有装配任何素材，没有可检索的内容。先让设定官用 attach_materials 装料。",
 						[],
 					);
@@ -670,17 +739,17 @@ function updateOutlineTool(deps: NovelToolDeps): AgentTool<any> {
 				for (const chapter of params.chapters) {
 					const volumeId = typeof chapter.volume === "string" ? volumeForTitle(chapter.volume) : undefined;
 					const index = p.outline.findIndex((item) => item.id === chapter.id);
-					const next = {
-						id: chapter.id,
-						title: chapter.title,
-						summary: chapter.summary,
-						pov: chapter.pov ?? "",
-						status: (chapter.status ?? "planned") as never,
-						targetWords: chapter.targetWords ?? 0,
-						notes: chapter.notes ?? "",
-					};
 					if (index >= 0) {
-						const merged = { ...p.outline[index]!, ...next };
+						const merged = {
+							...p.outline[index]!,
+							id: chapter.id,
+							title: chapter.title,
+							summary: chapter.summary,
+							...(chapter.pov !== undefined ? { pov: chapter.pov } : {}),
+							...(chapter.status !== undefined ? { status: chapter.status } : {}),
+							...(chapter.targetWords !== undefined ? { targetWords: chapter.targetWords } : {}),
+							...(chapter.notes !== undefined ? { notes: chapter.notes } : {}),
+						};
 						// 只有显式传了 chapterIds 才动装配清单：
 						// 改个标题不该把这一章的料抖掉。
 						if (chapter.chapterIds) merged.materialIds = chapter.chapterIds.filter((id) => known.has(id));
@@ -689,7 +758,13 @@ function updateOutlineTool(deps: NovelToolDeps): AgentTool<any> {
 						p.outline[index] = merged;
 					} else {
 						p.outline.push({
-							...next,
+							id: chapter.id,
+							title: chapter.title,
+							summary: chapter.summary,
+							pov: chapter.pov ?? "",
+							status: (chapter.status ?? "planned") as never,
+							targetWords: chapter.targetWords ?? 0,
+							notes: chapter.notes ?? "",
 							volumeId: volumeId ?? "",
 							materialIds: (chapter.chapterIds ?? []).filter((id) => known.has(id)),
 						});
@@ -708,6 +783,7 @@ function updateOutlineTool(deps: NovelToolDeps): AgentTool<any> {
 					}
 				}
 			});
+			await deps.store.flushForProject(deps.projectId);
 			// 把被丢弃的 id 报回去。静默过滤会让模型以为装料成功了，
 			// 下一步才发现这一章没料可写，却不知道是哪个 id 写错了。
 			const requested = (params.chapters ?? []).flatMap((c) => c.chapterIds ?? []);
@@ -806,6 +882,7 @@ function upsertMaterialTool(deps: NovelToolDeps): AgentTool<any> {
 					else if (!shouldHave && has) chapter.materialIds = chapter.materialIds.filter((mid) => mid !== id);
 				}
 			});
+			await deps.store.flushForProject(deps.projectId);
 			const material = saved.materials.find((m) => m.id === id);
 			// 点名没生效的章节 id：静默丢掉的话，模型会以为关联完成了。
 			const unknown = provided ? params.chapterIds!.filter((cid) => !validChapters.has(cid)) : [];
@@ -857,6 +934,7 @@ function attachMaterialsTool(deps: NovelToolDeps): AgentTool<any> {
 			const saved = deps.store.mutate(deps.projectId, (p) => {
 				skipped = linkMaterials(p, params.chapterId, params.materialIds, mode).skipped;
 			});
+			await deps.store.flushForProject(deps.projectId);
 			const chapter = saved.outline.find((c) => c.id === params.chapterId);
 			if (!chapter) return result("找不到章节 " + params.chapterId + "。先用 update_outline 建立。");
 			// 早先 linkMaterials 算出的 skipped 被丢掉了，模型只看到"现有装料 N 条"，
@@ -882,91 +960,111 @@ export function createMaterialTools(deps: NovelToolDeps): AgentTool<any>[] {
 		updateOutlineTool(deps),
 		upsertMaterialTool(deps),
 		attachMaterialsTool(deps),
+		...(deps.webSearch?.config.enabled ? createWebSearchTools(deps.webSearch.client, deps.webSearch.config) : []),
 	];
 }
 
 // ═══════════════════════════════════════════════════════════ 组装智能体专用
 
+interface ChapterWriteInput {
+	chapterId: string;
+	title: string;
+	content: string;
+	mode: "create" | "rewrite" | "continue" | "append";
+	materialIds?: string[];
+	summary?: string;
+}
+
+/** 在章节锁内读、拼、算摘要并一次保存，避免 continue 与 append 互相覆盖。 */
+async function writeChapter(deps: NovelToolDeps, params: ChapterWriteInput): Promise<AgentToolResult<unknown>> {
+	assertWritableChapter(deps, params.chapterId);
+	const project = getProject(deps);
+	if (!project.outline.some((chapter) => chapter.id === params.chapterId)) {
+		throw new Error("章节 " + params.chapterId + " 不在本章目里，不能凭空写入；请先立章或改用已有章节 id。");
+	}
+	let dropped: string[] = [];
+	let autoSummary = false;
+	const written = await deps.store.withChapterLock(deps.projectId, params.chapterId, async () => {
+		const p = getProject(deps);
+		const existing = p.drafts[params.chapterId];
+		const oldBody = await deps.store.readDraftBody(deps.projectId, params.chapterId);
+		const oldContent = oldBody?.content ?? "";
+		if (params.mode === "create" && oldContent.trim()) {
+			throw new Error("create 只能用于没有旧稿的章节；《" + params.title + "》已有正文，请改用 rewrite、continue 或 append_chapter。");
+		}
+		const content = params.mode === "continue" || params.mode === "append"
+			? appendContent(oldContent, params.content)
+			: params.content;
+		const changed = oldContent.trim() !== content.trim();
+		autoSummary = changed && !params.summary?.trim();
+		const requestedMaterials = params.materialIds ?? existing?.materialIds ?? p.outline.find((chapter) => chapter.id === params.chapterId)?.materialIds ?? [];
+		const filtered = knownMaterialIds(p, requestedMaterials);
+		dropped = filtered.dropped;
+		const meta = await deps.store.saveDraftBody(deps.projectId, params.chapterId, {
+			title: params.title,
+			content,
+			summary: params.summary?.trim() || (autoSummary ? automaticSummary(content) : existing?.summary),
+			materialIds: filtered.ids,
+			mode: params.mode,
+			keepHistory: true,
+		});
+		const outlineMeta = p.outline.find((chapter) => chapter.id === params.chapterId);
+		if (outlineMeta && (outlineMeta.status === "planned" || outlineMeta.status === "outlined")) {
+			deps.store.mutate(deps.projectId, (draft) => {
+				const target = draft.outline.find((chapter) => chapter.id === params.chapterId);
+				if (target && (target.status === "planned" || target.status === "outlined")) target.status = "drafted";
+			});
+		}
+		await deps.store.flushForProject(deps.projectId);
+		return meta;
+	});
+	const summaryNote = autoSummary
+		? "未交新小结且正文已改变，已生成自动尾部摘要，避免沿用旧小结。"
+		: "小结已记下，下一章靠它接续。";
+	return result(
+		"已写入《" + written.title + "》：第 " + written.revision + " 版，" + written.words + " 字（" + params.mode + "）。" + summaryNote +
+			(dropped.length > 0 ? "\n以下素材 id 不在已装集合中，已丢弃：" + dropped.join("、") : ""),
+		{ ...written, droppedMaterialIds: dropped, automaticSummary: autoSummary },
+	);
+}
+
+function chapterWriteFields() {
+	return {
+		chapterId: nonEmpty("章节 id"),
+		title: nonEmpty("章节标题"),
+		content: nonEmpty("create/rewrite 为全章正文；continue/append 只写新增内容"),
+		materialIds: Type.Optional(stringArray("本次实际用到的素材 id，只能是已装集合中的真实 id")),
+		summary: Type.Optional(Type.String({ description: "实际内容的 2-4 句小结；正文改变但不传时生成明确标记的自动摘要" })),
+	};
+}
+
 function writeChapterTool(deps: NovelToolDeps): AgentTool<any> {
 	return defineTool({
 		name: "write_chapter",
-		label: "写入章节正文",
+		label: "写入或续写章节",
 		description:
-			"把已装配的素材组装成章节正文。每一次调用会整段覆盖该章节已有内容并保留一个新版本。" +
-			"续写时 mode 选 continue；重写选 rewrite；从零写起选 create。" +
-			"materialIds 如实填入实际用到的素材 id，供回溯这段正文从什么料而来。" +
-			"summary 顺手交一份 2-4 句的小结：谁做了什么、留下了什么钩子、哪些事没写完 —— " +
-			"下一章靠它接续，所以不要复述正文，也不要写成开写前的要略。",
+			"create 从零写全章，已有非空旧稿时拒绝；rewrite 用全章覆盖旧稿；continue 只交新增内容，由工具读取旧稿并安全拼接。" +
+			"分段续写优先用 append_chapter。materialIds 如实填写实际使用且已装配的真实素材 id。",
 		parameters: Type.Object(
 			{
-				chapterId: nonEmpty("章节 id"),
-				title: nonEmpty("章节标题"),
-				content: nonEmpty("章节正文全文，含层次和场景描写"),
-				mode: Type.Optional(
-					Type.Union([Type.Literal("create"), Type.Literal("rewrite"), Type.Literal("continue")], {
-						description: "create 从零写起，rewrite 整章重写，continue 在已有正文后续写。默认 create",
-					}),
-				),
-				materialIds: Type.Optional(stringArray("本次实际用到的素材 id")),
-				summary: Type.Optional(
-					Type.String({
-						description:
-							"这一章实际写了什么的小结，2-4 句：谁做了什么、留下了什么钩子、哪些事没写完。" +
-							"下一章靠它接续，别复述正文，也别写成开写前的要略。留空则沿用上一版的小结。",
-					}),
-				),
+				...chapterWriteFields(),
+				mode: Type.Optional(Type.Union([Type.Literal("create"), Type.Literal("rewrite"), Type.Literal("continue")], {
+					description: "create 新建、rewrite 覆盖、continue 增量续写；默认 create",
+				})),
 			},
-			{ description: "写入章节" },
+			{ description: "写入或续写章节" },
 		),
-		execute: async (_toolCallId, params) => {
-			const mode = params.mode ?? "create";
-			// 只允许写章目里真有的章。模型偶尔会拿着上一轮的章号自由发挥，
-			// 旧实现会照着这个 id 造出一份不在大纲里的「幽灵正文」。
-			const project = getProject(deps);
-			if (!project.outline.some((chapter) => chapter.id === params.chapterId)) {
-				throw new Error(
-					"章节 " + params.chapterId + " 不在本章目里，不能凭空写入；请先用 update_outline 立章，或改用已有章节的 id。",
-				);
-			}
-			const written = await deps.store.withChapterLock(deps.projectId, params.chapterId, async () => {
-				const p = getProject(deps);
-				const existing = p.drafts[params.chapterId];
-				const planned = p.outline.find((chapter) => chapter.id === params.chapterId);
-				// 覆盖前先把旧稿归档。rewrite / continue 都建立在旧稿之上，
-				// 一次写坏就是整章丢失，而 revision 只是个计数器，找不回内容。
-				// 归档由 saveDraftBody 自己做（历史每版一个文件，存在 .hist/ 下）。
-				const meta = await deps.store.saveDraftBody(deps.projectId, params.chapterId, {
-					title: params.title,
-					content: params.content,
-					// 小结没交就沿用旧的那份：作者手改过正文时旧小结可能略旧，
-					// 但比空着强 —— 下一章接续靠的就是它。
-					summary: params.summary ?? existing?.summary,
-					// 没显式传素材时，依次回落到上一版记录、本章装配清单。
-					materialIds: params.materialIds ?? existing?.materialIds ?? planned?.materialIds ?? [],
-					mode,
-					keepHistory: true,
-				});
-				// 有正文就该是 drafted：素材智能体常把章节留在 outlined，
-				// 只认 planned 会让写完的章在界面上仍显示"未成稿"。
-				const outlineMeta = p.outline.find((chapter) => chapter.id === params.chapterId);
-				if (outlineMeta && (outlineMeta.status === "planned" || outlineMeta.status === "outlined")) {
-					deps.store.mutate(deps.projectId, (draft) => {
-						const target = draft.outline.find((chapter) => chapter.id === params.chapterId);
-						if (target && (target.status === "planned" || target.status === "outlined")) {
-							target.status = "drafted";
-						}
-					});
-				}
-				return meta;
-			});
-			const summaryNote = written.summary.trim()
-				? "小结已记下，下一章靠它接续。"
-				: "本次没有小结，下一章会拿不到上一章的交代 —— 补交时请带上 summary。";
-			return result(
-				"已写入《" + written.title + "》：第 " + written.revision + " 版，" + written.words + " 字（" + mode + "）。" + summaryNote,
-				written,
-			);
-		},
+		execute: async (_toolCallId, params) => writeChapter(deps, { ...params, mode: params.mode ?? "create" }),
+	});
+}
+
+function appendChapterTool(deps: NovelToolDeps): AgentTool<any> {
+	return defineTool({
+		name: "append_chapter",
+		label: "追加章节正文",
+		description: "只提交新增正文；工具在章节写锁内读取旧稿并拼接，不要求也不应重复提交旧稿。适合长章分段生成。",
+		parameters: Type.Object(chapterWriteFields(), { description: "追加章节正文" }),
+		execute: async (_toolCallId, params) => writeChapter(deps, { ...params, mode: "append" }),
 	});
 }
 
@@ -997,13 +1095,14 @@ function reviseChapterTool(deps: NovelToolDeps): AgentTool<any> {
 				replace: Type.String({ description: "换成什么。留空字符串表示删掉这一段" }),
 				summary: Type.Optional(
 					Type.String({
-						description: "改过之后这一章实际讲了什么（2-4 句）。留空则沿用上一版的小结。",
+						description: "改过之后这一章实际讲了什么（2-4 句）。小幅修改留空沿用旧小结，大幅修改留空生成自动摘要。",
 					}),
 				),
 			},
 			{ description: "局部修改章节" },
 		),
 		execute: async (_toolCallId, params) => {
+			assertWritableChapter(deps, params.chapterId);
 			const project = getProject(deps);
 			const planned = project.outline.find((chapter) => chapter.id === params.chapterId);
 			if (!planned) {
@@ -1038,13 +1137,14 @@ function reviseChapterTool(deps: NovelToolDeps): AgentTool<any> {
 				return deps.store.saveDraftBody(deps.projectId, params.chapterId, {
 					title: meta.title,
 					content: next,
-					// 小结没交就沿用旧的：局部改动通常不改变这一章"讲了什么"。
-					summary: params.summary ?? meta.summary,
+					// 局部修改通常不改变全章脉络，旧小结仍可用；删除或替换大片正文时用自动摘要更诚实。
+					summary: params.summary?.trim() || (Math.min(find.length, params.replace.length) >= 120 ? automaticSummary(next) : meta.summary),
 					materialIds: meta.materialIds,
 					mode: "patch",
 					keepHistory: true,
 				});
 			});
+			await deps.store.flushForProject(deps.projectId);
 			const delta = params.replace.length - find.length;
 			return result(
 				"已改《" + revised.title + "》：第 " + revised.revision + " 版，" + revised.words + " 字。" +
@@ -1059,13 +1159,14 @@ function reviseChapterTool(deps: NovelToolDeps): AgentTool<any> {
 /**
  * 组装智能体的工具集。
  *
- * 两个写入工具各管一件事：write_chapter 整章落地，revise_chapter 只换点名的几段。
+ * 三个写入工具各管一件事：write_chapter 新建/覆盖/续写，append_chapter 追加增量，revise_chapter 只换点名的几段。
  * 素材只能读不能改 —— 料由素材智能体负责。
  */
 export function createWritingTools(deps: NovelToolDeps): AgentTool<any>[] {
 	return [
 		...sharedTools(deps),
 		writeChapterTool(deps),
+		appendChapterTool(deps),
 		reviseChapterTool(deps),
 	];
 }
@@ -1195,6 +1296,7 @@ export function createLibraryTools(deps: LibraryToolDeps): AgentTool<any>[] {
 				const saved = existing
 					? deps.library.update(existing.id, fields)!
 					: deps.library.create(fields);
+				await deps.library.flush();
 				return result(
 					(existing ? "已更新通用素材《" : "已新建通用素材《") + saved.title + "》（id: " + saved.id + "）。" +
 						"作者可在任意作品里取用它。",

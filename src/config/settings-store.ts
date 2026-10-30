@@ -113,8 +113,15 @@ export class SettingsStore {
 					}
 				}
 			})
-			.catch((error) => console.error("[settings] 落盘失败:", error))
-			.then(() => undefined);
+			.catch((error) => {
+				console.error("[settings] 落盘失败:", error);
+				throw error;
+			});
 		return this.writeChain;
+	}
+
+	/** 调用方在回复设置保存成功前必须等待真实落盘。 */
+	async flush(): Promise<void> {
+		await this.writeChain;
 	}
 }

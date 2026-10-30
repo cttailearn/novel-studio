@@ -24,6 +24,15 @@ const DRAFTS_DIR = "drafts";
 /** 整部作品的快照目录，落在 data/snapshots/<projectId>/ 下。 */
 const SNAPSHOTS_DIR = "snapshots";
 
+/** 已删除作品的完整目录，默认移到这里而不是永久删除。 */
+const TRASH_DIR = "trash";
+
+export interface DeletedProject {
+	id: string;
+	title: string;
+	deletedAt: number;
+}
+
 /** 每部作品保留的快照数上限。 */
 const MAX_SNAPSHOTS = 20;
 
@@ -793,6 +802,9 @@ export class ProjectStore {
 	 */
 	private readonly pendingBodies = new Map<string, Map<string, PendingBody>>();
 
+	/** 最近一次落盘异常，按工程保留，供 flush 把后台失败传回调用方。 */
+	private readonly writeErrors = new Map<string, unknown>();
+
 	private readonly dir: string;
 
 	private constructor(dir: string) {
@@ -859,14 +871,17 @@ export class ProjectStore {
 				try {
 					await this.writeAtomic(file, project);
 					this.clearDirtyProject(project.id);
+					if (!this.dirty.has(project.id)) this.writeErrors.delete(project.id);
 				} catch (error) {
 					this.markDirtyProject(project.id);
+					this.writeErrors.set(project.id, error);
 					console.error("[store] 落盘 " + file + " 失败（已标记待重试）:", error);
 				}
 			})
 			.catch((error) => {
 				// 兜底：上面每一步都自己接住了错误，走到这里说明是意料之外的故障。
 				this.markDirtyProject(project.id);
+				this.writeErrors.set(project.id, error);
 				console.error("[store] 落盘 " + file + " 失败（已标记待重试）:", error);
 			})
 			.then(() => undefined);
@@ -916,6 +931,7 @@ export class ProjectStore {
 			// 写不进去就把原文留在手里，等 retryPending 补写。
 			// 只留一个标记不济事 —— 原文没了就再也补不回来。
 			this.markDirtyChapter(projectId, chapterId);
+			this.writeErrors.set(projectId, error);
 			let chapters = this.pendingBodies.get(projectId);
 			if (!chapters) {
 				chapters = new Map<string, PendingBody>();
@@ -941,21 +957,27 @@ export class ProjectStore {
 		const project = this.projects.get(projectId);
 		if (!project) throw new Error("工程 " + projectId + " 不存在");
 		const existingMeta = project.drafts[chapterId];
-		const existingBody = await this.readDraftBody(projectId, chapterId, { history: true });
+		// 自动存稿不需要历史：绝不能为了"不使用它"而先把全部历史读进内存。
+		// 这里只读旧正文；保留历史仍留在磁盘原处，下面也不会逐个重写。
+		const existingBody = await this.readDraftBody(projectId, chapterId, {
+			history: input.keepHistory !== false,
+		});
 		const oldContent = existingBody?.content ?? "";
 		const content = input.content;
 		// 内容没变就不留版本：连点两次"存稿"不该产生一份重复历史。
 		const changed = oldContent.trim() !== content.trim();
 		const history: DraftRevision[] = [...(existingBody?.history ?? [])];
+		let archived: DraftRevision | undefined;
 		if (existingMeta && oldContent.trim() && input.keepHistory !== false && changed) {
-			history.push({
+			archived = {
 				revision: existingMeta.revision,
 				title: existingMeta.title,
 				content: oldContent,
 				materialIds: existingMeta.materialIds,
 				updatedAt: existingMeta.updatedAt,
 				mode: input.mode ?? "manual",
-			});
+			};
+			history.push(archived);
 		}
 		while (history.length > MAX_DRAFT_HISTORY) history.shift();
 
@@ -973,13 +995,16 @@ export class ProjectStore {
 		await mkdir(this.draftDir(projectId), { recursive: true });
 		// 正文先落。
 		await this.writeAtomicText(this.bodyFile(projectId, chapterId), content);
-		// 历史版本：每版一个文件，多余的旧版删掉。
-		const histDir = this.histDir(projectId, chapterId);
-		await mkdir(histDir, { recursive: true });
-		for (const revision of history) {
-			await this.writeAtomic(path.join(histDir, revision.revision + ".json"), revision);
+		// 历史已经按版拆文件，只新增当前旧版即可。自动存稿连目录都不碰。
+		// 逐个重写保留历史会把 O(1) 的存稿变成 O(历史总字数)。
+		if (input.keepHistory !== false) {
+			const histDir = this.histDir(projectId, chapterId);
+			if (archived) {
+				await mkdir(histDir, { recursive: true });
+				await this.writeAtomic(path.join(histDir, archived.revision + ".json"), archived);
+			}
+			await this.trimHistory(histDir, history);
 		}
-		await this.trimHistory(histDir, history);
 		// 元数据最后落：它说"有正文"时，正文一定已经在盘上。
 		await this.writeAtomic(this.metaFile(projectId, chapterId), meta);
 
@@ -988,6 +1013,7 @@ export class ProjectStore {
 		await this.persist(project);
 		// 写成功了：撤下这一章的待重试标记，也不再留着原文副本。
 		this.clearDirtyChapter(projectId, chapterId);
+		if (!this.dirty.has(projectId)) this.writeErrors.delete(projectId);
 		const pending = this.pendingBodies.get(projectId);
 		if (pending) {
 			pending.delete(chapterId);
@@ -1154,12 +1180,13 @@ export class ProjectStore {
 				.map(async (name) => {
 					const raw = await readFile(path.join(dir, name), "utf8").catch(() => undefined);
 					if (raw === undefined) return;
+					let project: Project | undefined;
 					try {
 					// 老工程的主文件里还内联着正文（拆文件之前的形状）。
 					// 先把这份原始副本取出来，迁移要用；normalizeProject 只留元数据。
 					const parsed = JSON.parse(raw) as unknown;
 					const legacyInline = extractLegacyDrafts(parsed);
-					const project = normalizeProject(parsed);
+					project = normalizeProject(parsed);
 					const fromFiles = await store.loadChapterMetas(project);
 					project.drafts = { ...project.drafts, ...fromFiles };
 					store.projects.set(project.id, project);
@@ -1180,6 +1207,12 @@ export class ProjectStore {
 					if (Object.keys(project.drafts).length > 0) void store.persist(project);
 					await store.sweepTemp(path.join(dir, DRAFTS_DIR, project.id));
 					} catch (error) {
+						if (project && store.projects.has(project.id)) {
+							// 迁移阶段的临时写入失败不能误删刚刚读成功的工程；
+							// 只有 JSON 解析/归一化失败才隔离原始主文件。
+							console.error("[store] 工程章节迁移失败，保留主文件待重试:", error);
+							return;
+						}
 						// 解析失败绝不能就地把文件删掉或覆盖掉 —— 那是这本书唯一的副本。
 						// 改名隔离，原文留在磁盘上等人工处理。
 						broken.push(name);
@@ -1229,14 +1262,22 @@ export class ProjectStore {
 	}
 
 	/**
-	 * 等排队中的落盘做完。
-	 *
-	 * mutate 与 create 都是"改完就回话，落盘在后面慢慢写"。
-	 * 平常没问题（界面上读的是内存），但要重新打开一个目录读它时，
-	 * 骨架可能还只躺在 .tmp 里 —— 那一步得先把写完的等一等。
+	 * 等指定工程排队中的落盘做完；若本次或此前写入仍未落盘则抛错。
+	 * 同步的 create/mutate 可继续原样使用，需要确认落盘的调用方 await 此方法。
 	 */
+	async flushForProject(id: string): Promise<void> {
+		const chain = this.writeChains.get(id);
+		if (chain) await chain;
+		const pending = this.dirty.get(id);
+		if (!pending) return;
+		const cause = this.writeErrors.get(id);
+		throw new Error("工程 " + id + " 仍有未落盘数据", { cause });
+	}
+
+	/** 等全部后台落盘完成；任何工程仍有 dirty 数据都会抛错。 */
 	async flush(): Promise<void> {
 		await Promise.all([...this.writeChains.values()]);
+		for (const id of this.dirty.keys()) await this.flushForProject(id);
 	}
 
 	/**
@@ -1327,19 +1368,124 @@ export class ProjectStore {
 	private readonly chapterChains = new Map<string, Promise<unknown>>();
 
 	/**
-	 * 删除工程，连同它的章节正文与快照目录。
-	 *
-	 * 章节正文拆成独立目录后，只删主文件会留下一堆孤儿目录；
-	 * 快照则是误删的退路，删作品时一并清掉，不给"当初为什么留着这个"留疑问。
+	 * 删除工程。默认把主文件、正文和快照整体移入 data/trash/<id>/，
+	 * 因而无需调用方先拍快照也能恢复。传 { permanent: true } 才永久删除。
 	 */
-	remove(id: string): Promise<void> {
-		this.projects.delete(id);
-		this.dirty.delete(id);
-		return Promise.all([
-			rm(path.join(this.dir, id + ".json"), { force: true }),
-			rm(path.join(this.dir, DRAFTS_DIR, id), { recursive: true, force: true }),
-			rm(path.join(this.dir, SNAPSHOTS_DIR, id), { recursive: true, force: true }),
-		]).then(() => undefined);
+	async remove(id: string, options: { permanent?: boolean } = {}): Promise<void> {
+		// 先等已经排队的写入，避免 remove 与后台 rename 交错造成半份回收站。
+		const chain = this.writeChains.get(id);
+		if (chain) await chain;
+		const project = this.projects.get(id);
+		if (!project) throw new Error("工程 " + id + " 不存在");
+		// 回收站必须拿到完整内存状态，不能把此前失败的 dirty 数据静默丢掉。
+		await this.flushForProject(id);
+		if (options.permanent) {
+			this.projects.delete(id);
+			this.dirty.delete(id);
+			this.pendingBodies.delete(id);
+			this.writeErrors.delete(id);
+			this.writeChains.delete(id);
+		}
+		try {
+			if (options.permanent) {
+				await Promise.all([
+					rm(path.join(this.dir, id + ".json"), { force: true }),
+					rm(path.join(this.dir, DRAFTS_DIR, id), { recursive: true, force: true }),
+					rm(path.join(this.dir, SNAPSHOTS_DIR, id), { recursive: true, force: true }),
+				]);
+				return;
+			}
+			const trash = path.join(this.dir, TRASH_DIR, id);
+			if (await stat(trash).then(() => true, () => false)) {
+				throw new Error("回收站中已存在工程 " + id + "，未执行删除");
+			}
+			await mkdir(trash, { recursive: true });
+			await rename(path.join(this.dir, id + ".json"), path.join(trash, "project.json"));
+			const drafts = path.join(this.dir, DRAFTS_DIR, id);
+			const snapshots = path.join(this.dir, SNAPSHOTS_DIR, id);
+			if (await stat(drafts).then(() => true, () => false)) {
+				await rename(drafts, path.join(trash, DRAFTS_DIR));
+			}
+			if (await stat(snapshots).then(() => true, () => false)) {
+				await rename(snapshots, path.join(trash, SNAPSHOTS_DIR));
+			}
+			await this.writeAtomic(path.join(trash, "deleted.json"), {
+				id,
+				title: project.title,
+				deletedAt: Date.now(),
+			});
+			this.projects.delete(id);
+			this.dirty.delete(id);
+			this.pendingBodies.delete(id);
+			this.writeErrors.delete(id);
+			this.writeChains.delete(id);
+		} catch (error) {
+			// 文件仍可能部分留在原处；保留内存对象，调用方可以重试或人工处理。
+			this.projects.set(id, project);
+			throw error;
+		}
+	}
+
+	/** 回收站列表，最新的在前。 */
+	async listDeleted(): Promise<DeletedProject[]> {
+		const root = path.join(this.dir, TRASH_DIR);
+		const names = await readdir(root).catch(() => [] as string[]);
+		const out: DeletedProject[] = [];
+		for (const id of names) {
+			const file = path.join(root, id, "project.json");
+			try {
+				const project = normalizeProject(JSON.parse(await readFile(file, "utf8")));
+				const info = await stat(file);
+				let deletedAt = info.mtimeMs;
+				const marker = await readFile(path.join(root, id, "deleted.json"), "utf8").catch(() => undefined);
+				if (marker) {
+					const parsed = JSON.parse(marker) as { deletedAt?: unknown };
+					if (typeof parsed.deletedAt === "number") deletedAt = parsed.deletedAt;
+				}
+				out.push({ id: project.id, title: project.title, deletedAt });
+			} catch {
+				// 单个回收站条目损坏不应让其他作品无法恢复。
+			}
+		}
+		return out.sort((a, b) => b.deletedAt - a.deletedAt);
+	}
+
+	/** 从回收站恢复整部作品，包含正文、历史和快照。 */
+	async restoreDeleted(id: string): Promise<Project> {
+		if (this.projects.has(id)) throw new Error("工程 " + id + " 已存在");
+		const trash = path.join(this.dir, TRASH_DIR, id);
+		const projectFile = path.join(trash, "project.json");
+		const raw = await readFile(projectFile, "utf8").catch(() => undefined);
+		if (raw === undefined) throw new Error("回收站中不存在工程 " + id);
+		const target = path.join(this.dir, id + ".json");
+		const drafts = path.join(this.dir, DRAFTS_DIR, id);
+		const snapshots = path.join(this.dir, SNAPSHOTS_DIR, id);
+		for (const file of [target, drafts, snapshots]) {
+			if (await stat(file).then(() => true, () => false)) {
+				throw new Error("恢复目标已存在，未覆盖: " + file);
+			}
+		}
+		await rename(projectFile, target);
+		try {
+			if (await stat(path.join(trash, DRAFTS_DIR)).then(() => true, () => false)) {
+				await rename(path.join(trash, DRAFTS_DIR), drafts);
+			}
+			if (await stat(path.join(trash, SNAPSHOTS_DIR)).then(() => true, () => false)) {
+				await rename(path.join(trash, SNAPSHOTS_DIR), snapshots);
+			}
+			await rm(path.join(trash, "deleted.json"), { force: true });
+			await rm(trash, { recursive: true, force: true });
+			const project = normalizeProject(JSON.parse(raw));
+			project.drafts = { ...project.drafts, ...(await this.loadChapterMetas(project)) };
+			this.projects.set(id, project);
+			return project;
+		} catch (error) {
+			// 尽力把主文件放回回收站；不要在恢复失败后同时从两处隐藏它。
+			if (await stat(target).then(() => true, () => false)) {
+				await rename(target, projectFile).catch(() => undefined);
+			}
+			throw error;
+		}
 	}
 
 	stats(project: Project): ProjectStats {

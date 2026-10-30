@@ -158,7 +158,7 @@ try {
 	// ---------------------------------------------------------------- 供应商目录
 	console.log("\n内置供应商目录");
 	check("目录非空", BUILTIN_PROVIDERS.length > 0, String(BUILTIN_PROVIDERS.length));
-	check("覆盖 41 个厂商", BUILTIN_PROVIDERS.length === 41, String(BUILTIN_PROVIDERS.length));
+	check("覆盖 42 个厂商", BUILTIN_PROVIDERS.length === 42, String(BUILTIN_PROVIDERS.length));
 
 	const ids = BUILTIN_PROVIDERS.map((spec) => spec.id);
 	check("id 无重复", new Set(ids).size === ids.length, ids.length + " vs " + new Set(ids).size);
@@ -167,12 +167,18 @@ try {
 	check("都有工厂函数", BUILTIN_PROVIDERS.every((spec) => typeof spec.create === "function"));
 	check("都有展示名", BUILTIN_PROVIDERS.every((spec) => spec.label.trim().length > 0));
 
-	// 分组完整性：新增厂商忘记归类时会落到"国际通用"，这里显式断言三个分组都有内容
+	// 分组完整性：新增厂商忘记归类时会落到"国际通用"，这里显式断言四组都有内容
 	const groups = new Set(ids.map(builtinGroup));
-	check("分组函数不产生第四类", groups.size === 3, [...groups].join(","));
+	check("分组函数不产生第五类", groups.size === 4, [...groups].join(","));
+	check("推荐分组只有内置中转", ids.filter((id) => builtinGroup(id) === "推荐").join(",") === "cttai");
 	check("国内厂商分组非空", ids.filter((id) => builtinGroup(id) === "国内厂商").length > 0);
 	check("云平台分组非空", ids.filter((id) => builtinGroup(id) === "云平台与推理").length > 0);
 	check("国际通用分组非空", ids.filter((id) => builtinGroup(id) === "国际通用").length > 0);
+	check("内置中转排在目录第一位", BUILTIN_PROVIDERS[0]?.id === "cttai");
+	check("内置中转有固定接入点", BUILTIN_PROVIDERS[0]?.baseUrl === "https://llmapi.cttai.art/v1");
+	const cttai = BUILTIN_PROVIDERS[0]?.create();
+	check("内置中转已注册模型", (cttai?.getModels().length ?? 0) >= 8, String(cttai?.getModels().length));
+	check("内置中转模型指向同一接入点", cttai?.getModels().every((model) => model.baseUrl === "https://llmapi.cttai.art/v1") === true);
 
 	// OAuth-only 与测试用 provider 不应出现在目录里
 	check("排除了 openai-codex（仅 OAuth）", !ids.includes("openai-codex"));
@@ -189,22 +195,22 @@ try {
 		providers: [{ id: "deepseek", label: "我的DeepSeek", kind: "builtin", builtinId: "deepseek", models: [emptyModel("m")], enabled: false, updatedAt: 5 }],
 	});
 	const synced = syncBuiltinProviders(legacy, "");
-	check("补齐到 41 个", synced.providers.length === 41, String(synced.providers.length));
+	check("补齐到 42 个", synced.providers.length === 42, String(synced.providers.length));
 	check("保留用户的自定义名称", synced.providers[0]?.label === "我的DeepSeek", synced.providers[0]?.label);
 	check("保留用户的停用状态", synced.providers[0]?.enabled === false);
 	check("保留用户的模型配置", synced.providers[0]?.models.length === 1);
 	check("保留原有 updatedAt", synced.providers[0]?.updatedAt === 5);
 	check("新补的都是 builtin", synced.providers.slice(1).every((p) => p.kind === "builtin"));
 	check("新补的都默认启用", synced.providers.slice(1).every((p) => p.enabled === true));
-	check("无重复 id", new Set(synced.providers.map((p) => p.id)).size === 41);
+	check("无重复 id", new Set(synced.providers.map((p) => p.id)).size === 42);
 
 	// 幂等：已补齐后再同步不应改变任何东西
 	const again = syncBuiltinProviders(synced, "");
-	check("重复同步是幂等的", again.providers.length === 41, String(again.providers.length));
+	check("重复同步是幂等的", again.providers.length === 42, String(again.providers.length));
 
 	// 空配置从零预置
 	const fresh = syncBuiltinProviders(normalizeSettings(null), "deepseek/deepseek-chat");
-	check("空配置预置 41 个", fresh.providers.length === 41, String(fresh.providers.length));
+	check("空配置预置 42 个", fresh.providers.length === 42, String(fresh.providers.length));
 	check("空配置采用环境变量默认模型", fresh.defaultModel === "deepseek/deepseek-chat");
 
 	// ---------------------------------------------------------------- 自定义 provider

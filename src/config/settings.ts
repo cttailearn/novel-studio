@@ -1,4 +1,5 @@
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import { DEFAULT_WEB_SEARCH, normalizeWebSearch, type WebSearchConfig } from "../ai/web-search.ts";
 
 export type { ModelThinkingLevel };
 
@@ -75,6 +76,7 @@ export interface Settings {
 	/** "providerId/modelId"。 */
 	defaultModel: string;
 	defaultThinkingLevel: ModelThinkingLevel;
+	webSearch: WebSearchConfig;
 	providers: ProviderConfig[];
 }
 
@@ -138,7 +140,7 @@ export function isPlaceholderModel(model: Pick<ModelConfig, "contextWindow" | "m
 }
 
 export function emptySettings(): Settings {
-	return { version: 1, defaultModel: "", defaultThinkingLevel: "off", providers: [] };
+	return { version: 1, defaultModel: "", defaultThinkingLevel: "off", webSearch: { ...DEFAULT_WEB_SEARCH }, providers: [] };
 }
 
 /** 归一化保证读回的配置始终符合 schema，避免手改文件后崩盘。 */
@@ -176,6 +178,7 @@ export function normalizeSettings(raw: unknown): Settings {
 		defaultThinkingLevel: THINKING_LEVELS.includes(input.defaultThinkingLevel as ModelThinkingLevel)
 			? (input.defaultThinkingLevel as ModelThinkingLevel)
 			: "off",
+		webSearch: normalizeWebSearch(input.webSearch),
 		providers,
 	};
 }

@@ -637,12 +637,21 @@ function isPhoneLayout() {
  * 收起 / 张开章目抽屉（只管界面）。
  * 与历史无关，所以单独一层：层管理那边关界面时调的也是它。
  */
+let railDrawerTrigger = null;
+
 function setRailDrawer(open) {
 	const desk = document.querySelector(".desk");
 	if (!desk) return;
+	const wasOpen = desk.classList.contains("is-rail-open");
+	if (open && !wasOpen) railDrawerTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : $("toggle-rail");
 	desk.classList.toggle("is-rail-open", open);
 	$("rail-backdrop")?.classList.toggle("hidden", !open);
 	$("toggle-rail")?.setAttribute("aria-expanded", open ? "true" : "false");
+	setMobileDrawerState("rail", open);
+	if (!open && wasOpen) {
+		restoreFocus(railDrawerTrigger);
+		railDrawerTrigger = null;
+	}
 }
 
 function openRailDrawer() {
@@ -652,6 +661,7 @@ function openRailDrawer() {
 	const inherited = closeBibleDrawer({ keepHistory: true });
 	setRailDrawer(true);
 	openLayer("rail", () => setRailDrawer(false), { replace: inherited });
+	$("close-rail")?.focus();
 }
 
 /** 返回 true 表示「刚才确实有一层被关掉了」，给接手的那一方判断要不要 replace。 */
@@ -665,6 +675,63 @@ function toggleRailDrawer() {
 	if (document.querySelector(".desk")?.classList.contains("is-rail-open")) closeRailDrawer();
 	else openRailDrawer();
 }
+
+const FOCUSABLE_SELECTOR = 'button:not([disabled]), input:not([disabled]):not([type="hidden"]), textarea:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])';
+
+function drawerFocusables(container) {
+	return [...container.querySelectorAll(FOCUSABLE_SELECTOR)].filter((node) => !node.closest("[inert]") && node.getAttribute("aria-hidden") !== "true");
+}
+
+/** 自建伪模态共用一个焦点圈；Tab 在首尾循环，不会被遮罩后的控件接走。 */
+function trapDrawerTab(event, container) {
+	if (event.key !== "Tab") return;
+	const nodes = drawerFocusables(container);
+	if (!nodes.length) {
+		event.preventDefault();
+		container.focus();
+		return;
+	}
+	const first = nodes[0];
+	const last = nodes[nodes.length - 1];
+	if (!container.contains(document.activeElement)) {
+		event.preventDefault();
+		(event.shiftKey ? last : first).focus();
+	} else if (event.shiftKey && document.activeElement === first) {
+		event.preventDefault();
+		last.focus();
+	} else if (!event.shiftKey && document.activeElement === last) {
+		event.preventDefault();
+		first.focus();
+	}
+}
+
+/** 仅抽屉打开时改语义与 inert；桌面布局不增加 dialog，也不禁用顶栏。 */
+function setMobileDrawerState(kind, open) {
+	const id = kind === "rail" ? "rail" : "desk-right";
+	const panel = $(id);
+	if (!panel) return;
+	if (open) {
+		panel.setAttribute("role", "dialog");
+		panel.setAttribute("aria-modal", "true");
+		panel.setAttribute("aria-label", kind === "rail" ? "章目" : "右案");
+		panel.tabIndex = -1;
+	} else {
+		panel.removeAttribute("role");
+		panel.removeAttribute("aria-modal");
+		panel.removeAttribute("aria-label");
+		panel.removeAttribute("tabindex");
+	}
+	for (const node of document.querySelectorAll(".beam, .stage, #rail, #desk-right")) {
+		if (node !== panel) node.inert = open;
+	}
+}
+
+document.addEventListener("keydown", (event) => {
+	const records = state.recordsPane ? $("records-layer")?.querySelector(".records-sheet") : null;
+	if (records) return trapDrawerTab(event, records);
+	if (document.querySelector(".desk.is-rail-open")) return trapDrawerTab(event, $("rail"));
+	if (document.querySelector(".desk.is-bible-open")) return trapDrawerTab(event, $("desk-right"));
+}, true);
 
 /** 顶栏的模型与档位浮层（只管界面）。 */
 function setToolsPanel(open) {
@@ -998,6 +1065,7 @@ for (const dialog of document.querySelectorAll("dialog")) {
 		closeDialog(dialog);
 	});
 	dialog.addEventListener("close", () => {
+		if (dialog.id === "palette-dialog") $("palette-input").setAttribute("aria-expanded", "false");
 		const layer = findLayer("dialog:" + dialog.id);
 		if (layer) dropLayer(layer, true);
 	});
@@ -1622,6 +1690,7 @@ function switchViewNow(view) {
 		const on = tab.dataset.view === view;
 		tab.classList.toggle("is-on", on);
 		tab.setAttribute("aria-selected", String(on));
+		tab.tabIndex = on ? 0 : -1;
 	}
 	$("view-manuscript").classList.toggle("is-on", view === "manuscript");
 	$("view-materials").classList.toggle("is-on", view === "materials");
@@ -1850,7 +1919,7 @@ function projectCard(project) {
 	const actions = el("div", "mat-actions");
 	actions.append(button(onDesk ? "继续写" : "开卷", "btn btn-ink btn-xs", () => void enterProject(project.id)));
 	actions.append(button("改", "btn btn-quiet btn-xs", () => openProjectDialog(project)));
-	// 快照是误删的退路，得有个找得到的地方；删之前系统会自动拍一份。
+	// 快照管素材与大纲的误改；整部作品误删去回收站恢复。
 	actions.append(button("存照", "btn btn-quiet btn-xs", () => void openSnapshotDialog(project)));
 	const pending = state.pendingProjectDelete === project.id;
 	actions.append(
@@ -1861,6 +1930,51 @@ function projectCard(project) {
 	card.append(actions);
 	return card;
 }
+
+/** 回收站：删作品是可逆操作，给这条退路一个明确的入口。 */
+async function openTrashDialog() {
+	const list = $("trash-list");
+	const error = $("trash-error");
+	error.textContent = "";
+	list.replaceChildren(el("div", "bench-empty", "正在取…"));
+	openDialog($("trash-dialog"), { focus: "self" });
+	try {
+		const info = await api("/api/projects/trash");
+		list.replaceChildren();
+		if (!info.deleted?.length) {
+			list.append(el("div", "bench-empty", "回收站是空的。"));
+			return;
+		}
+		for (const project of info.deleted) {
+			const row = el("div", "snapshot");
+			const main = el("div", "snapshot-main");
+			main.append(el("strong", "", project.title || "无题作品"));
+			const meta = [
+				project.deletedAt ? "删于 " + fmtTime(project.deletedAt) : "",
+				(project.stats?.chapters ?? 0) + " 章 · " + fmt(project.stats?.words ?? 0) + " 字",
+				project.sizeBytes ? fmt(Math.max(1, Math.round(project.sizeBytes / 1024))) + " KB" : "",
+			].filter(Boolean).join(" · ");
+			main.append(el("div", "tagline", meta));
+			row.append(main);
+			row.append(button("恢复到案头", "btn btn-quiet btn-sm", async () => {
+				if (!window.confirm("把《" + project.title + "》连同正文、历史与存照恢复到案头？")) return;
+				try {
+					await api("/api/projects/trash/" + encodeURIComponent(project.id) + "/restore", { method: "POST" });
+					toast("已恢复《" + project.title + "》");
+					closeDialog($("trash-dialog"));
+					await loadProjects();
+				} catch (error_) {
+					error.textContent = error_.message;
+				}
+			}));
+			list.append(row);
+		}
+	} catch (error_) {
+		list.replaceChildren();
+		error.textContent = "读取回收站失败：" + error_.message;
+	}
+}
+
 /**
  * 打开快照对话框。
  *
@@ -1881,7 +1995,7 @@ async function openSnapshotDialog(project) {
 		list.replaceChildren();
 		if (!info.snapshots || info.snapshots.length === 0) {
 			list.append(
-				el("div", "bench-empty", "还没有快照。\n删素材或删作品时系统会自动存一份，也可以现在手动存。"),
+				el("div", "bench-empty", "还没有快照。\n删素材或回滚前系统会自动存一份，也可以从作品卡手动存。"),
 			);
 			return;
 		}
@@ -2198,6 +2312,13 @@ function openPromoteDialog(material) {
 function renderManuscriptView() {
 	const box = $("view-manuscript");
 	const project = state.project;
+	// 生成收尾、定时刷新与取稿都可能走到总调度。活编辑器不是可重算的视图：
+	// 整棵替换会丢掉未保存文字、选区与 IME 状态，因此同章编辑时保留原节点。
+	const liveEditor = box.querySelector(".ms-edit");
+	if (state.editing && liveEditor?.dataset.chapterId === state.chapterId) {
+		$("project-stats").textContent = statsLine();
+		return;
+	}
 	box.replaceChildren();
 	$("stage-actions").replaceChildren();
 
@@ -2332,6 +2453,7 @@ function renderChapter(box, project) {
 	if (state.editing) {
 		const editor = document.createElement("textarea");
 		editor.className = "ms-edit";
+		editor.dataset.chapterId = chapter.id;
 		editor.value = content;
 		editor.placeholder = "此处落笔。空行分段。";
 		// 高度跟着内容长：稿子多长就铺多长，别把作者关进一扇 420px 的小窗。
@@ -3939,7 +4061,7 @@ function renderWriteActions(project, chapter) {
 		picker.append(option);
 	});
 	picker.value = chapter ? chapter.id : "";
-	picker.addEventListener("change", () => setWriteChapter(picker.value));
+	picker.addEventListener("change", () => void setWriteChapter(picker.value));
 	box.append(picker);
 
 	// 没选章就没有「写哪一章」可谈：先让人把章选定。
@@ -4045,16 +4167,33 @@ function clearWriteRecord(options = {}) {
  * 走的是与章目点击同一套状态：换完章，左栏装配、右案、章目一起跟着换，
  * 唯独视图停在这儿 —— 作者是来写字的，不是来翻稿子的。
  */
-function setWriteChapter(chapterId) {
-	if (!state.project) return;
-	const next = state.project.outline.find((item) => item.id === chapterId);
-	if (!next) return;
-	if (state.chapterId !== next.id) clearWriteRecord({ rerender: false });
-	state.chapterId = next.id;
+let writeChapterRequest = 0;
+
+async function setWriteChapter(chapterId) {
+	const request = ++writeChapterRequest;
+	const projectId = state.projectId;
+	const originalChapterId = state.chapterId;
+	const next = state.project?.outline.find((item) => item.id === chapterId);
+	if (!next || !projectId) return false;
+	// 先钉住原章并完成 flushEditor 的保存/失败确认；await 之后才允许换章。
+	// 保存逻辑读取的仍是 originalChapterId，不能把目标章提前写进 state。
+	if (!(await flushEditor())) {
+		if (request === writeChapterRequest && state.projectId === projectId && state.chapterId === originalChapterId) refreshWriteActions();
+		return false;
+	}
+	// 连续切换只认最后一次；另走章目、换卷或显式离开也会使旧请求失效。
+	if (request !== writeChapterRequest || state.projectId !== projectId || state.chapterId !== originalChapterId) return false;
+	const current = state.project?.outline.find((item) => item.id === chapterId);
+	if (!current) return false;
+	clearEditorState();
+	state.editing = false;
+	if (originalChapterId !== current.id) clearWriteRecord({ rerender: false });
+	state.chapterId = current.id;
 	// 写法跟着章走：有旧稿就该是「整章重写」，空白章才是「从零写起」。
-	state.writeMode = chapterMeta(state.project.drafts[next.id])?.hasDraft ? "rewrite" : "create";
-	writeStored(chapterKey(state.projectId), next.id);
+	state.writeMode = chapterMeta(state.project.drafts[current.id])?.hasDraft ? "rewrite" : "create";
+	writeStored(chapterKey(projectId), current.id);
 	renderAll();
+	return true;
 }
 
 /**
@@ -4425,7 +4564,12 @@ $("volume-form").addEventListener("submit", async (event) => {
  * chapterOverride：重试时写回**原来那一章**。作者按的是「刚才那次」的按钮，
  *   不是「现在这一章」—— 中间切了章也不能改写去处。
  * options.repeat：这一轮是重试，对话里留一行「再写一遍」而不是重抄一遍。
+ * options.requestId：网络重试沿用同一幂等键，避免一次交代写成两轮。
  */
+function newRequestId() {
+	if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+	return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 12);
+}
 async function runWrite(mode, note, chapterOverride, options = {}) {
 	// 只看执笔者这块：设定官在邻栏备料，不该把成文按钮锁住。
 	if (streamBusy("writing")) return;
@@ -4458,6 +4602,7 @@ async function runWrite(mode, note, chapterOverride, options = {}) {
 	let networkDown = false;
 	// 作者按了「止笔」：这一轮不算成，轮数不该 +1。
 	let stopped = false;
+	const requestId = options.requestId ?? newRequestId();
 	try {
 		const res = await fetch(
 			"/api/projects/" + state.projectId + "/chapters/" + encodeURIComponent(chapterId) + "/write",
@@ -4469,6 +4614,7 @@ async function runWrite(mode, note, chapterOverride, options = {}) {
 					modelRef: $("model-select").value,
 					thinkingLevel: $("thinking-select").value,
 					mode,
+					requestId,
 					...(note ? { note } : {}),
 					// 接在同一条记录后面：后端会把那段对话塞回这一轮，写进同一条记录。
 					...(resumeRecordId ? { recordId: resumeRecordId } : {}),
@@ -4480,7 +4626,8 @@ async function runWrite(mode, note, chapterOverride, options = {}) {
 			throw new Error(data.error || "请求失败 (" + res.status + ")");
 		}
 		await pumpStream(res, "writing", epoch, waiting, {
-			retry: () => retryWrite(mode, note, chapterId),
+			retry: () => retryWrite(mode, note, chapterId, requestId),
+			retryData: { kind: "retry-write", mode, note, chapterId },
 		});
 	} catch (error) {
 		dismissWaiting("writing", waiting);
@@ -4495,7 +4642,7 @@ async function runWrite(mode, note, chapterOverride, options = {}) {
 				clearWriteRecord();
 			}
 			appendMessage("writing", "error", describeFailure(error), epoch, {
-				actions: retryActions(() => retryWrite(mode, note, chapterId)),
+				actions: retryActions(() => retryWrite(mode, note, chapterId, requestId), { kind: "retry-write", mode, note, chapterId }),
 			});
 			// 这一笔没落成，把交代还给作者；止笔是他自己要停，不还。
 			restoreComposer("writing", note);
@@ -4524,12 +4671,12 @@ async function runWrite(mode, note, chapterOverride, options = {}) {
  *
  * 返回值：发出去没有。按钮据此决定自己是「已重发」还是留在原处。
  */
-function retryWrite(mode, note, chapterId) {
+function retryWrite(mode, note, chapterId, requestId) {
 	if (streamBusy("writing")) {
 		toast("这一笔还没收完，稍等片刻再试。", "warn");
 		return false;
 	}
-	void runWrite(mode, note, chapterId, { repeat: true });
+	void runWrite(mode, note, chapterId, { repeat: true, requestId });
 	return true;
 }
 
@@ -4717,6 +4864,8 @@ function ensureRecordsEls() {
 /** 抽屉里的正文：列表、空账、出错三选一。 */
 function renderRecordsList(pane) {
 	const layer = ensureRecordsEls();
+	// 后台刷新会替换当前焦点所在的记录按钮，先把它收回抽屉头部。
+	if (layer.contains(document.activeElement)) layer.querySelector(".records-head .icon-btn")?.focus();
 	const body = layer.querySelector(".records-body");
 	body.replaceChildren();
 	const spec = RECORD_PANES[pane];
@@ -4763,6 +4912,8 @@ function renderRecordItem(pane, record) {
 /** 列表拉失败：说清楚，再给一次机会。 */
 function renderRecordsError(error) {
 	const layer = ensureRecordsEls();
+	// 后台刷新会替换当前焦点所在的记录按钮，先把它收回抽屉头部。
+	if (layer.contains(document.activeElement)) layer.querySelector(".records-head .icon-btn")?.focus();
 	const body = layer.querySelector(".records-body");
 	body.replaceChildren();
 	const box = el("div", "records-empty records-error");
@@ -4821,6 +4972,8 @@ function openRecords(pane) {
 	if (state.recordsPane) closeRecords();
 	state.recordsPane = pane;
 	recordsTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+	const desk = document.querySelector(".desk");
+	if (desk) desk.inert = true;
 	recordsItems = [];
 	layer.querySelector(".records-title").textContent = spec.title;
 	layer.querySelector(".records-sub").textContent = "最近 " + RECORDS_LIMIT + " 条 · 新的在前";
@@ -4840,6 +4993,8 @@ function closeRecords(options = {}) {
 	state.recordsPane = null;
 	layer.hidden = true;
 	layer.classList.remove("is-open");
+	const desk = document.querySelector(".desk");
+	if (desk) desk.inert = false;
 	if (recordsTrigger && recordsTrigger.isConnected) recordsTrigger.focus();
 	recordsTrigger = null;
 	if (options.consumeHistory !== false) closeLayer("records:" + pane);
@@ -5089,6 +5244,8 @@ function syncBibleTabs() {
 		const on = tab.dataset.tab === state.bibleTab;
 		tab.classList.toggle("is-on", on);
 		tab.setAttribute("aria-selected", String(on));
+		tab.tabIndex = on ? 0 : -1;
+		if (on) $("bible").setAttribute("aria-labelledby", tab.id);
 	}
 	$("bible-search").placeholder =
 		state.bibleTab === "materials" ? "搜素材…" : state.bibleTab === "outline" ? "搜章目…" : "搜待办…";
@@ -5385,9 +5542,15 @@ function appendMessage(pane, role, text, epoch, options = {}) {
 			const node = button(
 				action.label,
 				"btn btn-sm btn-quiet" + (action.className ? " " + action.className : ""),
-				(event) => action.run(node, event),
+				action.data ? null : (event) => action.run(node, event),
 			);
 			node.type = "button";
+			if (action.data) {
+				node.dataset.action = action.data.kind;
+				for (const [key, value] of Object.entries(action.data)) {
+					if (key !== "kind" && value != null) node.dataset[key] = String(value);
+				}
+			}
 			actions.append(node);
 		}
 		wrap.append(actions);
@@ -5472,33 +5635,26 @@ function renderQuestionCard(pane, event, epoch, waiting) {
 		const box = el("div", "ask-options");
 		for (const option of options) {
 			const text = String(option ?? "");
-			const chip = button(text, "ask-option", () => {
-				input.value = text;
-				input.focus();
-			});
+			const chip = button(text, "ask-option", null);
 			chip.type = "button";
+			chip.dataset.action = "ask-option";
+			chip.dataset.value = text;
 			box.append(chip);
 		}
 		card.append(box);
 	}
 
 	const form = el("div", "ask-form");
-	const send = button("回答", "btn btn-sm btn-ink ask-send", () => void submitAnswer(card, input.value));
-	const skip = button("跳过", "btn btn-sm btn-quiet ask-skip", () => void submitAnswer(card, ""));
+	const send = button("回答", "btn btn-sm btn-ink ask-send", null);
+	const skip = button("跳过", "btn btn-sm btn-quiet ask-skip", null);
 	send.type = "button";
 	skip.type = "button";
+	send.dataset.action = "ask-send";
+	skip.dataset.action = "ask-skip";
 	form.append(input, send, skip);
 	card.append(form);
 
 	card.append(el("div", "ask-note"));
-
-	// 回车即回答：作者的手不必离开键盘。
-	input.addEventListener("keydown", (event) => {
-		if (event.key === "Enter" && !event.shiftKey) {
-			event.preventDefault();
-			void submitAnswer(card, input.value);
-		}
-	});
 
 	askCards.set(id, card);
 	streamNode(pane, epoch).append(card);
@@ -5866,18 +6022,51 @@ function restoreComposer(pane, text) {
  * retry 返回真才把按钮按成「已重发」：返回假说明这一轮还没收完，
  * 按钮得留在原处等人再按。
  */
-function retryActions(retry) {
-	if (!retry) return [];
-	return [
-		{
-			label: "再试一次",
-			run: (node) => {
-				if (!retry()) return;
+function retryActions(retry, data = null) {
+	if (!retry || !data) return [];
+	return [{ label: "再试一次", run: retry, data }];
+}
+
+function isImeComposing(event) {
+	return Boolean(event.isComposing || event.keyCode === 229);
+}
+
+/** HTML 快照只存数据，不存闭包。切章恢复后由 document 上的委托重新执行。 */
+function bindMessageActions() {
+	document.addEventListener("click", (event) => {
+		const node = event.target instanceof Element ? event.target.closest("[data-action]") : null;
+		if (!node) return;
+		if (node.dataset.action === "retry-round") {
+			const ok = retryRound(node.dataset.pane, node.dataset.text ?? "", node.dataset.outgoing ?? "");
+			if (ok) {
 				node.disabled = true;
 				node.textContent = "已重发";
-			},
-		},
-	];
+			}
+		} else if (node.dataset.action === "retry-write") {
+			const ok = retryWrite(node.dataset.mode, node.dataset.note ?? "", node.dataset.chapterId);
+			if (ok) {
+				node.disabled = true;
+				node.textContent = "已重发";
+			}
+		} else if (node.dataset.action === "ask-option") {
+			const card = node.closest(".ask-card");
+			const input = card?.querySelector(".ask-input");
+			if (input) {
+				input.value = node.dataset.value ?? "";
+				input.focus();
+			}
+		} else if (node.dataset.action === "ask-send" || node.dataset.action === "ask-skip") {
+			const card = node.closest(".ask-card");
+			if (card) void submitAnswer(card, node.dataset.action === "ask-skip" ? "" : card.querySelector(".ask-input")?.value);
+		}
+	});
+	document.addEventListener("keydown", (event) => {
+		const input = event.target instanceof Element ? event.target.closest(".ask-input") : null;
+		if (!input || event.key !== "Enter" || event.shiftKey || isImeComposing(event)) return;
+		event.preventDefault();
+		const card = input.closest(".ask-card");
+		if (card) void submitAnswer(card, input.value);
+	});
 }
 
 /**
@@ -5932,6 +6121,7 @@ async function sendMessage(pane, text, options = {}) {
 			text,
 			outgoing,
 			retry: () => retryRound(pane, text, outgoing),
+			retryData: { kind: "retry-round", pane, text, outgoing },
 		});
 	} catch (error) {
 		dismissWaiting(pane, waiting);
@@ -5952,7 +6142,7 @@ async function sendMessage(pane, text, options = {}) {
 				failed = true;
 				networkDown = isNetworkFailure(error);
 				appendMessage(pane, "error", describeFailure(error), epoch, {
-					actions: retryActions(() => retryRound(pane, text, outgoing)),
+					actions: retryActions(() => retryRound(pane, text, outgoing), { kind: "retry-round", pane, text, outgoing }),
 				});
 			}
 			// 要自动补发就别把原话塞回输入框：那会变成同一句话说两遍。
@@ -6198,10 +6388,11 @@ async function pumpStream(res, pane, epoch = streamSlot(pane).epoch, waiting = n
 						message.body.classList.remove("cursor");
 						message.wrap.classList.remove("is-writing");
 					}
-					if (event.error) appendMessage(pane, "error", event.error, epoch, { actions: retryActions(context.retry) });
+					if (event.error) appendMessage(pane, "error", event.error, epoch, { actions: retryActions(context.retry, context.retryData) });
+					if (event.saved === false && !event.aborted) appendMessage(pane, "error", "这一轮没有确认正文已保存；请不要覆盖旧稿，可点「再试一次」安全重试。", epoch, { actions: retryActions(context.retry, context.retryData) });
 					break;
 				case "error":
-					appendMessage(pane, "error", event.message, epoch, { actions: retryActions(context.retry) });
+					appendMessage(pane, "error", event.message, epoch, { actions: retryActions(context.retry, context.retryData) });
 					break;
 				default:
 					break;
@@ -6255,10 +6446,20 @@ function openShortcutsDialog() {
 }
 
 /** 收起 / 张开右案抽屉（只管界面）。 */
+let bibleDrawerTrigger = null;
+
 function setBibleDrawer(open) {
-	document.querySelector(".desk")?.classList.toggle("is-bible-open", open);
+	const desk = document.querySelector(".desk");
+	const wasOpen = desk?.classList.contains("is-bible-open");
+	if (open && !wasOpen) bibleDrawerTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : $("toggle-bible");
+	desk?.classList.toggle("is-bible-open", open);
 	$("bible-backdrop")?.classList.toggle("hidden", !open);
 	$("toggle-bible")?.setAttribute("aria-expanded", open ? "true" : "false");
+	setMobileDrawerState("bible", open);
+	if (!open && wasOpen) {
+		restoreFocus(bibleDrawerTrigger);
+		bibleDrawerTrigger = null;
+	}
 }
 
 function openBibleDrawer() {
@@ -6268,6 +6469,7 @@ function openBibleDrawer() {
 	const inherited = closeRailDrawer({ keepHistory: true });
 	setBibleDrawer(true);
 	openLayer("bible", () => setBibleDrawer(false), { replace: inherited });
+	$("close-bible")?.focus();
 }
 
 function closeBibleDrawer(options = {}) {
@@ -6357,11 +6559,13 @@ function renderPalette() {
 	paletteItems = [...groups.values()].flat();
 	paletteIndex = Math.min(paletteIndex, Math.max(0, paletteItems.length - 1));
 	if (paletteItems.length === 0) {
+		$("palette-input").removeAttribute("aria-activedescendant");
 		box.append(el("div", "palette-empty", query ? "没有匹配「" + query + "」的章目、素材或动作" : "输入关键词开始检索"));
 		return;
 	}
 	paletteItems.forEach((item, index) => {
 		const row = el("div", "palette-row" + (index === paletteIndex ? " is-on" : ""));
+		row.id = "palette-option-" + index;
 		row.setAttribute("role", "option");
 		row.setAttribute("aria-selected", String(index === paletteIndex));
 		row.append(el("span", "palette-group", item.group));
@@ -6370,17 +6574,23 @@ function renderPalette() {
 		if (item.hint) main.append(el("div", "palette-hint", item.hint));
 		row.append(main);
 		row.addEventListener("click", () => runPaletteItem(index));
-		row.addEventListener("mousemove", () => {
-			if (paletteIndex === index) return;
-			paletteIndex = index;
-			for (const [i, node] of [...box.querySelectorAll(".palette-row")].entries()) {
-				node.classList.toggle("is-on", i === index);
-				node.setAttribute("aria-selected", String(i === index));
-			}
-		});
+		row.addEventListener("mousemove", () => setPaletteIndex(index));
 		box.append(row);
 	});
+	setPaletteIndex(paletteIndex);
 	box.querySelector(".palette-row.is-on")?.scrollIntoView({ block: "nearest" });
+}
+
+function setPaletteIndex(index) {
+	paletteIndex = index;
+	const input = $("palette-input");
+	const rows = [...$("palette-results").querySelectorAll(".palette-row")];
+	rows.forEach((node, i) => {
+		node.classList.toggle("is-on", i === index);
+		node.setAttribute("aria-selected", String(i === index));
+	});
+	if (rows[index]) input.setAttribute("aria-activedescendant", rows[index].id);
+	else input.removeAttribute("aria-activedescendant");
 }
 
 function runPaletteItem(index) {
@@ -6399,6 +6609,7 @@ function openPalette() {
 	$("palette-input").value = "";
 	paletteIndex = 0;
 	renderPalette();
+	$("palette-input").setAttribute("aria-expanded", "true");
 	openDialog(dialog, { focus: "#palette-input" });
 }
 
@@ -6484,9 +6695,29 @@ document.addEventListener("keydown", (event) => {
 
 // ═══════════════════════════════════════════════════ 事件绑定
 
+/** 方向键移动并激活，始终只有当前 tab 留在 Tab 序列中。 */
+function bindTabKeyboard(tablist, selector) {
+	tablist.addEventListener("keydown", (event) => {
+		if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+		const tabs = [...tablist.querySelectorAll(selector)];
+		const current = tabs.indexOf(document.activeElement);
+		if (current < 0 || !tabs.length) return;
+		event.preventDefault();
+		const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 :
+			(current + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+		tabs[next].focus();
+		tabs[next].click();
+	});
+}
+
+bindTabKeyboard(document.querySelector(".stage-bar .tabs"), ".tab");
+bindTabKeyboard($("bible-tabs"), ".bible-tab");
+
 for (const tab of document.querySelectorAll(".tab")) {
-	tab.addEventListener("click", () => {
+	tab.addEventListener("click", (event) => {
 		switchView(tab.dataset.view);
+		// 鼠标点选沿用原来的输入框焦点；键盘漫游必须留在 tab 上才能连续按方向键。
+		if (event.detail === 0) return;
 		if (tab.dataset.view === "materials") $("material-input").focus();
 		if (tab.dataset.view === "writing") $("writing-input").focus();
 	});
@@ -6527,7 +6758,7 @@ for (const [pane, ids] of Object.entries(PANES)) {
 		void sendMessage(pane, text);
 	});
 	$(ids.input).addEventListener("keydown", (event) => {
-		if (event.key === "Enter" && !event.shiftKey) {
+		if (event.key === "Enter" && !event.shiftKey && !isImeComposing(event)) {
 			event.preventDefault();
 			form.requestSubmit();
 		}
@@ -6705,16 +6936,26 @@ composerZone.addEventListener("drop", (event) => {
 function bindSearch(id, key, render) {
 	const input = $(id);
 	if (!input) return;
-	input.addEventListener("input", (event) => {
-		state[key] = event.target.value;
+	let timer = null;
+	const apply = () => {
+		clearTimeout(timer);
+		timer = null;
+		state[key] = input.value;
 		render();
+		// 列表可以重建，搜索框本身不能重建，也不能把焦点移走。
+		if (document.activeElement !== input && input.dataset.searchFocused === "1") input.focus({ preventScroll: true });
+	};
+	input.addEventListener("focus", () => { input.dataset.searchFocused = "1"; });
+	input.addEventListener("blur", () => { input.dataset.searchFocused = ""; });
+	input.addEventListener("input", () => {
+		clearTimeout(timer);
+		timer = setTimeout(apply, 180);
 	});
 	input.addEventListener("keydown", (event) => {
 		if (event.key === "Escape") {
 			event.stopPropagation();
-			event.target.value = "";
-			state[key] = "";
-			render();
+			input.value = "";
+			apply();
 		}
 	});
 }
@@ -6742,6 +6983,7 @@ $("palette-input").addEventListener("input", () => {
 	renderPalette();
 });
 $("palette-input").addEventListener("keydown", (event) => {
+	if (isImeComposing(event)) return;
 	if (event.key === "ArrowDown") {
 		event.preventDefault();
 		if (paletteItems.length) {
@@ -6767,6 +7009,8 @@ $("palette-dialog").addEventListener("click", (event) => {
 
 $("history-close").addEventListener("click", () => closeDialog($("history-dialog")));
 // 快照面板的「合上」一直没人接：Esc 与返回键能关，但这个看得见的按钮点了没反应。
+$("trash-open")?.addEventListener("click", () => void openTrashDialog());
+$("trash-close")?.addEventListener("click", () => closeDialog($("trash-dialog")));
 $("snapshot-close")?.addEventListener("click", () => closeDialog($("snapshot-dialog")));
 $("export-cancel").addEventListener("click", () => closeDialog($("export-dialog")));
 $("export-form").addEventListener("submit", async (event) => {
@@ -6894,6 +7138,7 @@ window.addEventListener("beforeunload", (event) => {
 	}
 });
 
+bindMessageActions();
 bindSettings();
 loadTypography();
 // 提手要先于 bootstrap：起手失败时工作台也该能拖，不该等接口回来才装配。

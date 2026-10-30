@@ -12,6 +12,7 @@ import {
 } from "./prompts.ts";
 import { createLibraryTools, createMaterialTools, createWritingTools } from "./tools.ts";
 import type { AskBroker } from "./ask.ts";
+import { createWebSearchTools, type WebSearchClient, type WebSearchConfig } from "./web-search.ts";
 
 /**
  * 智能体角色。
@@ -44,12 +45,88 @@ export interface NovelAgentOptions {
 	 * 没有通道的场合（比如一次性写作）不给模型一个问不出去的工具。
 	 */
 	ask?: AskBroker;
+	/** 只在服务端鉴权与开关检查通过后注入；writing 角色即使拿到也不会装配。 */
+	webSearch?: { client: WebSearchClient; config: WebSearchConfig };
 }
 
-/** 当会话里的工具结果超过这个数量时，丢弃最旧的部分。 */
+/** 当会话里的工具调用组超过这个数量时，整组丢弃最旧的部分。 */
 const MAX_TOOL_RESULTS = 24;
+/** 对话与状态 digest 的保守字符预算；系统头和最新用户消息始终保留。 */
+const MAX_CONTEXT_CHARS = 90_000;
 
-const TOOL_ROLES = new Set(["toolResult"]);
+interface MessageUnit { indexes: number[]; toolCalls: number }
+
+function toolCallIds(message: AgentMessage): string[] {
+	if (message.role !== "assistant" || !Array.isArray(message.content)) return [];
+	const ids: string[] = [];
+	for (const part of message.content) {
+		if (part.type === "toolCall" && typeof part.id === "string" && part.id) ids.push(part.id);
+	}
+	return ids;
+}
+
+/**
+ * 把对话整理成不可拆分的消息单元：assistant 的 toolCall 与对应 toolResult 同进同出。
+ * 输入里已有的孤儿结果、缺结果的调用也一并去掉，避免把非法历史继续发给模型。
+ */
+export function trimConversation(messages: AgentMessage[], digest: AgentMessage): AgentMessage[] {
+	const head = messages[0]?.role === "system" ? [messages[0]] : [];
+	const rest = messages.slice(head.length);
+	const owners = new Map<string, number>();
+	const calls = new Map<number, string[]>();
+	rest.forEach((message, index) => {
+		const ids = toolCallIds(message);
+		if (ids.length > 0) {
+			calls.set(index, ids);
+			ids.forEach((id) => owners.set(id, index));
+		}
+	});
+	const members = new Map<number, Set<number>>();
+	const orphanResults = new Set<number>();
+	rest.forEach((message, index) => {
+		if (message.role !== "toolResult") return;
+		const id = typeof message.toolCallId === "string" ? message.toolCallId : "";
+		const owner = owners.get(id);
+		if (owner === undefined) orphanResults.add(index);
+		else {
+			const set = members.get(owner) ?? new Set<number>();
+			set.add(index);
+			members.set(owner, set);
+		}
+	});
+	const units: MessageUnit[] = [];
+	const groupedResults = new Set<number>();
+	for (let index = 0; index < rest.length; index += 1) {
+		if (orphanResults.has(index) || groupedResults.has(index)) continue;
+		const ids = calls.get(index);
+		if (!ids) {
+			units.push({ indexes: [index], toolCalls: 0 });
+			continue;
+		}
+		const results = [...(members.get(index) ?? [])];
+		const resultIds = new Set(results.map((resultIndex) => rest[resultIndex]!.role === "toolResult" ? rest[resultIndex]!.toolCallId : ""));
+		const complete = results.length === ids.length && ids.every((id) => resultIds.has(id));
+		// 不完整的调用组不能留在请求里，否则下一次模型仍面对悬空 toolCall。
+		if (!complete) continue;
+		results.forEach((resultIndex) => groupedResults.add(resultIndex));
+		units.push({ indexes: [index, ...results], toolCalls: ids.length });
+	}
+	let latestUserIndex = -1;
+	rest.forEach((message, index) => { if (message.role === "user") latestUserIndex = index; });
+	const size = (unit: MessageUnit) => unit.indexes.reduce((sum, index) => sum + JSON.stringify(rest[index]).length, 0);
+	const fixed = head.reduce((sum, message) => sum + JSON.stringify(message).length, 0) + JSON.stringify(digest).length;
+	let chars = units.reduce((sum, unit) => sum + size(unit), 0);
+	let toolCalls = units.reduce((sum, unit) => sum + unit.toolCalls, 0);
+	while (units.length > 0 && (chars + fixed > MAX_CONTEXT_CHARS || toolCalls > MAX_TOOL_RESULTS)) {
+		const first = units[0]!;
+		// 最新用户消息不能被字符预算或工具组上限挤掉。
+		if (first.indexes.includes(latestUserIndex)) break;
+		units.shift();
+		chars -= size(first);
+		toolCalls -= first.toolCalls;
+	}
+	return [...head, digest, ...units.flatMap((unit) => unit.indexes.map((index) => rest[index]!))];
+}
 
 /**
  * 单次上游请求的兜底超时。
@@ -121,15 +198,7 @@ export async function createNovelAgent(options: NovelAgentOptions): Promise<Agen
 					content: `<素材库状态更新>\n${buildLibraryDigest(options.library!)}\n</素材库状态更新>`,
 					timestamp: Date.now(),
 				};
-				const head = messages[0]?.role === "system" ? [messages[0]] : [];
-				const rest = messages.slice(head.length);
-				const toolResultIndexes = rest
-					.map((message, index) => (TOOL_ROLES.has(message.role) ? index : -1))
-					.filter((index) => index >= 0);
-				const excess = toolResultIndexes.length - MAX_TOOL_RESULTS;
-				if (excess <= 0) return [...head, digest, ...rest];
-				const drop = new Set(toolResultIndexes.slice(0, excess));
-				return [...head, digest, ...rest.filter((_message, index) => !drop.has(index))];
+				return trimConversation(messages, digest);
 			},
 		});
 	}
@@ -137,11 +206,21 @@ export async function createNovelAgent(options: NovelAgentOptions): Promise<Agen
 	const project = store.get(projectId);
 	if (!project) throw new Error(`工程 ${projectId} 不存在`);
 
-	const deps = { store, projectId, ask: options.ask };
+	const writing = role === "writing" ? await writingContextOf(options, project) : undefined;
+	const deps = {
+		store,
+		projectId,
+		ask: options.ask,
+		...(role === "material" && options.webSearch?.config.enabled ? { webSearch: options.webSearch } : {}),
+		...(writing && options.chapterId ? {
+			allowedChapterId: options.chapterId,
+			previousChapterId: writing.previousOutline?.id ?? writing.previous?.id,
+		} : {}),
+	};
 	const systemPrompt =
 		role === "material"
-			? buildMaterialSystemPrompt(project)
-			: buildWritingSystemPrompt(project, await writingContextOf(options, project));
+			? buildMaterialSystemPrompt(project, options.webSearch?.config.enabled === true)
+			: buildWritingSystemPrompt(project, writing!);
 
 	return new Agent({
 		initialState: {
@@ -163,19 +242,7 @@ ${latest ? buildContextDigest(latest, { scope: role, chapterId: options.chapterI
 </工程状态更新>`,
 				timestamp: Date.now(),
 			};
-			// 系统提示词在头部时保留它、快照插在其后；否则快照直接插到最前，
-			// 不能无条件取 messages[0] —— 那会在首条不是 system 时把它重复一遍。
-			const head = messages[0]?.role === "system" ? [messages[0]] : [];
-			const rest = messages.slice(head.length);
-
-			const toolResultIndexes = rest
-				.map((message, index) => (TOOL_ROLES.has(message.role) ? index : -1))
-				.filter((index) => index >= 0);
-			const excess = toolResultIndexes.length - MAX_TOOL_RESULTS;
-			if (excess <= 0) return [...head, digest, ...rest];
-
-			const drop = new Set(toolResultIndexes.slice(0, excess));
-			return [...head, digest, ...rest.filter((_message, index) => !drop.has(index))];
+			return trimConversation(messages, digest);
 		},
 	});
 }
@@ -187,7 +254,12 @@ ${latest ? buildContextDigest(latest, { scope: role, chapterId: options.chapterI
  * 但只给「标题 + usage + 标签」这一行索引 —— 库可能攒了上百条，
  * 全文塞进来会把窗口占满，需要全文时让它自己按 id 取。
  */
-function buildLibraryDigest(library: MaterialLibrary): string {
+function capDigest(text: string, limit = 24_000): string {
+	if (text.length <= limit) return text;
+	return text.slice(0, limit) + "\n……索引已截断；完整条目共可用工具检索/分页获取（按 id 或关键词查询）。";
+}
+
+export function buildLibraryDigest(library: MaterialLibrary): string {
 	const all = library.list();
 	if (all.length === 0) return "通用素材库为空。";
 	const byKind = new Map<string, number>();
@@ -196,7 +268,7 @@ function buildLibraryDigest(library: MaterialLibrary): string {
 	const index = all
 		.map((entry) => "- [" + kindLabel(entry.kind) + "] " + entry.title + "（id: " + entry.id + "）" + (entry.usage ? " —— " + entry.usage : ""))
 		.join("\n");
-	return `共 ${all.length} 条（${counts}）：\n${index}`;
+	return capDigest(`共 ${all.length} 条（${counts}）：\n${index}`);
 }
 
 /**

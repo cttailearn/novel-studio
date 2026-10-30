@@ -32,6 +32,7 @@ import {
 	resolveModel,
 } from "../ai/models.ts";
 import { fetchUpstreamModels, mergeFetched } from "../ai/fetch-models.ts";
+import { DeepSeekWebSearchClient, normalizeWebSearch } from "../ai/web-search.ts";
 import { FileCredentialStore } from "../config/credential-store.ts";
 import { SettingsStore } from "../config/settings-store.ts";
 import {
@@ -261,6 +262,7 @@ async function replaceAgent(session: Session, model: Model<any>): Promise<void> 
 		thinkingLevel: session.thinkingLevel,
 		// 会话里的提问通道：智能体问，作者答，答案回到同一轮里。
 		ask: session.ask,
+		webSearch: session.role === "material" ? await authorizedWebSearch() : undefined,
 		// 库作用域传的是库，不是工程；createNovelAgent 见到它就走另一支。
 		...(session.libraryScope ? { library: libraryStore } : {}),
 		...(session.chapterId ? { chapterId: session.chapterId } : {}),
@@ -378,6 +380,7 @@ async function streamNdjson(
 	ask?: AskChannel,
 	/** 这一轮结束后（含中途断线、中止）调用，用来把对话补进记录。 */
 	onFinish?: () => Promise<void>,
+	acceptance?: RunAcceptance,
 ): Promise<void> {
 	res.writeHead(200, {
 		"content-type": "application/x-ndjson; charset=utf-8",
@@ -388,6 +391,10 @@ async function streamNdjson(
 
 	const state = { aborted: false };
 	const emit = (event: unknown) => {
+		if (acceptance) {
+			const run = writeRuns.get(acceptance.runId);
+			if (run && !run.done) run.events.push(event);
+		}
 		// 连接已经没了还往里写，Node 会在响应上抛一个 error 事件。
 		// 那个事件没人接，就会把整个进程带走 —— 作者下一句话直接撞上"连不上服务"。
 		if (res.writableEnded || res.destroyed) return;
@@ -421,11 +428,24 @@ async function streamNdjson(
 	ask?.bindEmitter((event) => emit(event));
 
 	try {
-		await runAgentStream(agent, modelRef, input, emit, state);
+		await runAgentStream(agent, modelRef, input, emit, state, acceptance);
 	} finally {
 		ask?.bindEmitter(null);
 		res.off("close", abortOnClose);
 		if (!res.writableEnded) res.end();
+		if (acceptance) {
+			const run = writeRuns.get(acceptance.runId);
+			if (run) {
+				run.done = true;
+				run.completedAt = Date.now();
+			}
+			if (activeWriteRuns.get(writeRunKey(acceptance.projectId, acceptance.chapterId)) === acceptance.runId) {
+				activeWriteRuns.delete(writeRunKey(acceptance.projectId, acceptance.chapterId));
+			}
+			if (run?.requestId) {
+				completedWriteRequests.set(writeRequestKey(acceptance.projectId, acceptance.chapterId, run.requestId), acceptance.runId);
+			}
+		}
 		// 记录在流关掉之后才落盘：它比回话慢（要写整个文件），但不该拖住作者看结果。
 		if (onFinish) {
 			try {
@@ -563,10 +583,88 @@ function wasAborted(agent: Agent, signal: { aborted: boolean }): boolean {
 	return false;
 }
 
+/** 本轮实际落盘结果。写作请求要求 revision 前进，不只是模型说自己写好了。 */
+interface RunAcceptance {
+	runId: string;
+	projectId: string;
+	chapterId: string;
+	mode: ChapterWriteMode;
+	requiredTools?: string[];
+	beforeRevision: number;
+}
+
+interface WriteRun extends RunAcceptance {
+	/** 没有客户端幂等键的请求也占章锁，但不留下重放入口。 */
+	requestId?: string;
+	recordId: string;
+	events: unknown[];
+	done: boolean;
+	createdAt: number;
+	completedAt?: number;
+}
+const writeRuns = new Map<string, WriteRun>();
+const activeWriteRuns = new Map<string, string>();
+const completedWriteRequests = new Map<string, string>();
+const WRITE_RUN_TTL_MS = 30 * 60 * 1000;
+
+function writeRunKey(projectId: string, chapterId: string): string {
+	return projectId + "::" + chapterId;
+}
+function writeRequestKey(projectId: string, chapterId: string, requestId: string): string {
+	return writeRunKey(projectId, chapterId) + "::" + requestId;
+}
+function validRequestId(value: unknown): value is string {
+	return typeof value === "string" && /^[a-zA-Z0-9_-]{8,100}$/.test(value);
+}
+function sweepWriteRuns(): void {
+	const cutoff = Date.now() - WRITE_RUN_TTL_MS;
+	for (const [runId, run] of writeRuns) {
+		if (run.createdAt >= cutoff) continue;
+		if (!run.done) {
+			// 防异常路径留下永不释放的章锁；正常长任务不会达到这个兜底时限。
+			activeWriteRuns.delete(writeRunKey(run.projectId, run.chapterId));
+		}
+		writeRuns.delete(runId);
+		if (run.requestId) completedWriteRequests.delete(writeRequestKey(run.projectId, run.chapterId, run.requestId));
+	}
+	while (writeRuns.size > 200) {
+		const oldest = [...writeRuns.entries()].sort((a, b) => a[1].createdAt - b[1].createdAt)[0];
+		if (!oldest || !oldest[1].done) break;
+		writeRuns.delete(oldest[0]);
+		if (oldest[1].requestId) completedWriteRequests.delete(writeRequestKey(oldest[1].projectId, oldest[1].chapterId, oldest[1].requestId));
+	}
+}
+function replayWriteRun(res: ServerResponse, run: WriteRun): void {
+	res.writeHead(200, {
+		"content-type": "application/x-ndjson; charset=utf-8",
+		"cache-control": "no-store",
+		"x-write-replay": "1",
+	});
+	for (const event of run.events) res.write(JSON.stringify(event) + "\n");
+	res.end();
+}
+
 /** 把 Agent 事件映射成前端可消费的 NDJSON 事件。 */
-function runAgentStream(agent: Agent, modelRef: string, input: string, emit: (event: unknown) => void, signal: { aborted: boolean }): Promise<void> {
+function runAgentStream(
+	agent: Agent,
+	modelRef: string,
+	input: string,
+	emit: (event: unknown) => void,
+	signal: { aborted: boolean },
+	acceptance?: RunAcceptance,
+): Promise<void> {
 	const startedAt = Date.now();
 	const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, turns: 0 };
+	let savedRevision: number | undefined;
+	let writeFailed = false;
+	let terminalError = "";
+	const requiredTools = acceptance?.requiredTools
+		? new Set(acceptance.requiredTools)
+		: acceptance?.mode === "patch"
+		? new Set(["revise_chapter"])
+		: acceptance?.mode === "continue"
+			? new Set(["append_chapter", "write_chapter"])
+			: new Set(["write_chapter"]);
 	let thinking = false;
 	/** 本轮是否真的产出过正文，用来区分"写完了"与"空手而归"。 */
 	let sawText = false;
@@ -622,6 +720,13 @@ function runAgentStream(agent: Agent, modelRef: string, input: string, emit: (ev
 				emit({ type: "tool_start", name: event.toolName, args: event.args });
 				break;
 			case "tool_execution_end":
+				if (acceptance && requiredTools.has(event.toolName)) {
+					if (event.isError) writeFailed = true;
+					else {
+						const meta = store.get(acceptance.projectId)?.drafts[acceptance.chapterId];
+						if (meta && meta.revision > acceptance.beforeRevision) savedRevision = meta.revision;
+					}
+				}
 				emit({
 					type: "tool_end",
 					name: event.toolName,
@@ -645,18 +750,27 @@ function runAgentStream(agent: Agent, modelRef: string, input: string, emit: (ev
 				// 适配器只看得到"没有 finish_reason"。补一句人话，并带上原始错误与
 				// 已经等了多久 —— 只报"断流了"分不清是超时、Key 失效还是模型名写错。
 				if (agent.state.errorMessage && !aborted) {
+					terminalError = describeStreamFailure(agent.state.errorMessage, Date.now() - startedAt, sawText);
 					emit({
 						type: "error",
-						message: describeStreamFailure(agent.state.errorMessage, Date.now() - startedAt, sawText),
+						message: terminalError,
 					});
 				}
+				if (acceptance && !aborted && !terminalError && (savedRevision === undefined || writeFailed)) {
+					terminalError = writeFailed
+						? "正文写入工具执行失败，这一轮不能算完成；请根据工具报错重试。"
+						: "这一轮没有成功保存正文，不能算完成；请重试，或要求执笔者实际调用写入工具。";
+					emit({ type: "error", message: terminalError });
+				}
+				const cost = modelCost(modelRef, usage);
 				emit({
 					type: "run_end",
+					runId: acceptance?.runId,
 					aborted,
+					saved: acceptance ? savedRevision !== undefined && !writeFailed && !terminalError : undefined,
+					savedRevision,
 					usage: { ...usage, cacheRead: usage.cacheRead || undefined, cacheWrite: usage.cacheWrite || undefined },
-					// 错误已经在上面那条「error」里说过一次；这里再带一遍，前端会
-					// 追加第二条「讹误」。止笔时的 "Request was aborted" 同理：
-					// 那不是错误，不该被渲染成红字。
+					cost,
 					error: undefined,
 				});
 				break;
@@ -678,16 +792,20 @@ function runAgentStream(agent: Agent, modelRef: string, input: string, emit: (ev
 				const detail = error instanceof Error ? error.message : String(error);
 				const aborted = signal.aborted || (error instanceof Error && error.name === "AbortError");
 				if (!aborted) {
+					terminalError = `这一轮没有跑完（等了 ${formatElapsed(Date.now() - startedAt)}）：${detail}`;
 					emit({
 						type: "error",
-						message: `这一轮没有跑完（等了 ${formatElapsed(Date.now() - startedAt)}）：${detail}`,
+						message: terminalError,
 					});
 				}
 				emit({
 					type: "run_end",
+					runId: acceptance?.runId,
 					aborted,
+					saved: acceptance ? false : undefined,
+					savedRevision,
 					usage,
-					// 同上：原始错误已经在人话里，这里再带一次会重复。
+					cost: modelCost(modelRef, usage),
 					error: undefined,
 				});
 			}
@@ -695,6 +813,17 @@ function runAgentStream(agent: Agent, modelRef: string, input: string, emit: (ev
 			unsubscribe();
 		}
 	})();
+}
+
+function modelCost(modelRef: string, usage: { input: number; output: number; cacheRead: number; cacheWrite: number }) {
+	const providerId = modelRef.split("/")[0];
+	if (!providerId) return undefined;
+	const modelId = modelRef.slice(providerId.length + 1);
+	const model = settingsStore.getProvider(providerId)?.models.find((item) => item.id === modelId);
+	if (!model) return undefined;
+	const rates = model.cost;
+	const amount = (usage.input * rates.input + usage.output * rates.output + usage.cacheRead * rates.cacheRead + usage.cacheWrite * rates.cacheWrite) / 1_000_000;
+	return { amount, currency: "USD", configured: Object.values(rates).some((rate) => rate > 0) };
 }
 
 /** 工具结果截断，避免正文全量进入事件流。 */
@@ -786,6 +915,23 @@ async function statusOf(id: string) {
 	return (await listProviderStatus()).find((provider) => provider.id === id);
 }
 
+const WEB_CREDENTIAL_ID = "deepseek-web-search";
+function webSearchView() {
+	const config = settingsStore.get().webSearch;
+	const stored = credentialStore.hasKey(WEB_CREDENTIAL_ID);
+	return { ...config, configured: stored || Boolean(process.env.DEEPSEEK_API_KEY), authSource: stored ? "app" : process.env.DEEPSEEK_API_KEY ? "env" : "none" };
+}
+
+/** 运行时构造，设置与凭据改动后不必重启；写作角色永不注入。 */
+async function authorizedWebSearch() {
+	const web = settingsStore.get().webSearch;
+	if (!web.enabled) return undefined;
+	const stored = await credentialStore.read(WEB_CREDENTIAL_ID);
+	const apiKey = stored?.type === "api_key" ? stored.key : process.env.DEEPSEEK_API_KEY;
+	if (!apiKey) return undefined;
+	return { client: new DeepSeekWebSearchClient({ apiKey, ...(process.env.DEEPSEEK_WEB_SEARCH_BASE_URL ? { baseUrl: process.env.DEEPSEEK_WEB_SEARCH_BASE_URL } : {}) }), config: web };
+}
+
 /**
  * 决定这一轮用哪支笔。
  *
@@ -817,6 +963,7 @@ async function settingsView() {
 	return {
 		defaultModel: settings.defaultModel,
 		defaultThinkingLevel: settings.defaultThinkingLevel,
+		webSearch: webSearchView(),
 		providers: settings.providers.map((provider) => providerView(provider)),
 		statuses: await listProviderStatus(),
 		defaults: { contextWindow: DEFAULT_CONTEXT_WINDOW, maxTokens: DEFAULT_MAX_TOKENS },
@@ -1042,6 +1189,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 				}
 			});
 			if (!found) return json(res, 404, { error: "卷不存在" });
+			await store.flushForProject(projectId);
 			return json(res, 200, { ok: true, moved, stats: store.stats(saved) });
 		}
 		const body = await readJsonBody<{ title?: string; summary?: string; targetWords?: number }>(req);
@@ -1204,8 +1352,16 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		return;
 	}
 
-	const projectMatch = pathname.match(/^\/api\/projects\/([\w-]+)$/);
-	if (projectMatch) {
+	if (pathname === "/api/projects/trash" && req.method === "GET") {
+		return json(res, 200, { projects: await store.listDeleted() });
+	}
+	const trashMatch = pathname.match(/^\/api\/projects\/trash\/([\w-]+)\/restore$/);
+	if (trashMatch && req.method === "POST") {
+		const project = await store.restoreDeleted(trashMatch[1]!);
+		return json(res, 200, { project, stats: store.stats(project) });
+	}
+
+	const projectMatch = pathname.match(/^\/api\/projects\/([\w-]+)$/);	if (projectMatch) {
 		const projectId = projectMatch[1]!;
 		const project = store.get(projectId);
 		if (!project) return json(res, 404, { error: "工程不存在" });
@@ -1220,12 +1376,9 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		}
 
 		if (req.method === "DELETE") {
-			// 只删这部作品，不动素材库：库里记的取用情况是从工程现算的，会自己跟上。
-			// 整部作品没法像素材那样退回，所以删之前先把整本存一份快照，
-			// 删错了还能从快照里捞回来。
-			await store.snapshot(project, "before-project-delete");
+			// 默认移入回收站，保留正文、历史与快照，可通过恢复接口找回。
 			await store.remove(projectId);
-			return json(res, 200, { ok: true });
+			return json(res, 200, { ok: true, recoverable: true });
 		}
 
 		if (req.method === "PATCH") {
@@ -1247,6 +1400,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 					draft.targetWords = Math.floor(body.targetWords);
 				}
 			});
+			await store.flushForProject(projectId);
 			return json(res, 200, { project: saved, stats: store.stats(saved) });
 		}
 	}
@@ -1415,6 +1569,37 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		// 写作会话的组装上下文会随装料变化，每轮重建让提示词跟上。
 		if (session.role === "writing") await refreshWritingAgent(session);
 		const recordId = session.recordId;
+		if (session.role === "writing" && session.projectId && session.chapterId) {
+			sweepWriteRuns();
+	const runKey = writeRunKey(session.projectId, session.chapterId);
+			if (activeWriteRuns.has(runKey)) {
+				return json(res, 409, { error: "这一章正在生成或保存，请等这一轮结束再提交。" });
+			}
+			const acceptance: RunAcceptance = {
+				runId: randomUUID(),
+				projectId: session.projectId,
+				chapterId: session.chapterId,
+				mode: "patch",
+				requiredTools: ["write_chapter", "append_chapter", "revise_chapter"],
+				beforeRevision: store.get(session.projectId)?.drafts[session.chapterId]?.revision ?? 0,
+			};
+			const run: WriteRun = {
+				...acceptance,
+				requestId: acceptance.runId,
+				recordId: recordId ?? "",
+				events: [],
+				done: false,
+				createdAt: Date.now(),
+			};
+			writeRuns.set(acceptance.runId, run);
+			activeWriteRuns.set(runKey, acceptance.runId);
+			try {
+				return await streamNdjson(res, session.agent, session.modelRef, input, session.ask, recordId ? roundRecorder(session.agent, recordId) : undefined, acceptance);
+			} finally {
+				writeRuns.delete(acceptance.runId);
+				if (activeWriteRuns.get(runKey) === acceptance.runId) activeWriteRuns.delete(runKey);
+			}
+		}
 		return streamNdjson(
 			res,
 			session.agent,
@@ -1455,7 +1640,6 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 	if (writeMatch && req.method === "POST") {
 		const projectId = writeMatch[1]!;
 		if (!store.get(projectId)) return json(res, 404, { error: "工程不存在" });
-		const chapterId = decodeURIComponent(writeMatch[2]!);
 		const body = await readJsonBody<{
 			modelRef?: string;
 			thinkingLevel?: ThinkingLevel;
@@ -1463,8 +1647,40 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 			note?: string;
 			/** 从这条旧记录接着写：那段对话会原样接在这一轮前面。 */
 			recordId?: string;
+			/** 客户端生成的幂等键；同键重试返回同一轮结果，不重复写章。 */
+			requestId?: string;
 		}>(req);
 
+		sweepWriteRuns();
+		const chapterId = decodeURIComponent(writeMatch[2]!);
+		const requestId = body.requestId;
+		if (requestId !== undefined && !validRequestId(requestId)) {
+			return json(res, 400, { error: "requestId 需为 8–100 位字母、数字、下划线或连字符" });
+		}
+		// 幂等键只在参数完整后占位；校验失败不应阻塞后续正常写作。
+		const runKey = writeRunKey(projectId, chapterId);
+		const previousRunId = requestId ? completedWriteRequests.get(writeRequestKey(projectId, chapterId, requestId)) : undefined;
+		const previous = previousRunId ? writeRuns.get(previousRunId) : undefined;
+		if (previous) return replayWriteRun(res, previous);
+		if (activeWriteRuns.has(runKey)) {
+			return json(res, 409, { error: "这一章正在生成或保存，请等这一轮结束再提交；不要重复点击。" });
+		}
+		const runId = randomUUID();
+		const run: WriteRun = {
+			runId,
+			requestId,
+			projectId,
+			chapterId,
+			mode: body.mode as ChapterWriteMode,
+			beforeRevision: 0,
+			recordId: "",
+			events: [],
+			done: false,
+			createdAt: Date.now(),
+		};
+		writeRuns.set(runId, run);
+		activeWriteRuns.set(runKey, runId);
+		try {
 		// mode 决定提示词里的"作业"，先定下来再组装上下文。
 		if (body.mode !== undefined && !WRITE_MODES.includes(body.mode as ChapterWriteMode)) {
 			return json(res, 400, { error: "mode 只能是 create / rewrite / continue / patch" });
@@ -1477,7 +1693,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		}
 		const hasDraft = Boolean(project.drafts[chapterId]);
 		const mode: ChapterWriteMode = (body.mode as ChapterWriteMode | undefined) ?? (hasDraft ? "rewrite" : "create");
-		// 局部修改改的是已有正文：没有正文就无从下笔，别让它退化成"从零写起"。
+		if (run) run.mode = mode;		// 局部修改改的是已有正文：没有正文就无从下笔，别让它退化成"从零写起"。
 		if (mode === "patch" && !hasDraft) {
 			return json(res, 409, { error: "这一章还没有正文，没法局部修改；要从零写起请选「从零写起」。" });
 		}
@@ -1547,7 +1763,19 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 			const head = agent.state.messages[0]?.role === "system" ? agent.state.messages.slice(0, 1) : [];
 			agent.state.messages = [...head, ...resumed.messages];
 		}
-		return streamNdjson(res, agent, `${model.provider}/${model.id}`, instruction, undefined, roundRecorder(agent, record.id));
+			return await streamNdjson(res, agent, `${model.provider}/${model.id}`, instruction, undefined, roundRecorder(agent, record.id), {
+			runId,
+			projectId,
+			chapterId,
+			mode,
+			beforeRevision: project.drafts[chapterId]?.revision ?? 0,
+		});
+		} finally {
+			// 校验失败是普通 return，也走这里；不能只清异常路径，否则章会永久卡在 409。
+			const latest = writeRuns.get(runId);
+			if (!latest || !latest.done) writeRuns.delete(runId);
+			if (activeWriteRuns.get(runKey) === runId) activeWriteRuns.delete(runKey);
+		}
 	}
 
 
@@ -1615,6 +1843,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 			// 作者亲手收录的，直接算确认过的。
 			status: "confirmed",
 		});
+		await libraryStore.flush();
 		return json(res, 201, { material: entry, ...libraryView() });
 	}
 
@@ -1625,6 +1854,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 
 		if (req.method === "DELETE") {
 			libraryStore.remove(libraryId);
+			await libraryStore.flush();
 			return json(res, 200, { ok: true, ...libraryView() });
 		}
 
@@ -1645,7 +1875,9 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 		if (typeof body.usage === "string") input.usage = body.usage;
 		if (body.status === "confirmed" || body.status === "draft") input.status = body.status;
 		if (Array.isArray(body.tags)) input.tags = pickTags(body.tags);
-		return json(res, 200, { material: libraryStore.update(libraryId, input), ...libraryView() });
+		const material = libraryStore.update(libraryId, input);
+		await libraryStore.flush();
+		return json(res, 200, { material, ...libraryView() });
 	}
 
 	/**
@@ -1948,7 +2180,15 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 	}
 
 	if (pathname === "/api/settings" && req.method === "PUT") {
-		const body = await readJsonBody<{ defaultModel?: string; defaultThinkingLevel?: string }>(req);
+		const body = await readJsonBody<{ defaultModel?: string; defaultThinkingLevel?: string; webSearch?: unknown; webApiKey?: string }>(req);
+		if (body.webSearch !== undefined) {
+			const next = normalizeWebSearch({ ...settingsStore.get().webSearch, ...(body.webSearch && typeof body.webSearch === "object" ? body.webSearch : {}) });
+			if (next.enabled && !credentialStore.hasKey(WEB_CREDENTIAL_ID) && !process.env.DEEPSEEK_API_KEY && !body.webApiKey?.trim()) {
+				return json(res, 400, { error: "请先填写 DeepSeek API Key，或在环境变量 DEEPSEEK_API_KEY 中配置。" });
+			}
+			settingsStore.mutate((settings) => { settings.webSearch = next; });
+		}
+		if (typeof body.webApiKey === "string") await credentialStore.setKey(WEB_CREDENTIAL_ID, body.webApiKey);
 		settingsStore.mutate((settings) => {
 			if (typeof body.defaultModel === "string") settings.defaultModel = body.defaultModel.trim();
 			if (typeof body.defaultThinkingLevel === "string") {
@@ -1956,7 +2196,19 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 				if (THINKING_LEVELS.includes(level)) settings.defaultThinkingLevel = level;
 			}
 		});
+		await settingsStore.flush();
 		return json(res, 200, await settingsView());
+	}
+
+	if (pathname === "/api/settings/web-search/test" && req.method === "POST") {
+		const search = await authorizedWebSearch();
+		if (!search) return json(res, 400, { error: "请先保存 API Key 并开启联网检索。" });
+		try {
+			const results = await search.client.search("DeepSeek 网页搜索 API", { count: 1 });
+			return json(res, 200, { ok: true, results: results.length, message: `连接正常，返回 ${results.length} 条结果。此次成功搜索可能按官方价格计费。` });
+		} catch (error) {
+			return json(res, 502, { error: (error as Error).message });
+		}
 	}
 
 	// 新增自定义供应商

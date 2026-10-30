@@ -1,4 +1,5 @@
-import { createModels, type Api, type Model, type MutableModels, type Provider } from "@earendil-works/pi-ai";
+import { createModels, createProvider, envApiKeyAuth, type Api, type Model, type MutableModels, type Provider } from "@earendil-works/pi-ai";
+import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { amazonBedrockProvider } from "@earendil-works/pi-ai/providers/amazon-bedrock";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { antLingProvider } from "@earendil-works/pi-ai/providers/ant-ling";
@@ -55,6 +56,8 @@ export interface BuiltinProviderSpec {
 	envVars: readonly string[];
 	/** 设置页展示分组。 */
 	group: BuiltinGroup;
+	/** 内置的固定接入点；目前只有中转内置供应商需要展示。 */
+	baseUrl?: string;
 	create: () => Provider;
 }
 
@@ -64,6 +67,56 @@ export interface BuiltinProviderSpec {
  * 单独定义而非内联在数组里，是为了让新增 provider 时"忘记归类"变成一个会被
  * 测试抓到的问题（见 scripts/config.ts 的分组完整性断言）。
  */
+const CTTAI_BASE_URL = "https://llmapi.cttai.art/v1";
+
+/**
+ * CTTAI 中转当前公开的主力模型。
+ *
+ * 这是应用内置目录，不是 pi-ai 上游目录：中转的 /v1/models 需要 Key 才能读，
+ * 而内置供应商没有“拉取模型”入口，所以首屏必须自带一份可用清单。
+ * 参数取保守值，避免把上游没承诺的上下文/输出上限写死；成本留空，
+ * 防止把中转的倍率表达式误当美元单价展示。
+ */
+function cttaiModel(id: string, name: string): Model<"openai-completions"> {
+	return {
+		id,
+		name,
+		api: "openai-completions",
+		provider: "cttai",
+		baseUrl: CTTAI_BASE_URL,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		reasoning: true,
+		contextWindow: 200_000,
+		maxTokens: 32_768,
+	};
+}
+
+const CTTAI_MODELS: readonly Model<"openai-completions">[] = [
+	cttaiModel("deepseek-v4.1-flash", "DeepSeek V4.1 Flash"),
+	cttaiModel("deepseek-v4-pro", "DeepSeek V4 Pro"),
+	cttaiModel("kimi-k3.1-pro", "Kimi K3.1 Pro"),
+	cttaiModel("kimi-k3", "Kimi K3"),
+	cttaiModel("glm-5.3-flash", "GLM-5.3 Flash"),
+	cttaiModel("MiniMax-M3.1-Flash", "MiniMax M3.1 Flash"),
+	cttaiModel("gemini-3.8-flash", "Gemini 3.8 Flash"),
+	cttaiModel("gpt-6.1-sol", "GPT-6.1 Sol"),
+	cttaiModel("claude-sonnet-5", "Claude Sonnet 5"),
+];
+
+function cttaiProvider(): Provider<"openai-completions"> {
+	return createProvider({
+		id: "cttai",
+		name: "CTTAI API 中转",
+		baseUrl: CTTAI_BASE_URL,
+		auth: { apiKey: envApiKeyAuth("CTTAI API key", ["CTTAI_API_KEY", "LLMAPI_API_KEY"]) },
+		models: CTTAI_MODELS,
+		api: openAICompletionsApi(),
+	});
+}
+
+const GROUP_RECOMMENDED = new Set(["cttai"]);
+
 const GROUP_DOMESTIC = new Set([
 	"deepseek", "moonshotai-cn", "moonshotai", "kimi-coding", "zai", "zai-coding-cn",
 	"minimax-cn", "minimax", "qwen-token-plan-cn", "qwen-token-plan", "qwen-token-plan-individual",
@@ -75,10 +128,11 @@ const GROUP_CLOUD = new Set([
 	"opencode", "opencode-go",
 ]);
 
-export type BuiltinGroup = "国际通用" | "国内厂商" | "云平台与推理";
+export type BuiltinGroup = "推荐" | "国际通用" | "国内厂商" | "云平台与推理";
 
-/** 未落入上面两组的归为国际通用。 */
+/** 未落入上面几组的归为国际通用。 */
 export function builtinGroup(id: string): BuiltinGroup {
+	if (GROUP_RECOMMENDED.has(id)) return "推荐";
 	if (GROUP_DOMESTIC.has(id)) return "国内厂商";
 	if (GROUP_CLOUD.has(id)) return "云平台与推理";
 	return "国际通用";
@@ -88,12 +142,16 @@ export function builtinGroup(id: string): BuiltinGroup {
  * 可作为"默认供应商"的全部内置 provider。
  *
  * 覆盖 pi-ai 除 faux（测试用）与 openai-codex（仅 OAuth）之外的所有厂商，
- * 共 41 个。新增 pi-ai 版本带来的厂商时，在这里补一行即可。
+ * 另加一个应用内置的 CTTAI 中转，共 42 个。新增 pi-ai 版本带来的厂商时，
+ * 在这里补一行即可。
  *
  * envVars 只用于界面提示与"是否已配置"判定，实际鉴权仍由 pi-ai 的
  * CredentialStore + 环境变量回落机制完成。
  */
 export const BUILTIN_PROVIDERS: readonly BuiltinProviderSpec[] = [
+	// ---- 推荐中转：应用内置，不是 pi-ai 目录 ----
+	{ id: "cttai", label: "CTTAI 中转（推荐）", builtinId: "cttai", envVars: ["CTTAI_API_KEY", "LLMAPI_API_KEY"], group: builtinGroup("cttai"), baseUrl: CTTAI_BASE_URL, create: cttaiProvider },
+
 	// ---- 国际通用 ----
 	{ id: "anthropic", label: "Anthropic", builtinId: "anthropic", envVars: ["ANTHROPIC_API_KEY"], group: builtinGroup("anthropic"), create: anthropicProvider },
 	{ id: "openai", label: "OpenAI", builtinId: "openai", envVars: ["OPENAI_API_KEY"], group: builtinGroup("openai"), create: openaiProvider },
@@ -305,7 +363,7 @@ export async function listProviderStatus(): Promise<ProviderStatus[]> {
 			kind: config.kind,
 			...(config.kind === "builtin" ? { group: builtinGroup(config.id) } : {}),
 			enabled: config.enabled,
-			...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
+			...((config.baseUrl ?? spec?.baseUrl) ? { baseUrl: config.baseUrl ?? spec?.baseUrl } : {}),
 			...(config.api ? { api: config.api, apiFormatKnown: true } : { apiFormatKnown: false }),
 			envVars: [...(spec?.envVars ?? [])],
 			authSource: stored ? "app" : fromEnv ? "env" : "none",

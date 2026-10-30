@@ -8,6 +8,7 @@
  * 运行：pnpm test:server
  */
 import { spawn } from "node:child_process";
+import dns from "node:dns";
 import { closeSync, openSync, readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, request as httpRequest } from "node:http";
@@ -81,7 +82,7 @@ const base = `http://127.0.0.1:${port}`;
 const mockPort = await freePort();
 let upstreamHits = 0;
 const upstreamBodies: string[] = [];
-let mockMode: "stream" | "ask" | "write" | "patch" = "stream";
+let mockMode: "stream" | "ask" | "write" | "patch" | "chat" = "stream";
 let resolveUpstreamClosed: () => void = () => undefined;
 const upstreamClosed = new Promise<void>((resolve) => {
 	resolveUpstreamClosed = resolve;
@@ -222,6 +223,14 @@ const mockServer = createServer((req, res) => {
 		});
 		return;
 	}
+	if (mockMode === "chat") {
+		req.resume();
+		res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8" });
+		send({ role: "assistant", content: "" });
+		send({ content: "我想好了，但没有写入正文。" });
+		finish("stop");
+		return;
+	}
 	req.resume();
 	res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", connection: "keep-alive" });
 	send({ role: "assistant", content: "" });
@@ -229,6 +238,26 @@ const mockServer = createServer((req, res) => {
 	timer = setInterval(() => send({ content: "……" }), 100);
 });
 await new Promise<void>((resolve) => mockServer.listen(mockPort, "127.0.0.1", resolve));
+
+// DeepSeek Search 本地替身：拦截 DNS，只让测试进程访问，不泄露真实密钥或访问外网。
+const searchPort = await freePort();
+const searchRequests: Array<{ auth: string; body: string }> = [];
+const searchServer = createServer((req, res) => {
+	let body = "";
+	req.on("data", (chunk) => { body += chunk; });
+	req.on("end", () => {
+		searchRequests.push({ auth: String(req.headers.authorization ?? ""), body });
+		res.writeHead(200, { "content-type": "application/json" });
+		res.end(JSON.stringify({ results: [{ title: "渡口旧制", url: "https://example.com/ferry", snippet: "渡口旧制摘要", summary: "旧时渡口的公开资料。", content: "" }] }));
+	});
+});
+await new Promise<void>((resolve) => searchServer.listen(searchPort, "127.0.0.1", resolve));
+process.env.DEEPSEEK_API_KEY = "test-web-key";
+const originalLookup = dns.lookup;
+dns.lookup = ((hostname: string, options: any, callback: any) => {
+	if (hostname === "api.deepseek.com") return originalLookup("127.0.0.1", options, callback);
+	return originalLookup(hostname, options, callback);
+}) as typeof dns.lookup;
 
 // 设置页的自定义供应商指向假上游：有它才能在无 Key、无外网的测试里走通生成链路。
 await writeFile(
@@ -287,6 +316,8 @@ const child = spawn(process.execPath, ["--experimental-strip-types", "src/server
 		DEFAULT_MODEL: "",
 		// 别让仓库里的 .env 把端口与数据目录顶掉。
 		NOVEL_STUDIO_ENV_FILE: path.join(dir, "absent.env"),
+		DEEPSEEK_API_KEY: "test-web-key",
+		DEEPSEEK_WEB_SEARCH_BASE_URL: `http://127.0.0.1:${searchPort}`,
 	},
 	stdio: ["ignore", outFd, errFd],
 });
@@ -520,6 +551,20 @@ try {
 	const bootstrap = await req("GET", "/api/bootstrap");
 	check("bootstrap 列出种子工程", bootstrap.data.projects.some((p: any) => p.id === seedId));
 	check("bootstrap 带出模型目录", Array.isArray(bootstrap.data.models));
+
+	console.log("\n联网资料设置");
+	const initialSettings = await req("GET", "/api/settings");
+	check("联网检索默认关闭", initialSettings.data.webSearch?.enabled === false);
+	check("环境密钥仅回传就绪状态", initialSettings.data.webSearch?.configured === true && !JSON.stringify(initialSettings.data).includes("test-web-key"));
+	const webOn = await req("PUT", "/api/settings", { webSearch: { enabled: true, maxResults: 3, includeContent: false } });
+	check("联网开关与结果数可保存", webOn.data.webSearch?.enabled === true && webOn.data.webSearch?.maxResults === 3);
+	const webTest = await req("POST", "/api/settings/web-search/test");
+	check("联网测试使用官方 Search 协议", webTest.status === 200 && searchRequests.length === 1);
+	check("联网请求带 Bearer 鉴权与条数", searchRequests[0]?.auth === "Bearer test-web-key" && JSON.parse(searchRequests[0]?.body ?? "{}").count === 1);
+	const webOff = await req("PUT", "/api/settings", { webSearch: { enabled: false } });
+	check("联网检索可关闭", webOff.data.webSearch?.enabled === false);
+	await req("POST", "/api/settings/web-search/test");
+	check("关闭后不再发起网络搜索", searchRequests.length === 1);
 
 	// ---- 入口与请求体加固 ----
 	console.log("\n入口加固");
@@ -787,6 +832,12 @@ try {
 		JSON.stringify(usageAfterDelete.data.materials.map((m: any) => m.usedBy)),
 	);
 	check("删作品不动素材库", usageAfterDelete.data.materials.length === 3, String(usageAfterDelete.data.materials.length));
+	const trash = await req("GET", "/api/projects/trash");
+	check("删除的作品进入回收站", trash.status === 200 && trash.data.projects.some((entry: any) => entry.id === takeProjectId), JSON.stringify(trash.data));
+	const restored = await req("POST", `/api/projects/trash/${takeProjectId}/restore`);
+	check("回收站可恢复作品与素材", restored.status === 200 && restored.data.project.materials.length > 0, JSON.stringify(restored.data));
+	check("恢复后能重新取到作品", (await req("GET", `/api/projects/${takeProjectId}`)).status === 200);
+	await req("DELETE", `/api/projects/${takeProjectId}`);
 
 	// ---- 删库条目：作品手里的副本不受影响 ----
 	const libRemoved = await req("DELETE", `/api/library/${libraryId}`);
@@ -1075,6 +1126,37 @@ try {
 	const freshDraft = await req("GET", `/api/projects/${seedId}/chapters/ch01/draft`);
 	check("成文正文已落地", freshDraft.data.chapter?.content === WRITE_BODY, String(freshDraft.data.chapter?.content));
 	check("成文是第 1 版", freshDraft.data.chapter?.revision === 1, String(freshDraft.data.chapter?.revision));
+	const runEnd = writeRun.events.find((event) => event.type === "run_end");
+	check("完成事件给出真实保存结果", runEnd?.saved === true && runEnd?.savedRevision === 1, JSON.stringify(runEnd));
+	check("完成事件带成本字段", runEnd?.cost?.currency === "USD" && typeof runEnd.cost.amount === "number", JSON.stringify(runEnd?.cost));
+
+	// 请求 ID 相同是网络重试：只重放原来那轮事件，不能再调用一次模型或覆盖正文。
+	const idemId = "workbench-idem-0001";
+	const idemHits = upstreamHits;
+	const idemFirst = await streamWrite(seedId, "ch01", { mode: "rewrite", modelRef: "mock/mock", requestId: idemId });
+	const idemReplay = await streamWrite(seedId, "ch01", { mode: "rewrite", modelRef: "mock/mock", requestId: idemId });
+	check("幂等重试返回同一轮事件", JSON.stringify(idemReplay.events) === JSON.stringify(idemFirst.events), JSON.stringify(idemReplay.events));
+	check("幂等重试不重复调用模型", upstreamHits === idemHits + 2, `${idemHits} -> ${upstreamHits}`);
+
+	mockMode = "chat";
+	const noSave = await streamWrite(seedId, "ch01", { mode: "rewrite", modelRef: "mock/mock" });
+	const noSaveEnd = noSave.events.find((event) => event.type === "run_end");
+	check("没有实际保存不算完成", noSaveEnd?.saved === false && noSave.events.some((event) => event.type === "error"), JSON.stringify(noSave.events));
+
+	mockMode = "stream";
+	const slowWrite = fetch(base + `/api/projects/${seedId}/chapters/ch01/write`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ mode: "rewrite", modelRef: "mock/mock", requestId: "workbench-slow-0001" }),
+	});
+	await new Promise((resolve) => setTimeout(resolve, 250));
+	const conflict = await req("POST", `/api/projects/${seedId}/chapters/ch01/write`, { mode: "rewrite", modelRef: "mock/mock" });
+	check("同章并发生成被互斥拦截", conflict.status === 409, JSON.stringify(conflict.data));
+	const slowResponse = await slowWrite;
+	await slowResponse.body?.cancel();
+	await new Promise((resolve) => setTimeout(resolve, 300));
+
+	mockMode = "write";
 
 	// 同一章发 mode: patch —— 只换 find 指的那一处，其余一个字都不该动。
 	mockMode = "patch";
@@ -1751,6 +1833,9 @@ try {
 	child.kill();
 	mockServer.closeAllConnections();
 	mockServer.close();
+	searchServer.closeAllConnections();
+	searchServer.close();
+	dns.lookup = originalLookup;
 	// 落盘是异步的，给进程与文件句柄一点收尾时间。
 	await new Promise((resolve) => setTimeout(resolve, 300));
 	await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });

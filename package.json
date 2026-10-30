@@ -16,7 +16,9 @@
     "test:config": "node --experimental-strip-types scripts/config.ts",
     "test:server": "node --experimental-strip-types scripts/workbench.ts",
     "test:storage": "node --experimental-strip-types scripts/storage-check.ts",
-    "test": "pnpm typecheck && pnpm test:config && pnpm test:tools && pnpm test:storage && pnpm test:server && pnpm test:loop"
+    "test:frontend": "node --experimental-vm-modules scripts/frontend-contracts.mjs",
+    "test:context": "node --experimental-strip-types scripts/ai-context-check.ts",
+    "test": "pnpm typecheck && pnpm test:config && pnpm test:tools && pnpm test:context && pnpm test:storage && pnpm test:server && pnpm test:loop && pnpm test:frontend"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "1.2.0",

@@ -297,9 +297,9 @@
 			<main class="stage">
 				<nav class="stage-bar">
 					<div class="tabs" role="tablist" aria-label="写作区">
-						<button class="tab is-on" data-view="manuscript" role="tab" aria-selected="true" aria-controls="view-manuscript"><b>稿</b><span>文稿</span></button>
-						<button class="tab" data-view="materials" role="tab" aria-selected="false" aria-controls="view-materials"><b>料</b><span>素材工作台</span></button>
-						<button class="tab" data-view="writing" role="tab" aria-selected="false" aria-controls="view-writing"><b>文</b><span>生文工作台</span></button>
+						<button id="tab-manuscript" class="tab is-on" data-view="manuscript" role="tab" aria-selected="true" aria-controls="view-manuscript" tabindex="0"><b>稿</b><span>文稿</span></button>
+						<button id="tab-materials" class="tab" data-view="materials" role="tab" aria-selected="false" aria-controls="view-materials" tabindex="-1"><b>料</b><span>素材工作台</span></button>
+						<button id="tab-writing" class="tab" data-view="writing" role="tab" aria-selected="false" aria-controls="view-writing" tabindex="-1"><b>文</b><span>生文工作台</span></button>
 					</div>
 					<div class="stage-actions" id="stage-actions"></div>
 				</nav>
@@ -312,6 +312,7 @@
 								<h3>卷宗</h3>
 								<span id="project-count" class="pane-count"></span>
 								<div class="pane-tools">
+									<button class="btn btn-quiet btn-sm" id="trash-open">回收站</button>
 									<button class="btn btn-quiet btn-sm" data-action="new-project">＋ 另起一卷</button>
 								</div>
 							</header>
@@ -365,10 +366,10 @@
 					</div>
 				</section>
 
-				<section id="view-manuscript" class="view" aria-label="文稿"></section>
+				<section id="view-manuscript" class="view" role="tabpanel" aria-labelledby="tab-manuscript" aria-label="文稿"></section>
 
 				<!-- 素材工作台：上传原料 + 与设定官对议 + 素材库 -->
-				<section id="view-materials" class="view view-bench" aria-label="素材工作台">
+				<section id="view-materials" class="view view-bench" role="tabpanel" aria-labelledby="tab-materials" aria-label="素材工作台">
 					<div class="bench">
 						<div class="bench-pane">
 							<header class="pane-head">
@@ -426,7 +427,7 @@
 				</section>
 
 				<!-- 生文工作台：装配本章素材 + 与执笔者对议 + 装料成文 -->
-				<section id="view-writing" class="view view-bench" aria-label="生文工作台">
+				<section id="view-writing" class="view view-bench" role="tabpanel" aria-labelledby="tab-writing" aria-label="生文工作台">
 					<div class="bench">
 						<div class="bench-pane">
 							<header class="pane-head">
@@ -480,11 +481,11 @@
 					<button id="close-bible" class="btn btn-quiet btn-sm only-narrow icon-btn" title="收起右案" aria-label="收起右案">×</button>
 				</div>
 				<nav class="bible-tabs" id="bible-tabs" role="tablist" aria-label="右案">
-					<button class="bible-tab is-on" data-tab="materials" role="tab" aria-selected="true">素材</button>
-					<button class="bible-tab" data-tab="outline" role="tab" aria-selected="false">大纲</button>
-					<button class="bible-tab" data-tab="notes" role="tab" aria-selected="false">待办</button>
+					<button id="bible-tab-materials" class="bible-tab is-on" data-tab="materials" role="tab" aria-selected="true" aria-controls="bible" tabindex="0">素材</button>
+					<button id="bible-tab-outline" class="bible-tab" data-tab="outline" role="tab" aria-selected="false" aria-controls="bible" tabindex="-1">大纲</button>
+					<button id="bible-tab-notes" class="bible-tab" data-tab="notes" role="tab" aria-selected="false" aria-controls="bible" tabindex="-1">待办</button>
 				</nav>
-				<div id="bible" class="bible"></div>
+				<div id="bible" class="bible" role="tabpanel" aria-labelledby="bible-tab-materials" tabindex="0"></div>
 			</aside>
 			<button id="bible-backdrop" class="bible-backdrop hidden" tabindex="-1" aria-label="收起右案"></button>
 			<!-- 章目抽屉的遮罩：与右案那一套同模，只是各管一边。 -->
@@ -752,17 +753,27 @@
 		<dialog id="settings-dialog" class="sheet sheet-wide settings-dialog">
 			<div class="settings-head">
 				<div>
-					<h3>笔墨纸砚</h3>
-					<p>此处所录密钥只存本机 data/credentials.json，优先于环境变量</p>
+					<h3>创作环境</h3>
+					<p>模型、供应商与联网资料 · 所有密钥仅保存在本机</p>
 				</div>
-				<button id="settings-close" class="btn btn-quiet">掩上</button>
+				<button id="settings-close" class="btn btn-quiet" aria-label="关闭设置">完成</button>
 			</div>
+			<div class="settings-nav" role="tablist" aria-label="设置分类">
+				<button id="settings-tab-models" class="settings-tab is-on" role="tab" aria-selected="true" aria-controls="settings-models-panel" tabindex="0">模型与供应商</button>
+				<button id="settings-tab-web" class="settings-tab" role="tab" aria-selected="false" aria-controls="settings-web-panel" tabindex="-1">联网资料 <span id="settings-web-nav-status" class="settings-nav-dot"></span></button>
+				<span id="settings-save-status" class="settings-save-status" role="status" aria-live="polite"></span>
+			</div>
+			<div id="settings-models-panel" role="tabpanel" aria-labelledby="settings-tab-models">
 			<div class="settings-defaults">
-				<label>常用之笔<select id="settings-default-model"></select></label>
-				<label>惯用思深<select id="settings-default-thinking"></select></label>
+				<div class="defaults-caption"><span>默认创作模型</span><small>新对话使用；已有对话可在顶栏另选</small></div>
+				<div class="defaults-fields">
+					<label><span>模型</span><select id="settings-default-model" aria-label="默认创作模型"></select></label>
+					<label><span>思考</span><select id="settings-default-thinking" aria-label="默认思考档位"></select></label>
+				</div>
 			</div>
 			<div class="settings-body">
 				<div class="providers-rail">
+					<div class="providers-rail-title"><span>供应商</span><small id="provider-summary"></small></div>
 					<!-- 搜索框独立于列表之外：放在 ul 里重渲染就得重建它，敲一个字焦点就没了 -->
 					<div class="search-wrap">
 						<input id="provider-search" class="provider-search" type="search" placeholder="搜索供应商…" autocomplete="off">
@@ -771,6 +782,8 @@
 				</div>
 				<div id="settings-detail" class="settings-detail"></div>
 			</div>
+			</div>
+			<section id="settings-web-panel" class="settings-web-panel" role="tabpanel" aria-labelledby="settings-tab-web" hidden></section>
 		</dialog>
 
 		<!-- 快照：误删素材、误改大纲时的退路。删东西时系统会自动存一份，
@@ -778,13 +791,27 @@
 		<dialog id="snapshot-dialog" class="sheet sheet-wide">
 			<header class="form-head">
 				<h3>存照</h3>
-				<p class="form-hint"><span id="snapshot-title"></span> 删素材或删作品时系统会自动存一份，保留最近 20 份。</p>
+				<p class="form-hint"><span id="snapshot-title"></span> 删素材或回滚前系统会自动存一份，保留最近 20 份。</p>
 			</header>
 			<div class="snap-list" id="snapshot-list"></div>
 			<footer class="form-foot">
 				<p id="snapshot-error" class="form-error"></p>
 				<div class="dialog-actions">
 					<button type="button" class="btn btn-quiet" id="snapshot-close">合上</button>
+				</div>
+			</footer>
+		</dialog>
+
+		<dialog id="trash-dialog" class="sheet sheet-wide">
+			<header class="form-head">
+				<h3>回收站</h3>
+				<p class="form-hint">删除的作品连同正文、历史与存照留在这里，恢复后回到案头。</p>
+			</header>
+			<div class="snap-list" id="trash-list"></div>
+			<footer class="form-foot">
+				<p id="trash-error" class="form-error" role="alert"></p>
+				<div class="dialog-actions">
+					<button type="button" class="btn btn-quiet" id="trash-close">合上</button>
 				</div>
 			</footer>
 		</dialog>
@@ -888,7 +915,7 @@
 		<!-- 检索面板：章目、素材、动作一处可达 -->
 		<dialog id="palette-dialog" class="palette" aria-label="检索与跳转">
 			<div class="palette-head">
-				<input id="palette-input" type="search" placeholder="搜章目、素材，或输入动作名…" autocomplete="off" aria-label="检索" />
+				<input id="palette-input" type="search" placeholder="搜章目、素材，或输入动作名…" autocomplete="off" aria-label="检索" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="palette-results" aria-haspopup="listbox" />
 				<kbd>Esc</kbd>
 			</div>
 			<div id="palette-results" class="palette-results" role="listbox" aria-label="结果"></div>
