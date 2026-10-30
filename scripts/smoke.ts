@@ -247,6 +247,10 @@ try {
 	check("库提示词强调脱离具体作品", libPrompt.includes("脱离任何一部具体作品也能读懂"));
 	check("库提示词声明题材不设边界", libPrompt.includes("题材不设边界"));
 	check("库提示词不含作品内说法", !libPrompt.includes("本章已装配的素材"), libPrompt.slice(0, 80));
+	// 通用素材库同样默认一条，多写的口子只留给作者点名或内容成组。
+	check("库提示词声明一次一条是硬要求", libPrompt.includes("一次一条是硬要求"));
+	check("库提示词默认只写一条", libPrompt.includes("只写 1 条"));
+	check("库提示词按内容定条数", libPrompt.includes("条数由内容需要决定"));
 	await new Promise((resolve) => setTimeout(resolve, 60));
 	// ---- 素材智能体工具链路 ----
 	console.log("\n素材智能体工具");
@@ -900,6 +904,11 @@ try {
 	check("素材提示词禁止写正文", materialPrompt.includes("不写正文"));
 	check("素材提示词强调 usage", materialPrompt.includes("usage"));
 	check("素材提示词不含写作工具声明", !materialPrompt.includes("mode 选 continue"));
+	// 素材条数：默认一条，其余由内容需要决定 —— 一次灌一堆会把素材库淹掉。
+	check("素材提示词声明一次一条是硬要求", materialPrompt.includes("一次一条是硬要求"));
+	check("素材提示词默认只落一条", materialPrompt.includes("只落 1 条"));
+	check("素材提示词按内容定条数", materialPrompt.includes("条数由内容决定"));
+	check("素材提示词给成组留了口子", materialPrompt.includes("按内容该拆几条就拆几条"));
 
 	const chapter = final.outline.find((c) => c.id === "ch01")!;
 	const assembled = chapter.materialIds
