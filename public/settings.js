@@ -722,9 +722,13 @@ function renderBuiltinDetail(box, provider, status) {
 			"sub",
 			status?.error
 				? `注册失败：${status.error}`
-				: `内置供应商，模型目录由应用维护（当前 ${status?.modelCount ?? 0} 个）。` +
-					`环境变量：${(status?.envVars ?? []).join("、") || "无"}` +
-					(status?.baseUrl ? ` · 接入点：${status.baseUrl}` : ""),
+				: provider.modelsSource === "upstream"
+					? `上游实时清单（${status?.modelCount ?? 0} 个）` +
+						(provider.modelsFetchedAt ? ` · ${new Date(provider.modelsFetchedAt).toLocaleString("zh-CN")} 拉取` : "") +
+						` · 接入点：${status?.baseUrl ?? "未配置"}`
+					: `内置供应商，模型目录由应用维护（当前 ${status?.modelCount ?? 0} 个）。` +
+						`环境变量：${(status?.envVars ?? []).join("、") || "无"}` +
+						(status?.baseUrl ? ` · 接入点：${status.baseUrl}` : ""),
 		),
 	);
 
@@ -768,6 +772,22 @@ function renderBuiltinDetail(box, provider, status) {
 		await saveProvider(provider.id, { apiKey: keyInput.value.trim() });
 	});
 	actions.append(save);
+
+	// 与自定义厂商相同：用接入点 + 已保存的 Key 真去请求 /models。
+	const pull = el("button", "btn btn-sm", "从上游拉取模型");
+	pull.addEventListener("click", () => pullModels(provider.id, box));
+	actions.append(pull);
+	if (provider.modelsSource === "upstream") {
+		const restore = el("button", "btn btn-ghost btn-sm", "恢复内置目录");
+		restore.addEventListener("click", async () => {
+			await operation("正在恢复内置目录…", async () => {
+				await api(`/api/providers/${provider.id}/models/catalog`, { method: "POST" });
+				await refresh();
+				notifyChanged();
+			});
+		});
+		actions.append(restore);
+	}
 
 	if (status?.authSource === "app") {
 		const clear = el("button", "btn btn-ghost btn-sm", "清除已保存的 Key");
@@ -1731,8 +1751,8 @@ async function pullModels(providerId, box) {
 
 async function testConnection(providerId, box) {
 	const config = view.data.providers.find((p) => p.id === providerId);
-	if (!config || config.kind !== "custom") {
-		noticeBox(box, "内置供应商没有独立的探测接口，请直接保存后尝试一次对话。");
+	if (!config) {
+		noticeBox(box, "找不到这个供应商。", "err");
 		return;
 	}
 	noticeBox(box, "正在测试连接…");

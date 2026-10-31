@@ -10,8 +10,8 @@ import path from "node:path";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
 import { buildCustomProvider, buildThinkingLevelMap, toModel } from "../src/ai/custom-provider.ts";
 import { mergeFetched } from "../src/ai/fetch-models.ts";
-import { FileCredentialStore } from "../src/config/credential-store.ts";
-import { SettingsStore } from "../src/config/settings-store.ts";
+import { FileCredentialStore } from "../src/config/credential-disk.ts";
+import { SettingsStore } from "../src/config/settings-disk.ts";
 import { DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_TOKENS, emptyModel, emptySettings, normalizeSettings, type ModelConfig, type ProviderConfig } from "../src/config/settings.ts";
 import { BUILTIN_PROVIDERS, builtinGroup, syncBuiltinProviders } from "../src/ai/models.ts";
 
@@ -212,6 +212,45 @@ try {
 	const fresh = syncBuiltinProviders(normalizeSettings(null), "deepseek/deepseek-chat");
 	check("空配置预置 42 个", fresh.providers.length === 42, String(fresh.providers.length));
 	check("空配置采用环境变量默认模型", fresh.defaultModel === "deepseek/deepseek-chat");
+
+	// 收编：早先手工配成自定义的 CTTAI 中转，应就地变回内置推荐项
+	console.log("\n自定义条目收编为内置");
+	const handmade = normalizeSettings({
+		providers: [
+			{
+				id: "cttai",
+				label: "cttai",
+				kind: "custom",
+				baseUrl: "https://llmapi.cttai.art/v1/",
+				api: "openai-completions",
+				models: [emptyModel("deepseek-v4.1-flash")],
+				enabled: true,
+				updatedAt: 3,
+			},
+			{
+				id: "cttai-backup",
+				label: "另一家中转",
+				kind: "custom",
+				baseUrl: "https://llmapi.cttai.art/v1",
+				api: "openai-completions",
+				models: [],
+				enabled: true,
+				updatedAt: 0,
+			},
+		],
+	});
+	const adopted = syncBuiltinProviders(handmade, "");
+	const adoptedCttai = adopted.providers.find((p) => p.id === "cttai");
+	check("同名同接入点的自定义被收编为内置", adoptedCttai?.kind === "builtin", adoptedCttai?.kind);
+	check("收编后带上了 builtinId", adoptedCttai?.builtinId === "cttai", adoptedCttai?.builtinId);
+	check("标签是 id 原文时换成内置展示名", adoptedCttai?.label === "CTTAI 中转（推荐）", adoptedCttai?.label);
+	check("收编保留用户的模型参数覆盖", adoptedCttai?.models.length === 1);
+	check("收编保留 updatedAt", adoptedCttai?.updatedAt === 3);
+	check(
+		"id 对不上的条目不动",
+		adopted.providers.find((p) => p.id === "cttai-backup")?.kind === "custom",
+	);
+	check("内置 cttai 不会被重复追加", adopted.providers.filter((p) => p.id === "cttai").length === 1);
 
 	// ---------------------------------------------------------------- 自定义 provider
 	console.log("\n自定义 provider 构造");

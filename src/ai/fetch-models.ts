@@ -71,9 +71,11 @@ export async function fetchUpstreamModels(input: {
 	apiKey?: string;
 	/** 为 true 时允许无 key 拉取，用于自建服务。 */
 	noAuthRequired?: boolean;
+	/** 浏览器本地模式在这里注入经 /api/llm 的 fetch；Node 默认直接访问上游。 */
+	fetchImpl?: typeof globalThis.fetch;
 	signal?: AbortSignal;
 }): Promise<FetchedModel[]> {
-	const { baseUrl, api, apiKey, noAuthRequired, signal } = input;
+	const { baseUrl, api, apiKey, noAuthRequired, fetchImpl = globalThis.fetch, signal } = input;
 	if (!baseUrl.trim()) throw new ModelFetchError("请先填写 Base URL");
 	if (!apiKey?.trim() && !noAuthRequired) throw new ModelFetchError("请先填写 API Key");
 	// 无鉴权时仍需要一个占位头：不少自建服务（如 LM Studio）要求该头存在才肯响应。
@@ -86,7 +88,7 @@ export async function fetchUpstreamModels(input: {
 	let response: Response | undefined;
 	for (let attempt = 0; attempt < 3; attempt++) {
 		try {
-			response = await fetch(url, { headers: headersFor(api, auth), signal: abort });
+			response = await fetchImpl(url, { headers: headersFor(api, auth), signal: abort });
 		} catch (error) {
 			// 调用方主动取消要原样抛出去，不要包装成"连接失败"。
 			if (signal?.aborted) throw error;
@@ -297,6 +299,21 @@ export function mergeFetched(existing: ModelConfig[], fetched: FetchedModel[]): 
 	models.push(...byId.values());
 
 	return { models, added, backfilled };
+}
+
+/**
+ * 内置厂商拉取上游清单：完整采用上游给出的模型集合。
+ *
+ * 不能沿用 mergeFetched 的"把没出现的旧模型留在末尾"：那会把静态目录里
+ * 实际上没有权限的模型混进实时清单，看起来就像已经拉到了全部可用模型。
+ * 同名旧条目的限制、价格、思考档位仍保留，作者手工核对过的值不会丢。
+ */
+export function replaceWithFetched(existing: ModelConfig[], fetched: FetchedModel[]): ModelConfig[] {
+	const previous = new Map(existing.map((model) => [model.id, model]));
+	return mergeFetched(
+		fetched.map((model) => previous.get(model.id) ?? emptyModel(model.id, model.name)),
+		fetched,
+	).models;
 }
 
 /** 一个模型是否声称支持思考。 */

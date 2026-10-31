@@ -4,6 +4,15 @@
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.33.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cttailearn/novel-studio.git"
+  },
+  "homepage": "https://github.com/cttailearn/novel-studio#readme",
+  "bugs": {
+    "url": "https://github.com/cttailearn/novel-studio/issues"
+  },
+  "license": "MIT",
   "engines": {
     "node": ">=22.6"
   },
@@ -18,7 +27,13 @@
     "test:storage": "node --experimental-strip-types scripts/storage-check.ts",
     "test:frontend": "node --experimental-vm-modules scripts/frontend-contracts.mjs",
     "test:context": "node --experimental-strip-types scripts/ai-context-check.ts",
-    "test": "pnpm typecheck && pnpm test:config && pnpm test:tools && pnpm test:context && pnpm test:storage && pnpm test:server && pnpm test:loop && pnpm test:frontend"
+    "test:idb": "node --experimental-strip-types scripts/idb-storage-check.ts && node --experimental-strip-types scripts/idb-stores-check.ts",
+    "test:package": "node --experimental-strip-types scripts/novel-package-check.ts",
+    "test:local": "node --experimental-strip-types scripts/local-api-check.ts",
+    "test:relay": "node --experimental-strip-types scripts/relay-check.ts",
+    "build:browser": "node --experimental-strip-types scripts/browser-build.ts",
+    "test:browser": "node --experimental-strip-types scripts/browser-build-check.ts",
+    "test": "pnpm typecheck && pnpm test:config && pnpm test:tools && pnpm test:context && pnpm test:storage && pnpm test:server && pnpm test:loop && pnpm test:frontend && pnpm test:idb && pnpm test:package && pnpm test:local && pnpm test:relay"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "1.2.0",

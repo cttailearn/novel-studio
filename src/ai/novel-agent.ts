@@ -1,7 +1,8 @@
 import { Agent, type AgentMessage, type ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model, Models } from "@earendil-works/pi-ai";
 import type { AppConfig } from "../config/env.ts";
-import { assembledMaterials, kindLabel, type ChapterDraft, type ChapterMeta, type Project, type ProjectStore } from "../store/project.ts";
+import { assembledMaterials, kindLabel, type ChapterDraft, type ChapterMeta, type Project } from "../store/project.ts";
+import type { ProjectStorePort } from "../store/store-port.ts";
 import type { MaterialLibrary } from "../store/library.ts";
 import {
 	buildContextDigest,
@@ -23,7 +24,7 @@ import { createWebSearchTools, type WebSearchClient, type WebSearchConfig } from
 export type AgentRole = "material" | "writing";
 
 export interface NovelAgentOptions {
-	store: ProjectStore;
+	store: ProjectStorePort;
 	projectId: string;
 	model: Model<any>;
 	models: Models;
@@ -318,7 +319,7 @@ async function writingContextOf(options: NovelAgentOptions, project: Project): P
 
 /** 把磁盘上的正文组装成提示词与工具之间传的那种形状（正文 + 小结 + 版本）。 */
 async function loadDraftShape(
-	store: ProjectStore,
+	store: ProjectStorePort,
 	projectId: string,
 	chapterId: string,
 	meta: ChapterMeta,

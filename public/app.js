@@ -1962,7 +1962,10 @@ async function openTrashDialog() {
 					await api("/api/projects/trash/" + encodeURIComponent(project.id) + "/restore", { method: "POST" });
 					toast("已恢复《" + project.title + "》");
 					closeDialog($("trash-dialog"));
-					await loadProjects();
+					// 恢复后案上多了一部，库里的取用情况也跟着变了。
+					await reloadProjects();
+					await reloadLibrary();
+					renderView();
 				} catch (error_) {
 					error.textContent = error_.message;
 				}
@@ -2338,6 +2341,7 @@ function renderFrontMatter(box, project) {
 	);
 	// 总目这一页是「整本」的地盘，成册的出口放这里最顺手。
 	$("stage-actions").append(button("导出全书", "btn btn-quiet btn-sm", () => openExportDialog(null)));
+	$("stage-actions").append(button("备份", "btn btn-quiet btn-sm", () => openBackupDialog()));
 
 	const page = el("div", "front-matter");
 	const head = el("div", "front-head");
@@ -2860,6 +2864,113 @@ function exportName(res) {
 		}
 	}
 	return (header.match(/filename="?([^";]+)"?/i) ?? [])[1] ?? "";
+}
+
+// ── 备份与恢复
+
+/**
+ * 备份对话框。
+ *
+ * 多用户模式下所有数据都在这个浏览器里，服务端一份不留。好处是不用信任服务器，
+ * 代价是换机器、换浏览器、点一次「清除站点数据」就真的没了 ——
+ * 所以这个出口必须摆在一个看得见的地方，而不是藏在设置深处。
+ */
+function openBackupDialog() {
+	const form = $("backup-form");
+	form.reset();
+	$("backup-error").textContent = "";
+	$("backup-status").textContent = "";
+	const book = form.querySelector('input[name="scope"][value="book"]');
+	// 案上没有作品时，"只导这一部"无从谈起，直接落到整个工作区。
+	book.disabled = !state.projectId;
+	if (!state.projectId) form.querySelector('input[name="scope"][value="all"]').checked = true;
+	$("backup-status").textContent = state.projectId
+		? "当前：《" + (state.project?.title ?? "未命名") + "》"
+		: "案上还没有作品，导入一份备份就能开工。";
+	openDialog($("backup-dialog"));
+}
+
+/**
+ * 导出一份 `.novel` 备份。
+ *
+ * 走 fetch 而不是 <a download> 直接指过去，理由和 txt 导出一样：
+ * 失败时服务端会回一句人话（口令漏了、单部导出不能带密钥），
+ * 直接跳过去就只能看到一页看不懂的 JSON。
+ */
+async function exportBackup(options) {
+	// 先把编辑框里的字落盘，否则备份比屏幕上少一段，这份备份就不可信了。
+	if (!(await flushEditor())) return false;
+	const params = new URLSearchParams();
+	const scope = options.scope === "book" && state.projectId ? "book" : "all";
+	if (scope === "book") params.set("project", state.projectId);
+	if (options.passphrase) params.set("passphrase", options.passphrase);
+	if (options.includeCredentials) params.set("credentials", "1");
+	try {
+		const res = await fetch("/api/novel/export?" + params.toString());
+		if (!res.ok) {
+			const detail = await res.json().catch(() => null);
+			throw new Error(detail?.error || "导出失败（" + res.status + "）");
+		}
+		const blob = await res.blob();
+		const url = URL.createObjectURL(blob);
+		const link = document.createElement("a");
+		link.href = url;
+		const name = exportName(res) || (scope === "book" ? "novel.novel" : "novel-studio.novel");
+		link.download = name;
+		document.body.append(link);
+		link.click();
+		link.remove();
+		setTimeout(() => URL.revokeObjectURL(url), 10_000);
+		toast("已导出备份：" + name, "ok", 3600);
+		return true;
+	} catch (error) {
+		const said = describeFailure(error, { retry: false });
+		$("backup-error").textContent = "导出失败：" + said;
+		toast("导出失败：" + said, "error", 6000);
+		return false;
+	}
+}
+
+/**
+ * 把一份 `.novel` 备份读回来。
+ *
+ * 请求体就是文件字节本身，不经 multipart：少一层解析就少一处能把大文件读爆的地方。
+ * 导完立刻把案上的清单重取一遍并重绘 —— 否则作者会以为什么都没发生。
+ */
+async function importBackup(file, options) {
+	const params = new URLSearchParams();
+	if (options.onConflict) params.set("onConflict", options.onConflict);
+	if (options.passphrase) params.set("passphrase", options.passphrase);
+	const status = $("backup-status");
+	status.textContent = "正在读入 " + file.name + "…";
+	try {
+		const res = await fetch("/api/novel/import?" + params.toString(), {
+			method: "POST",
+			headers: { "content-type": "application/octet-stream" },
+			body: await file.arrayBuffer(),
+		});
+		const data = await res.json().catch(() => ({}));
+		if (!res.ok) throw new Error(data.error || "导入失败（" + res.status + "）");
+		const bits = [
+			"导入 " + (data.projects ?? 0) + " 部作品",
+			(data.chapters ?? 0) + " 章",
+			(data.materials ?? 0) + " 条素材",
+		];
+		if (data.skipped) bits.push("跳过 " + data.skipped + " 项");
+		const warnings = Array.isArray(data.warnings) ? data.warnings : [];
+		status.textContent = bits.join("、") + (warnings.length ? "；" + warnings.slice(0, 2).join("；") : "");
+		toast("已导入：" + (data.projects ?? 0) + " 部作品", "ok", 3600);
+		await reloadProjects();
+		await reloadLibrary();
+		renderView();
+		return true;
+	} catch (error) {
+		const said = describeFailure(error, { retry: false });
+		status.textContent = "";
+		$("backup-error").textContent = "导入失败：" + said;
+		toast("导入失败：" + said, "error", 6000);
+		return false;
+	}
 }
 
 // ── 版本
@@ -3473,7 +3584,8 @@ async function reloadProjectCatching(onError) {
 async function handleFiles(files, scope = "material") {
 	if (scope === "material" && !state.projectId) return;
 	for (const file of files) {
-		const entry = { id: crypto.randomUUID(), filename: file.name, status: "loading", scope };
+		// 不能用 crypto.randomUUID()：手机通过局域网 http:// 打开时它不存在（只有安全上下文才有）。
+		const entry = { id: newRequestId(), filename: file.name, status: "loading", scope };
 		state.uploads.unshift(entry);
 		renderUploads(scope);
 		try {
@@ -4570,6 +4682,7 @@ function newRequestId() {
 	if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
 	return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 12);
 }
+
 async function runWrite(mode, note, chapterOverride, options = {}) {
 	// 只看执笔者这块：设定官在邻栏备料，不该把成文按钮锁住。
 	if (streamBusy("writing")) return;
@@ -6485,6 +6598,19 @@ let paletteItems = [];
 let paletteIndex = 0;
 
 /** 面板里的动作。当前没有作品时，与作品相关的动作自动隐藏。 */
+// 仓库地址只写一处：案头页脚的那条外链摆在 HTML 里，命令面板走这个函数。
+const REPOSITORY_URL = "https://github.com/cttailearn/novel-studio";
+
+/**
+ * 打开源码仓库。
+ *
+ * 用 window.open 而不是 location.href：写作台里可能正开着未保存的稿子，
+ * 整页导航走一趟等于把它们全押在 beforeunload 上，不值。
+ */
+function openRepository() {
+	window.open(REPOSITORY_URL, "_blank", "noopener,noreferrer");
+}
+
 function paletteActions() {
 	const actions = [
 		{ group: "动作", label: "切到文稿", hint: "稿", run: () => switchView("manuscript") },
@@ -6493,6 +6619,7 @@ function paletteActions() {
 		{ group: "动作", label: "打开设置", hint: "模型与供应商", run: () => $("open-settings").click() },
 		{ group: "动作", label: "键盘快捷键", hint: "?", run: openShortcutsDialog },
 		{ group: "动作", label: "切换昼夜", hint: "主题", run: () => toggleTheme() },
+		{ group: "动作", label: "GitHub 仓库", hint: "源码与反馈", run: openRepository },
 	];
 	if (state.project) {
 		actions.push(
@@ -6501,10 +6628,12 @@ function paletteActions() {
 			{ group: "动作", label: "排版", hint: "字号、行距、版心", run: openTypeDialog },
 			{ group: "动作", label: state.focusMode ? "退出专注模式" : "进入专注模式", hint: "Esc 退出", run: () => setFocusMode(!state.focusMode) },
 			{ group: "动作", label: "存照与回滚", hint: "工程级快照", run: () => void openSnapshotDialog(state.project) },
+			{ group: "动作", label: "备份与恢复", hint: ".novel 备份包", run: openBackupDialog },
 			{ group: "动作", label: "回案头", hint: "卷宗与通用素材库", run: () => leaveWorkspace() },
 		);
 	} else {
 		actions.push({ group: "动作", label: "另起一卷", hint: "新建作品", run: () => openProjectDialog(null) });
+		actions.push({ group: "动作", label: "导入备份", hint: ".novel 备份包", run: openBackupDialog });
 	}
 	return actions;
 }
@@ -7024,6 +7153,48 @@ $("export-form").addEventListener("submit", async (event) => {
 	submit.disabled = true;
 	try {
 		if (await exportProject(chapterId, format)) closeDialog($("export-dialog"));
+	} finally {
+		submit.disabled = false;
+	}
+});
+$("backup-cancel").addEventListener("click", () => closeDialog($("backup-dialog")));
+$("backup-import").addEventListener("click", () => $("backup-file").click());
+// 选了文件立刻开导：这一步没有可调的东西，多一次"确定"只是多一次犹豫。
+$("backup-file").addEventListener("change", async (event) => {
+	const file = event.target.files?.[0];
+	// 清掉值，同一个文件才能再选一次（否则 change 不会再触发）。
+	event.target.value = "";
+	if (!file) return;
+	const form = $("backup-form");
+	const onConflict = form.querySelector('input[name="conflict"]:checked')?.value ?? "skip";
+	const passphrase = $("backup-passphrase").value.trim();
+	$("backup-error").textContent = "";
+	await importBackup(file, { onConflict, passphrase: passphrase || undefined });
+});
+// "连密钥一起带走"只对整个工作区有意义，换了范围就把勾去掉并锁上。
+$("backup-scope").addEventListener("change", () => {
+	const all = $("backup-form").querySelector('input[name="scope"]:checked')?.value === "all";
+	const box = $("backup-credentials");
+	box.disabled = !all;
+	if (!all) box.checked = false;
+});
+$("backup-form").addEventListener("submit", async (event) => {
+	event.preventDefault();
+	const form = event.currentTarget;
+	const scope = form.querySelector('input[name="scope"]:checked')?.value ?? "all";
+	const passphrase = $("backup-passphrase").value.trim();
+	const includeCredentials = $("backup-credentials").checked;
+	const submit = form.querySelector("button[type=submit]");
+	$("backup-error").textContent = "";
+	if (includeCredentials && !passphrase) {
+		$("backup-error").textContent = "要连 API 密钥一起带走，必须先给一个口令 —— 密钥是用它加密的。";
+		return;
+	}
+	submit.disabled = true;
+	try {
+		if (await exportBackup({ scope, passphrase: passphrase || undefined, includeCredentials })) {
+			closeDialog($("backup-dialog"));
+		}
 	} finally {
 		submit.disabled = false;
 	}

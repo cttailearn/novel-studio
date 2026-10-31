@@ -66,6 +66,10 @@ export interface ProviderConfig {
 	api?: ApiFormat;
 	/** 自建或本地服务不需要鉴权时置 true，会跳过 Key 校验。 */
 	noAuthRequired?: boolean;
+	/** 内置厂商：catalog 为静态目录；upstream 为最后一次用 URL + Key 拉到的实时清单。 */
+	modelsSource?: "catalog" | "upstream";
+	/** 上游清单最后一次拉取成功的时间（毫秒）。仅 modelsSource=upstream 时有意义。 */
+	modelsFetchedAt?: number;
 	models: ModelConfig[];
 	enabled: boolean;
 	updatedAt: number;
@@ -164,6 +168,10 @@ export function normalizeSettings(raw: unknown): Settings {
 							? { api: provider.api as ApiFormat }
 							: {}),
 						...(kind === "custom" && provider.noAuthRequired === true ? { noAuthRequired: true } : {}),
+					...(kind === "builtin" && provider.modelsSource === "upstream" ? { modelsSource: "upstream" as const } : {}),
+					...(kind === "builtin" && typeof provider.modelsFetchedAt === "number" && Number.isFinite(provider.modelsFetchedAt)
+						? { modelsFetchedAt: provider.modelsFetchedAt }
+						: {}),
 						models: Array.isArray(provider.models) ? provider.models.filter(Boolean).map(normalizeModel) : [],
 						enabled: provider.enabled !== false,
 						updatedAt: typeof provider.updatedAt === "number" ? provider.updatedAt : 0,

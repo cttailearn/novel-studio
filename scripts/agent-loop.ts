@@ -13,7 +13,7 @@ import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@ear
 import type { AgentEvent, AgentMessage } from "@earendil-works/pi-agent-core";
 import { createNovelAgent, trimConversation } from "../src/ai/novel-agent.ts";
 import type { AskBroker, AskRequest } from "../src/ai/ask.ts";
-import { ProjectStore } from "../src/store/project.ts";
+import { ProjectStore } from "../src/store/project-disk.ts";
 import { readConfig } from "../src/config/env.ts";
 
 let failures = 0;

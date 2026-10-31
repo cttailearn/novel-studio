@@ -364,6 +364,16 @@
 							</form>
 						</div>
 					</div>
+
+					<!-- 案头页脚：作品文件与源码各在哪，是第一次打开这个页面的人
+					     最该知道的两件事，所以摆在进书之前的落脚页上。 -->
+					<footer class="bench-foot">
+						<p class="bench-foot-note">
+							墨耕 · Novel Studio —— 开源在
+							<a class="bench-foot-link" href="https://github.com/cttailearn/novel-studio" target="_blank" rel="noreferrer noopener">GitHub</a>
+							，MIT 许可。想自己部署，见仓库里的 <code>docs/deployment.md</code>。
+						</p>
+					</footer>
 				</section>
 
 				<section id="view-manuscript" class="view" role="tabpanel" aria-labelledby="tab-manuscript" aria-label="文稿"></section>
@@ -869,6 +879,55 @@
 			</form>
 		</dialog>
 
+		<!--
+			备份与恢复。
+			多用户模式下所有数据都在这个浏览器里，服务端一份不留 —— 好处是不用信任服务器，
+			代价是换机器、换浏览器、清一次站点数据就真的没了。所以这个出口必须看得见。
+		-->
+		<dialog id="backup-dialog" class="sheet sheet-form export-dialog">
+			<form id="backup-form">
+				<header class="form-head">
+					<h3>备份与恢复</h3>
+					<p class="form-hint">作品、素材、设置都只存在这个浏览器里；服务端不留副本，所以换设备之前请先导出一份。</p>
+				</header>
+				<div class="form-body">
+					<div class="field">
+						<span class="field-label">导出范围</span>
+						<div class="seg" id="backup-scope">
+							<label><input type="radio" name="scope" value="book" checked /> 只导这一部</label>
+							<label><input type="radio" name="scope" value="all" /> 整个工作区</label>
+						</div>
+					</div>
+					<div class="field">
+						<span class="field-label">口令</span>
+						<input type="password" id="backup-passphrase" placeholder="留空则不加密" autocomplete="new-password" />
+					</div>
+					<label class="check">
+						<input type="checkbox" id="backup-credentials" />
+						连 API 密钥一起带走（必须先给口令；只对整个工作区有效）
+					</label>
+					<div class="field">
+						<span class="field-label">导入时重名怎么办</span>
+						<div class="seg" id="backup-conflict">
+							<label><input type="radio" name="conflict" value="skip" checked /> 跳过</label>
+							<label><input type="radio" name="conflict" value="rename" /> 导成新的一份</label>
+							<label><input type="radio" name="conflict" value="replace" /> 覆盖</label>
+						</div>
+					</div>
+					<p id="backup-status" class="field-note"></p>
+				</div>
+				<footer class="form-foot">
+					<p id="backup-error" class="form-error"></p>
+					<div class="dialog-actions">
+						<button type="button" class="btn btn-quiet" id="backup-cancel">作罢</button>
+						<button type="button" class="btn btn-quiet" id="backup-import">导入备份…</button>
+						<input type="file" id="backup-file" accept=".novel,application/octet-stream" hidden />
+						<button type="submit" class="btn btn-ink">导出备份</button>
+					</div>
+				</footer>
+			</form>
+		</dialog>
+
 		<!-- 排版：只影响读稿与改稿的呈现，不动正文一个字 -->
 		<dialog id="type-dialog" class="sheet sheet-form type-dialog">
 			<header class="form-head">
@@ -946,6 +1005,26 @@
 			</footer>
 		</dialog>
 
+		<!-- 浏览器本地模式（?local=1，或 localStorage 里把 mode 记成 local）用的模块映射。
+		     页面自己（/app.js 与 /settings.js）是原生脚本、没有 import，所以平时这份映射
+		     不参与；只有 boot.js 决定接管、懒加载 /browser/local-api.js 时才会用到。
+		     这份表必须与 public/browser/vendor/importmap.json 完全一致 ——
+		     两边都由 scripts/browser-build.ts 产出，scripts/browser-build-check.ts 会校验。 -->
+		<script type="importmap">
+			{
+				"imports": {
+					"@earendil-works/pi-ai": "/browser/vendor/pi-ai/shim.js",
+					"@earendil-works/pi-agent-core": "/browser/vendor/pi-agent-core/index.js",
+					"typebox/compile": "/browser/vendor/typebox/compile.js",
+					"typebox/value": "/browser/vendor/typebox/value.js",
+					"partial-json": "/browser/vendor/partial-json.js"
+				}
+			}
+		</script>
+		<!-- 这一行必须排在 /app.js 前面：本地模式靠它包裹 window.fetch，
+		     把同源的 /api/*（/api/llm 除外）接进浏览器里跑，一个字节不出本机。
+		     非本地模式下它什么也不做，连 /browser/local-api.js 都不会去取。 -->
+		<script src="/boot.js"></script>
 		<script type="module" src="/app.js"></script>
 	</body>
 </html>

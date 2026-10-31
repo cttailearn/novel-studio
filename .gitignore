@@ -47,6 +47,11 @@ uploads/
 public/uploads/
 storage/
 
+# ---- 浏览器端构建产物 ----
+# pnpm build:browser 生成：自家 TS 的转译结果 + pi-agent-core / pi-ai / typebox 的 vendor 副本。
+# 不进版本库（第三方代码会腐坏），部署时在目标机上跑一次即可。
+public/browser/
+
 # ---- 编辑器与系统 ----
 .DS_Store
 Thumbs.db

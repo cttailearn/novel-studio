@@ -17,11 +17,13 @@ import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { gunzipSync } from "node:zlib";
-import { ProjectStore, encodeFileName, projectStats, type ChapterDraft } from "../src/store/project.ts";
-import { MaterialLibrary } from "../src/store/library.ts";
+import { encodeFileName, projectStats, type ChapterDraft } from "../src/store/project.ts";
+import { ProjectStore } from "../src/store/project-disk.ts";
+import { MaterialLibrary } from "../src/store/library-disk.ts";
 import { createWritingTools } from "../src/ai/tools.ts";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { RECORDS_KEEP, RecordStore } from "../src/server/records.ts";
+import { RECORDS_KEEP } from "../src/server/records.ts";
+import { RecordStore } from "../src/server/records-disk.ts";
 
 let failed = 0;
 function check(label: string, ok: boolean, detail = ""): void {

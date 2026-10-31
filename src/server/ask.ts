@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
 import type { AskBroker, AskRequest } from "../ai/ask.ts";
+import { newId } from "../store/project.ts";
 
 /**
  * 提问挂多久算作者不在。
@@ -35,7 +35,7 @@ interface PendingQuestion {
 	question: string;
 	options: string[];
 	settle: (answer: string, reason: QuestionClosedReason) => void;
-	timer: NodeJS.Timeout;
+	timer: ReturnType<typeof setTimeout>;
 }
 
 /**
@@ -72,7 +72,7 @@ export class AskChannel implements AskBroker {
 	}
 
 	ask(request: AskRequest, signal?: AbortSignal): Promise<string> {
-		const id = randomUUID();
+		const id = newId();
 		const options = request.options ?? [];
 		return new Promise<string>((resolve) => {
 			let settled = false;

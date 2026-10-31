@@ -1559,7 +1559,8 @@ try {
 	check("自建种类拼地址做了转义（id 可能是中文）", appSource.includes("/api/kinds/\" + encodeURIComponent("));
 	const toolsSource = readFileSync(path.join(root, "src", "ai", "tools.ts"), "utf8");
 	check("智能体的 kind 枚举取自种类目录", toolsSource.includes("function materialKindSchema") && toolsSource.includes("kindOptions()"));
-	const kindsStore = readFileSync(path.join(root, "src", "store", "kinds.ts"), "utf8");
+	// 落盘那套写法搬到了 kinds-disk.ts（纯模型留在 kinds.ts），所以这里看磁盘实现那份。
+	const kindsStore = readFileSync(path.join(root, "src", "store", "kinds-disk.ts"), "utf8");
 	check(
 		"种类表落盘用临时名 + rename",
 		kindsStore.includes(".tmp") && kindsStore.includes("rename("),

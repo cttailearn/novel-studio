@@ -6,7 +6,6 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
-	ProjectStore,
 	assembledMaterials,
 	countWords,
 	emptyProject,
@@ -16,12 +15,14 @@ import {
 	type ChapterDraft,
 	type Material,
 } from "../src/store/project.ts";
-import { libraryFieldsOf, materialFromLibrary, MaterialLibrary } from "../src/store/library.ts";
+import { ProjectStore } from "../src/store/project-disk.ts";
+import { libraryFieldsOf, materialFromLibrary } from "../src/store/library.ts";
+import { MaterialLibrary } from "../src/store/library-disk.ts";
 import { createLibraryTools, createMaterialTools, createWritingTools } from "../src/ai/tools.ts";
 import { buildContextDigest, buildLibrarySystemPrompt, buildMaterialSystemPrompt, buildWritingSystemPrompt } from "../src/ai/prompts.ts";
 import { BUILTIN_PROVIDERS, getModels, initModelRuntime } from "../src/ai/models.ts";
-import { FileCredentialStore } from "../src/config/credential-store.ts";
-import { SettingsStore } from "../src/config/settings-store.ts";
+import { FileCredentialStore } from "../src/config/credential-disk.ts";
+import { SettingsStore } from "../src/config/settings-disk.ts";
 import { ensureDefaultSettings } from "../src/ai/models.ts";
 import { extractText, MAX_INFLATED_BYTES, MAX_TEXT_CHARS, UnsupportedUploadError, UploadTooLargeError } from "../src/server/upload.ts";
 import { deflateRawSync } from "node:zlib";
@@ -584,41 +585,41 @@ try {
 
 	// ---- 上传解析 ----
 	console.log("\n上传解析");
-	const plain = extractText("设定.md", Buffer.from("# 标题\n\n正文。", "utf8"));
+	const plain = await extractText("设定.md", Buffer.from("# 标题\n\n正文。", "utf8"));
 	check("文本按 UTF-8 解码", plain.text.includes("正文。"), plain.text);
 	check("标题取自文件名", plain.title === "设定" && plain.format === "text");
-	check("BOM 被剥掉", extractText("a.txt", Buffer.from("\uFEFF内容", "utf8")).text === "内容");
-	check("多余空行被折叠", extractText("a.txt", Buffer.from("甲\n\n\n\n乙", "utf8")).text === "甲\n\n乙");
+	check("BOM 被剥掉", (await extractText("a.txt", Buffer.from("\uFEFF内容", "utf8"))).text === "内容");
+	check("多余空行被折叠", (await extractText("a.txt", Buffer.from("甲\n\n\n\n乙", "utf8"))).text === "甲\n\n乙");
 
-	const fromHtml = extractText("notes.html", Buffer.from("<html><body><p>第一段</p><p>第二段</p></body></html>", "utf8"));
+	const fromHtml = await extractText("notes.html", Buffer.from("<html><body><p>第一段</p><p>第二段</p></body></html>", "utf8"));
 	check("html 剥标签并分段", fromHtml.text === "第一段\n第二段", fromHtml.text);
-	check("script 内容不进正文", !extractText("a.html", Buffer.from("<p>x</p><script>var a=1;</script>", "utf8")).text.includes("var a"));
+	check("script 内容不进正文", !(await extractText("a.html", Buffer.from("<p>x</p><script>var a=1;</script>", "utf8"))).text.includes("var a"));
 
 	const docxXml =
 		'<?xml version="1.0"?><w:document xmlns:w="http://x"><w:body>' +
 		"<w:p><w:r><w:t>裴渡，二十九岁</w:t></w:r></w:p>" +
 		"<w:p><w:r><w:t>核载二十人</w:t></w:r><w:br/><w:r><w:t>第二行</w:t></w:r></w:p>" +
 		"</w:body></w:document>";
-	const fromDocx = extractText("人物表.docx", makeZip("word/document.xml", docxXml, true));
+	const fromDocx = await extractText("人物表.docx", makeZip("word/document.xml", docxXml, true));
 	check("docx 解出文字", fromDocx.text.includes("裴渡，二十九岁"), fromDocx.text);
 	check("docx 段落各自成行", fromDocx.text.split("\n").length === 3, JSON.stringify(fromDocx.text));
 	check("docx 行内 br 换成换行", fromDocx.text.includes("核载二十人\n第二行"));
 	check("docx 格式与标题", fromDocx.format === "docx" && fromDocx.title === "人物表");
-	check("docx 实体已解码", extractText("e.docx", makeZip("word/document.xml", "<w:p><w:t>甲&amp;乙</w:t></w:p>", false)).text === "甲&乙");
-	check("未压缩条目也能读", extractText("s.docx", makeZip("word/document.xml", "<w:p><w:t>甲</w:t></w:p>", false)).text === "甲");
+	check("docx 实体已解码", (await extractText("e.docx", makeZip("word/document.xml", "<w:p><w:t>甲&amp;乙</w:t></w:p>", false))).text === "甲&乙");
+	check("未压缩条目也能读", (await extractText("s.docx", makeZip("word/document.xml", "<w:p><w:t>甲</w:t></w:p>", false))).text === "甲");
 
-	const rejected = (() => {
+	const rejected = await (async () => {
 		try {
-			extractText("a.pdf", Buffer.from("%PDF-1.4", "utf8"));
+			await extractText("a.pdf", Buffer.from("%PDF-1.4", "utf8"));
 			return "";
 		} catch (error) {
 			return (error as Error).message;
 		}
 	})();
 	check("pdf 明确拒绝并给出去路", rejected.includes(".pdf") && rejected.includes(".docx"), rejected);
-	const brokenZip = (() => {
+	const brokenZip = await (async () => {
 		try {
-			extractText("a.docx", Buffer.from("not a zip", "utf8"));
+			await extractText("a.docx", Buffer.from("not a zip", "utf8"));
 			return "";
 		} catch (error) {
 			return (error as Error).message;
@@ -626,14 +627,14 @@ try {
 	})();
 	check("坏 docx 报错而不是静默返回空", brokenZip.includes("zip"), brokenZip);
 
-	const long = extractText("long.txt", Buffer.from("字".repeat(MAX_TEXT_CHARS + 10), "utf8"));
+	const long = await extractText("long.txt", Buffer.from("字".repeat(MAX_TEXT_CHARS + 10), "utf8"));
 	check("超长文本被截断并如实回报", long.truncated && long.text.length === MAX_TEXT_CHARS && long.originalChars === MAX_TEXT_CHARS + 10);
 
 	// zip 的偏移与解压体积都来自文件本身：坏文件要报可读的错（而不是 500 或 OOM）。
 	check("解压上限是 64 MB", MAX_INFLATED_BYTES === 64 * 1024 * 1024, String(MAX_INFLATED_BYTES));
-	const bomb = (() => {
+	const bomb = await (async () => {
 		try {
-			extractText("bomb.docx", makeZip("word/document.xml", "<w:p><w:t>炸弹</w:t></w:p>", true, MAX_INFLATED_BYTES + 1));
+			await extractText("bomb.docx", makeZip("word/document.xml", "<w:p><w:t>炸弹</w:t></w:p>", true, MAX_INFLATED_BYTES + 1));
 			return undefined;
 		} catch (error) {
 			return error;
@@ -645,9 +646,9 @@ try {
 	const centralSignature = Buffer.from([0x50, 0x4b, 0x01, 0x02]);
 	const evilOffset = makeZip("word/document.xml", "<w:p><w:t>甲</w:t></w:p>", true);
 	evilOffset.writeUInt32LE(0x7ffffff0, evilOffset.indexOf(centralSignature) + 42);
-	const offsetError = (() => {
+	const offsetError = await (async () => {
 		try {
-			extractText("evil.docx", evilOffset);
+			await extractText("evil.docx", evilOffset);
 			return undefined;
 		} catch (error) {
 			return error;
@@ -661,9 +662,9 @@ try {
 
 	const evilSize = makeZip("word/document.xml", "<w:p><w:t>甲</w:t></w:p>", true);
 	evilSize.writeUInt32LE(0x7ffffff0, evilSize.indexOf(centralSignature) + 20);
-	const sizeError = (() => {
+	const sizeError = await (async () => {
 		try {
-			extractText("evil-size.docx", evilSize);
+			await extractText("evil-size.docx", evilSize);
 			return undefined;
 		} catch (error) {
 			return error;

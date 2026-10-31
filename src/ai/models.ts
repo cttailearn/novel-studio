@@ -47,6 +47,8 @@ import type { SettingsStore } from "../config/settings-store.ts";
 import type { ModelThinkingLevel, ProviderConfig, Settings } from "../config/settings.ts";
 import { isPlaceholderModel, type CostRates } from "../config/settings.ts";
 import { buildCustomProvider } from "./custom-provider.ts";
+import { ModelResolutionError } from "./model-errors.ts";
+import type { ModelSummary, ProviderStatus } from "./model-types.ts";
 
 export interface BuiltinProviderSpec {
 	id: string;
@@ -56,8 +58,9 @@ export interface BuiltinProviderSpec {
 	envVars: readonly string[];
 	/** 设置页展示分组。 */
 	group: BuiltinGroup;
-	/** 内置的固定接入点；目前只有中转内置供应商需要展示。 */
+	/** 实时拉取用的接入点与协议，构建期也会写进浏览器目录。 */
 	baseUrl?: string;
+	api?: import("../config/settings.ts").ApiFormat;
 	create: () => Provider;
 }
 
@@ -150,7 +153,7 @@ export function builtinGroup(id: string): BuiltinGroup {
  */
 export const BUILTIN_PROVIDERS: readonly BuiltinProviderSpec[] = [
 	// ---- 推荐中转：应用内置，不是 pi-ai 目录 ----
-	{ id: "cttai", label: "CTTAI 中转（推荐）", builtinId: "cttai", envVars: ["CTTAI_API_KEY", "LLMAPI_API_KEY"], group: builtinGroup("cttai"), baseUrl: CTTAI_BASE_URL, create: cttaiProvider },
+	{ id: "cttai", label: "CTTAI 中转（推荐）", builtinId: "cttai", envVars: ["CTTAI_API_KEY", "LLMAPI_API_KEY"], group: builtinGroup("cttai"), baseUrl: CTTAI_BASE_URL, api: "openai-completions", create: cttaiProvider },
 
 	// ---- 国际通用 ----
 	{ id: "anthropic", label: "Anthropic", builtinId: "anthropic", envVars: ["ANTHROPIC_API_KEY"], group: builtinGroup("anthropic"), create: anthropicProvider },
@@ -240,7 +243,30 @@ function build(settings: SettingsStore, credentials: FileCredentialStore): Model
 function builtinProviderOf(config: ProviderConfig): Provider {
 	const spec = BUILTIN_PROVIDERS.find((item) => item.builtinId === config.builtinId);
 	if (!spec) throw new Error(`未知的内置 provider：${config.builtinId ?? "未指定"}`);
-	return spec.create();
+	const provider = spec.create();
+	if (config.modelsSource !== "upstream" || config.models.length === 0) return provider;
+
+	// 实时清单是完整替换，而非目录的补充：上游没有返回的模型不再展示。
+	// 只在模型数组这一处做替换，流式、鉴权、上下文限制等仍由内置 provider 负责。
+	const staticModels = new Map(provider.getModels().map((model) => [model.id, model]));
+	const dynamic: Model<Api>[] = [];
+	for (const model of config.models) {
+		const base = staticModels.get(model.id);
+		dynamic.push({
+			...(base ?? {}),
+			id: model.id,
+			name: model.name,
+			api: (base?.api ?? config.api ?? spec.api ?? "openai-completions") as Api,
+			provider: config.id,
+			baseUrl: base?.baseUrl ?? config.baseUrl ?? spec.baseUrl ?? "",
+			input: base?.input ?? ["text"],
+			cost: model.cost,
+			reasoning: model.reasoning,
+			contextWindow: model.contextWindow,
+			maxTokens: model.maxTokens,
+		});
+	}
+	return { ...provider, getModels: () => dynamic };
 }
 
 /** 设置改动后重建注册表。会话持有的 Model 对象需要重建。 */
@@ -271,24 +297,10 @@ export function getCredentialStore(): FileCredentialStore {
 	return getRuntime().credentials;
 }
 
-export interface ModelSummary {
-	/** "providerId/modelId"，唯一键。 */
-	id: string;
-	provider: string;
-	providerLabel: string;
-	providerKind: "builtin" | "custom";
-	modelId: string;
-	name: string;
-	api: string;
-	contextWindow: number;
-	maxTokens: number;
-	reasoning: boolean;
-	thinkingLevels: ModelThinkingLevel[];
-	/** 上下文窗口与输出上限还是占位值，说明这个模型未经人工核对。 */
-	placeholder: boolean;
-	/** 每百万 token 的价格，缺失时为 0。 */
-	cost?: CostRates;
-}
+// 这三个类型与错误类住在轻量模块里，路由层只 import type 它们，
+// 就不必把本文件（42 个内置 provider + 4 个 SDK）拖进浏览器。
+export type { ModelSummary, ProviderAuthSource, ProviderStatus } from "./model-types.ts";
+export { ModelResolutionError } from "./model-errors.ts";
 
 function summarize(model: Model<Api>, settings: Settings): ModelSummary {
 	const config = settings.providers.find((provider) => provider.id === model.provider);
@@ -324,29 +336,6 @@ export async function listAvailableModels(): Promise<ModelSummary[]> {
 		.sort((a, b) => a.providerLabel.localeCompare(b.providerLabel, "zh-CN") || a.name.localeCompare(b.name, "zh-CN"));
 }
 
-export type ProviderAuthSource = "app" | "env" | "none";
-
-export interface ProviderStatus {
-	id: string;
-	label: string;
-	kind: "builtin" | "custom";
-	/** 内置供应商的展示分组。 */
-	group?: BuiltinGroup;
-	enabled: boolean;
-	baseUrl?: string;
-	api?: string;
-	apiFormatKnown: boolean;
-	envVars: string[];
-	authSource: ProviderAuthSource;
-	/** 已脱显的 key，不是真实密钥。 */
-	maskedKey: string;
-	/** 运行时注册的模型数。自定义 provider 只有配置过的模型。 */
-	modelCount: number;
-	configuredModelCount: number;
-	registered: boolean;
-	error?: string;
-}
-
 export async function listProviderStatus(): Promise<ProviderStatus[]> {
 	const { models, settings, credentials, failures } = getRuntime();
 	const out: ProviderStatus[] = [];
@@ -375,16 +364,6 @@ export async function listProviderStatus(): Promise<ProviderStatus[]> {
 		});
 	}
 	return out;
-}
-
-export class ModelResolutionError extends Error {
-	readonly candidates: string[];
-
-	constructor(message: string, candidates: string[] = []) {
-		super(message);
-		this.name = "ModelResolutionError";
-		this.candidates = candidates;
-	}
 }
 
 /**
@@ -442,6 +421,42 @@ export function ensureDefaultSettings(settings: Settings, envDefaultModel: strin
 	return { ...settings, providers: defaultProviderConfigs(), defaultModel: settings.defaultModel || envDefaultModel };
 }
 
+/** 比接入点：末尾斜杠与大小写都不算差别。 */
+function sameBaseUrl(a: string | undefined, b: string | undefined): boolean {
+	if (!a || !b) return false;
+	return a.replace(/\/+$/, "").toLowerCase() === b.replace(/\/+$/, "").toLowerCase();
+}
+
+/**
+ * 把"其实就是内置厂商"的自定义条目就地收编回内置。
+ *
+ * 场景：内置目录后来补上某个厂商（比如 CTTAI 中转）之后，早先手工把它配成
+ * 自定义供应商的人会看到两条：内置那条因为 id 撞了根本没补进来，自定义那条
+ * 则挂在"自定义供应商"分组下 —— 界面上完全看不出它是推荐项。
+ *
+ * 只在 id 与接入点都对得上时才改，避免把恰好同名的另一家中转顶掉；已存的
+ * 密钥按 provider id 存放，模型参数按 model id 覆盖，因此都不受影响。
+ * label 只在还是 id 原文（即从未改过名）时换成内置的展示名。
+ */
+function promoteMatchingCustoms(providers: ProviderConfig[]): ProviderConfig[] {
+	let changed = false;
+	const next = providers.map((provider) => {
+		if (provider.kind !== "custom") return provider;
+		const spec = BUILTIN_PROVIDERS.find(
+			(item) => item.id === provider.id && sameBaseUrl(item.baseUrl, provider.baseUrl),
+		);
+		if (!spec) return provider;
+		changed = true;
+		return {
+			...provider,
+			kind: "builtin" as const,
+			builtinId: spec.builtinId,
+			label: provider.label && provider.label !== provider.id ? provider.label : spec.label,
+		};
+	});
+	return changed ? next : providers;
+}
+
 function defaultProviderConfigs(): ProviderConfig[] {
 	return BUILTIN_PROVIDERS.map((spec) => ({
 		id: spec.id,
@@ -462,7 +477,8 @@ function defaultProviderConfigs(): ProviderConfig[] {
  */
 export function syncBuiltinProviders(settings: Settings, envDefaultModel: string): Settings {
 	const base = ensureDefaultSettings(settings, envDefaultModel);
-	const known = new Set(base.providers.map((provider) => provider.id));
+	const providers = promoteMatchingCustoms(base.providers);
+	const known = new Set(providers.map((provider) => provider.id));
 	const missing = BUILTIN_PROVIDERS.filter((spec) => !known.has(spec.id)).map((spec) => ({
 		id: spec.id,
 		label: spec.label,
@@ -472,6 +488,6 @@ export function syncBuiltinProviders(settings: Settings, envDefaultModel: string
 		enabled: true,
 		updatedAt: 0,
 	}));
-	if (missing.length === 0) return base;
-	return { ...base, providers: [...base.providers, ...missing] };
+	if (missing.length === 0 && providers === base.providers) return base;
+	return { ...base, providers: [...providers, ...missing] };
 }

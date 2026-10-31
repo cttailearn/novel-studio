@@ -1,19 +1,19 @@
 import { Type, type Static, type TSchema } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import { randomUUID } from "node:crypto";
 import {
 	countWords,
 	kindLabel,
 	kindOptions,
 	linkMaterials,
 	MAX_DRAFT_HISTORY,
+	newId,
 	type ContinuityNote,
 	type Material,
 	type MaterialKind,
 	type NoteSeverity,
 	type Project,
-	type ProjectStore,
 } from "../store/project.ts";
+import type { ProjectStorePort } from "../store/store-port.ts";
 import type { LibraryMaterial, MaterialLibrary } from "../store/library.ts";
 import type { AskBroker } from "./ask.ts";
 import { createWebSearchTools, type WebSearchClient, type WebSearchConfig } from "./web-search.ts";
@@ -87,7 +87,7 @@ function defineTool<TParams extends TSchema>(spec: ToolSpec<TParams>): AgentTool
 }
 
 export interface NovelToolDeps {
-	store: ProjectStore;
+	store: ProjectStorePort;
 	projectId: string;
 	/**
 	 * 提问通道。给了才有 ask_user 工具 ——
@@ -525,7 +525,7 @@ function sharedTools(deps: NovelToolDeps): AgentTool<any>[] {
 			),
 			execute: async (_toolCallId, params) => {
 				const note: ContinuityNote = {
-					id: randomUUID(),
+					id: newId(),
 					severity: (params.severity ?? "info") as NoteSeverity,
 					category: params.category,
 					subject: params.subject,
@@ -833,7 +833,7 @@ function upsertMaterialTool(deps: NovelToolDeps): AgentTool<any> {
 		),
 		execute: async (_toolCallId, params) => {
 			const p = getProject(deps);
-			const id = params.id?.trim() || randomUUID();
+			const id = params.id?.trim() || newId();
 			const existing = p.materials.find((m) => m.id === id);
 			// 四个字段在 schema 里都是可选的，因为更新时只需给要改的那几项。
 			// 新建的完整性在这里补校验：缺什么就说清什么，让模型当轮自己改对，
@@ -1267,7 +1267,7 @@ export function createLibraryTools(deps: LibraryToolDeps): AgentTool<any>[] {
 				{ description: "通用素材条目" },
 			),
 			execute: async (_toolCallId, params) => {
-				const id = params.id?.trim() || randomUUID();
+				const id = params.id?.trim() || newId();
 				const existing = deps.library.get(id);
 				// 四个字段在 schema 里都是可选的（更新时只给要改的那几项），
 				// 新建的完整性在这里补校验，让模型当轮自己改对。

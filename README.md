@@ -6,6 +6,8 @@
 
 单机运行，工程、正文、素材与记录都在本机 `data/`；只有生成时发给模型的那部分上下文会离开本机。
 
+仓库在 [github.com/cttailearn/novel-studio](https://github.com/cttailearn/novel-studio)，问题与建议走 [Issues](https://github.com/cttailearn/novel-studio/issues)。
+
 ## 目录
 
 | 开始 | 使用 | 参考 |
@@ -57,7 +59,32 @@ pnpm dev        # http://127.0.0.1:8787
 | `pnpm dev` | 启动并监听文件变化 |
 | `pnpm start` | 启动，不监听 |
 | `pnpm typecheck` | 只跑 `tsc --noEmit` |
-| `pnpm test` | `typecheck` + 五个测试套件，全部离线，不需要 API Key |
+| `pnpm test` | `typecheck` + 十二个测试套件，全部离线，不需要 API Key |
+| `pnpm build:browser` | 生成浏览器端产物 `public/browser/**`（多用户部署必做） |
+
+## 多用户部署（数据全在用户浏览器里）
+
+默认形态是**单机自用**：工程、正文、素材、密钥都落在本机 `data/`。
+把它开放给多个人用时，`STORAGE=idb` 会把整套业务层搬到浏览器里跑 —— 服务端只剩两件事：
+**发静态文件**、**在必要时做一次无状态的 LLM 转发**。工程、正文、素材、设置、API Key 一个字节都不落在服务器上。
+
+```bash
+pnpm build:browser     # 一次性：生成浏览器端产物
+STORAGE=idb HOST=0.0.0.0 PORT=8787 node --experimental-strip-types src/server/main.ts
+```
+
+打开站点即进入本地模式（服务端会注入标记，用户不必自己拼 `?local=1`）：
+
+- 数据存在各自的浏览器 IndexedDB 里，换个人打开就是一套干净的、他自己的书；
+- API Key 由每个用户自己填，只写进他自己的浏览器；
+- 出网默认走 `/api/llm` 中继（因为多数厂商不带 CORS 头），中继**只转发不保存**；
+  对 CORS 实测通的厂商可以在控制台设 `localStorage["novel-studio/transport"] = "direct"` 直连。
+
+**代价要说清楚**：数据在浏览器里，意味着换机器、换浏览器、清站点数据就真的没了。
+所以有了「备份与恢复」：导出 `.novel` 包（可加口令 AES-GCM 加密），在另一台机器上导入。
+没有云同步，也不打算做 —— 那等于把数据又搬回服务器。
+
+细节见 [`docs/deployment.md`](docs/deployment.md) 与 [`docs/multi-user-browser-local-plan.md`](docs/multi-user-browser-local-plan.md)。
 
 ## 三块面板
 
@@ -197,7 +224,7 @@ pnpm dev        # http://127.0.0.1:8787
 | 自定义供应商 | Base URL + 接口格式 + Key；格式支持 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages、Google Generative AI（Gemini） |
 | 本地服务 | 不需要鉴权的可勾选（如 Ollama） |
 
-「拉取模型」只证明接口通、鉴权过，不代表该网关原生支持生成；能力以实际调用为准。
+「拉取模型」使用供应商的 Base URL 与已保存的 Key 请求真实模型列表；内置和自定义供应商都可以拉取。成功后会显示「上游实时清单」，且不会混入内置目录里的旧模型；可以点「恢复内置目录」退回初始清单。多用户模式下请求经中继转发，密钥仍只在浏览器中保存。拉取只证明接口通、鉴权过，不代表该网关原生支持生成；能力以实际调用为准。
 
 <details>
 <summary><b>额外凭据</b></summary>
@@ -244,6 +271,15 @@ PATCH /api/providers/:id/models
 - 落盘用随机临时名 + rename + 重试，避开 Windows 的 `EPERM`。
 - 生成时，本章素材、上一章内容与你的交代会发给所配置的模型服务；开启联网后，设定官发起的检索词或网页 URL 还会发给 DeepSeek。除此之外不出本机。
 
+**多用户模式（`STORAGE=idb`）下的边界变化**：
+
+- 服务端不再持有任何人的数据 —— `data/` 里没有稿子、没有设置、没有 Key；启动时若发现残留会明确警告。
+- 密钥改存浏览器 IndexedDB，`list()` 只回脱敏值；导出 `.novel` 包默认剔除密钥，要带密钥必须给口令。
+- 中继 `/api/llm` 会**看到明文 prompt**（它就是一个转发器）。这是"自带 Key + 服务端转发"模式的固有代价；
+  对隐私要求最高的人可以改成浏览器直连（不经中继），代价是受厂商 CORS 限制。
+- 中继的 SSRF 防护（必须 https、DNS 解析后逐个校验 IP、钉住已校验 IP、不跟随重定向、出网主机白名单）
+  与限流都写在 `src/server/llm-relay.ts`，测试见 `scripts/relay-check.ts`。
+
 ## HTTP API
 
 本地 HTTP 服务，前端是同源单页应用。主要端点：
@@ -275,25 +311,28 @@ POST /api/projects/:id/chapters/:chapterId/write
 - `PATCH /api/projects/:id/chapters/:chapterId` 的 body 是 `{ content, autosave?, summary? }`；`autosave: true` 只递增修订号、不占版本历史；`summary` 非空才覆盖。
 - 会话的 `/messages` 返回 NDJSON：文本增量、工具调用、提问、收尾各是一行；会话过期由前端自动重开。
 
-其余数据端点主要有 `/api/library`、`/api/kinds`、`/api/uploads`、`/api/projects/:id/volumes`、`/api/projects/:id/materials`、`/api/projects/:id/snapshots`、`/api/projects/:id/export`、`/api/storage`；完整路由见 `src/server/main.ts`。
+其余数据端点主要有 `/api/library`、`/api/kinds`、`/api/uploads`、`/api/projects/:id/volumes`、`/api/projects/:id/materials`、`/api/projects/:id/snapshots`、`/api/projects/:id/export`、`/api/storage`、`/api/novel/export`、`/api/novel/import`；完整路由见 `src/server/api-router.ts`。
 
 ## 项目结构
 
 ```
 src/
-  ai/          模型注册、提示词、工具、智能体、提问接口
-  config/      环境、设置、凭据
-  server/      HTTP 路由、会话、生成记录、上传解析
-  store/       工程、素材库、素材种类
-public/        原生 JS 单页应用；无构建步骤
-scripts/       冒烟、配置、存储、服务、循环测试
-docs/          规模方案（scaling-plan.md）
+  ai/          模型注册、提示词、工具、智能体、提问接口、浏览器用 LLM 客户端
+  config/      环境、设置、凭据（* 每个都有 -disk 落盘版与纯逻辑版）
+  server/      HTTP 路由（api-router 与传输无关）、Node 适配器、中继、会话、记录、上传解析
+  store/       工程、素材库、素材种类（纯模型层 / -disk 落盘 / -idb 浏览器）、.novel 包
+  browser/     浏览器侧装配：local-api（把路由架在 IndexedDB 上）、模型门面、shim
+public/        原生 JS 单页应用（无构建步骤）+ boot.js + browser/ 构建产物
+scripts/       冒烟、配置、存储、服务、循环、IDB、打包、本地路由、中继、浏览器构建
+docs/          规模方案（scaling-plan.md）、多用户改造方案、部署指南
 data/          运行时数据（git 忽略）：工程、正文、密钥、记录
 ```
 
 ## 测试
 
-类型检查与七组离线回归：`test:config`（供应商与设置）、`test:tools`（工具契约与素材逻辑）、`test:context`（对话配对与上下文预算）、`test:storage`（分层存储、失败恢复与回收站）、`test:server`（真进程 HTTP、互斥与幂等）、`test:loop`（用 `pi-ai` 的 `fauxProvider` 跑完整素材链与组装链）、`test:frontend`（前端静态契约，不能代替真实浏览器交互）。
+类型检查与十二组离线回归：`test:config`（供应商与设置）、`test:tools`（工具契约与素材逻辑）、`test:context`（对话配对与上下文预算）、`test:storage`（分层存储、失败恢复与回收站）、`test:server`（真进程 HTTP、互斥与幂等）、`test:loop`（用 `pi-ai` 的 `fauxProvider` 跑完整素材链与组装链）、`test:frontend`（前端静态契约，不能代替真实浏览器交互）、`test:idb`（IndexedDB 工程存储与其余五个存储）、`test:package`（`.novel` 包的导出导入与口令加密）、`test:local`（把真路由架在 IndexedDB 上跑，含"关掉重开数据还在"）、`test:relay`（中继的 SSRF、限流、不留痕）。
+
+另有两条不进 `pnpm test` 的：`test:browser`（浏览器产物契约，其中"真实浏览器冒烟"需要本机有能启动的 Chrome）与 `build:browser`（生成产物）。
 
 <details>
 <summary><b>一些值得留意的断言</b></summary>
@@ -313,7 +352,10 @@ data/          运行时数据（git 忽略）：工程、正文、密钥、记�
 - 会话在内存里：进程重启会丢对话历史（工程、设置与生成记录保留）。
 - 自动存稿依赖服务可达；离线编辑不会自动落盘。
 - 版本保留 10 个，没有逐字 diff；恢复前会另存一版。
-- 导出只有 TXT / Markdown；没有 docx / epub。
+- 导出只有 TXT / Markdown 与 `.novel` 备份包；没有 docx / epub。
+- 多用户模式下数据只在本浏览器里：清站点数据、换浏览器、无痕模式都会丢；没有云同步，只有 `.novel` 包搬迁。
+- 浏览器端产物（`public/browser/**`）需要 `pnpm build:browser` 生成，不是源码直接跑；本仓库里它是构建输出，不该手改。
+- 多用户模式的真实浏览器端到端尚未自动化（本机沙箱起不了 Chrome）；`pnpm test:local` 用真路由 + 假 IndexedDB 覆盖了同一批逻辑。
 - 不能删章、拖拽排序；卷也不能拖拽重排。
 - 本地素材检索只在当前作品与通用素材库内，不跨作品全文检索；联网检索是设定官的可选工具，不代替本章素材检索。
 - 上传只收 UTF-8 文本与 `.docx`；`pdf` / `epub` / `doc` 明确拒绝（415），GBK 文本会乱码。上传的原料不落盘。
@@ -328,7 +370,7 @@ data/          运行时数据（git 忽略）：工程、正文、密钥、记�
 
 ## Contributing
 
-这是个人项目，Issue 与 PR 都欢迎。比较大的改动（新工具、新存储层、界面重构）请先开 Issue 对齐方向，避免白做。
+这是个人项目，Issue 与 PR 都欢迎：[github.com/cttailearn/novel-studio](https://github.com/cttailearn/novel-studio)。比较大的改动（新工具、新存储层、界面重构）请先开 [Issue](https://github.com/cttailearn/novel-studio/issues) 对齐方向，避免白做。
 
 提交前跑：
 
