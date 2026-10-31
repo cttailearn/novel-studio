@@ -130,31 +130,24 @@ server {
     ssl_certificate     /etc/letsencrypt/live/novel.example.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/novel.example.com/privkey.pem;
 
-    root /srv/novel-studio/public;
-    index index.html;
-
-    # 静态资源：带内容哈希的产物可以长缓存，HTML 不缓存
-    location ~* \.(js|css|woff2|png|svg)$ {
-        expires 7d;
-        add_header Cache-Control "public";
-    }
-    location = /index.html {
-        add_header Cache-Control "no-store";
-    }
-
-    # 浏览器直连的中继端点：转发给应用
-    location /api/llm {
-        proxy_pass http://127.0.0.1:8787;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_buffering off;          # 流式输出必须关缓冲
-        proxy_read_timeout 300s;
-        client_max_body_size 8m;
-    }
+    # 注意：不要用 root 直接把 public/ 发出去。
+    # 应用在 idb 模式下会往 index.html 里注入本地模式标记，绕过它页面就打不开数据，
+    # 所以静态文件也统一反向代理给应用。
+    gzip on;
+    # 必须包含 text/javascript：Node 对 .js 发的就是它，
+    # 只写 application/javascript 的话 app.js / settings.js 一个都不会被压缩。
+    gzip_types text/javascript application/javascript application/json application/manifest+json image/svg+xml text/css;
+    gzip_min_length 1024;
 
     location / {
-        try_files $uri $uri/ /index.html;
+        proxy_pass http://127.0.0.1:8787;
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_read_timeout 300s;
     }
 }
 

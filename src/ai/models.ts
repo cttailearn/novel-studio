@@ -44,9 +44,9 @@ import { zaiCodingCnProvider } from "@earendil-works/pi-ai/providers/zai-coding-
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
 import type { FileCredentialStore } from "../config/credential-store.ts";
 import type { SettingsStore } from "../config/settings-store.ts";
-import type { ModelThinkingLevel, ProviderConfig, Settings } from "../config/settings.ts";
+import type { ModelConfig, ModelThinkingLevel, ProviderConfig, Settings } from "../config/settings.ts";
 import { isPlaceholderModel, type CostRates } from "../config/settings.ts";
-import { buildCustomProvider } from "./custom-provider.ts";
+import { buildCustomProvider, buildThinkingLevelMap } from "./custom-provider.ts";
 import { ModelResolutionError } from "./model-errors.ts";
 import type { ModelSummary, ProviderStatus } from "./model-types.ts";
 
@@ -244,30 +244,69 @@ function builtinProviderOf(config: ProviderConfig): Provider {
 	const spec = BUILTIN_PROVIDERS.find((item) => item.builtinId === config.builtinId);
 	if (!spec) throw new Error(`未知的内置 provider：${config.builtinId ?? "未指定"}`);
 	const provider = spec.create();
-	if (config.modelsSource !== "upstream" || config.models.length === 0) return provider;
+	if (config.models.length === 0) return provider;
 
-	// 实时清单是完整替换，而非目录的补充：上游没有返回的模型不再展示。
-	// 只在模型数组这一处做替换，流式、鉴权、上下文限制等仍由内置 provider 负责。
-	const staticModels = new Map(provider.getModels().map((model) => [model.id, model]));
-	const dynamic: Model<Api>[] = [];
-	for (const model of config.models) {
-		const base = staticModels.get(model.id);
-		dynamic.push({
-			...(base ?? {}),
-			id: model.id,
-			name: model.name,
-			api: (base?.api ?? config.api ?? spec.api ?? "openai-completions") as Api,
-			provider: config.id,
-			baseUrl: base?.baseUrl ?? config.baseUrl ?? spec.baseUrl ?? "",
-			input: base?.input ?? ["text"],
-			cost: model.cost,
-			reasoning: model.reasoning,
-			contextWindow: model.contextWindow,
-			maxTokens: model.maxTokens,
-		});
+	// 设置里的模型条目对内建供应商是「补丁 + 附加」：
+	// 与内置同 id 的条目只覆盖参数（名称 / 上下文 / 输出上限 / 思考档 / 成本），
+	// 目录里没有的 id 视为手动添加，按该供应商的接口格式现造一个。
+	// upstream 模式下则是整表替换：上游没返回的模型不该再出现。
+	const upstream = config.modelsSource === "upstream";
+	const catalog = provider.getModels();
+	const patches = new Map(config.models.filter((model) => !model.hidden).map((model) => [model.id, model]));
+	const hidden = new Set(config.models.filter((model) => model.hidden).map((model) => model.id));
+	const merged: Model<Api>[] = [];
+
+	if (!upstream) {
+		for (const base of catalog) {
+			if (hidden.has(base.id)) continue;
+			const patch = patches.get(base.id);
+			merged.push(patch ? overlayModel(base, patch, config, spec) : base);
+		}
 	}
-	return { ...provider, getModels: () => dynamic };
+	for (const model of config.models) {
+		if (model.hidden) continue;
+		if (!upstream && catalog.some((base) => base.id === model.id)) continue;
+		const base = catalog.find((item) => item.id === model.id);
+		merged.push(overlayModel(base, model, config, spec));
+	}
+	return { ...provider, getModels: () => merged };
 }
+
+/**
+ * 用设置里的 ModelConfig 覆盖一个内置模型。
+ *
+ * 有同名内置模型时保留它的 api / baseUrl / input 等运行期字段，
+ * 只换用户能改的五项；没有时就按 provider 的接口格式拼一个完整的 Model。
+ */
+function overlayModel(
+	base: Model<Api> | undefined,
+	patch: ModelConfigLike,
+	config: ProviderConfig,
+	spec: BuiltinProviderSpec,
+): Model<Api> {
+	const model = {
+		...(base ?? {}),
+		id: patch.id,
+		name: patch.name || patch.id,
+		api: (base?.api ?? config.api ?? spec.api ?? "openai-completions") as Api,
+		provider: config.id,
+		baseUrl: base?.baseUrl ?? config.baseUrl ?? spec.baseUrl ?? "",
+		input: base?.input ?? ["text"],
+		cost: { ...patch.cost },
+		reasoning: patch.reasoning,
+		contextWindow: patch.contextWindow,
+		maxTokens: patch.maxTokens,
+	} as Model<Api> & { thinkingLevelMap?: unknown };
+	if (patch.reasoning) {
+		model.thinkingLevelMap = buildThinkingLevelMap(patch);
+	} else {
+		// 关掉思考就得把内置模型原有的档位映射摘掉，否则适配器还会按旧档发 effort。
+		delete model.thinkingLevelMap;
+	}
+	return model;
+}
+
+type ModelConfigLike = Pick<ModelConfig, "id" | "name" | "contextWindow" | "maxTokens" | "reasoning" | "thinkingLevels" | "cost">;
 
 /** 设置改动后重建注册表。会话持有的 Model 对象需要重建。 */
 export function rebuildModels(): void {

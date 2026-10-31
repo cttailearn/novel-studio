@@ -2631,8 +2631,10 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 		const provider = settingsStore.getProvider(catalogMatch[1]!);
 		if (!provider) return json(sink, 404, { error: "供应商不存在" });
 		if (provider.kind !== "builtin") return json(sink, 400, { error: "只有内置供应商有内置目录" });
+		// 连同 models 一起清空：UI 上这个按钮写的是「恢复内置目录」，
+		// 只摘掉来源标记而保留参数覆盖的话，用户改过的上下文/成本会阴魂不散。
 		const { modelsSource: _source, modelsFetchedAt: _fetchedAt, ...base } = provider;
-		const restored = settingsStore.upsertProvider({ ...base, updatedAt: Date.now() });
+		const restored = settingsStore.upsertProvider({ ...base, models: [], updatedAt: Date.now() });
 		rebuildModels();
 		return json(sink, 200, { provider: providerView(restored), modelsSource: "catalog" });
 	}
@@ -2649,8 +2651,11 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 		// 剩下的（cost、thinkingLevels 等）不能因为这次只提交了一个字段就被抹成默认值。
 		const existing = provider.models.find((model) => model.id === id);
 		const base = existing ?? emptyModel(id);
+		const draft = { ...base, ...body, id } as ModelConfig & { hidden?: boolean };
+		// 用户主动保存一个模型，等于把它放出来；墓碑不能跟着一起带过去。
+		delete draft.hidden;
 		const normalized = normalizeSettings({
-			providers: [{ ...provider, models: [{ ...base, ...body, id } as ModelConfig] }],
+			providers: [{ ...provider, models: [draft] }],
 		}).providers[0]!.models[0]!;
 		const models = provider.models.some((model) => model.id === id)
 			? provider.models.map((model) => (model.id === id ? normalized : model))
@@ -2753,7 +2758,16 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 		const provider = settingsStore.getProvider(modelItemMatch[1]!);
 		if (!provider) return json(sink, 404, { error: "供应商不存在" });
 		const modelId = decodeURIComponent(modelItemMatch[2]!);
-		settingsStore.upsertProvider({ ...provider, models: provider.models.filter((model) => model.id !== modelId) });
+		const existing = provider.models.find((model) => model.id === modelId);
+		// 内置目录删不掉，只能留一块墓碑挡着；否则刷新一下模型又回来了，
+		// 用户会以为删除没生效。恢复内置目录会清空 models，墓碑一并消失。
+		const models =
+			provider.kind === "builtin"
+				? existing
+					? provider.models.map((model) => (model.id === modelId ? { ...emptyModel(modelId), hidden: true } : model))
+					: [...provider.models, { ...emptyModel(modelId), hidden: true }]
+				: provider.models.filter((model) => model.id !== modelId);
+		settingsStore.upsertProvider({ ...provider, models, updatedAt: Date.now() });
 		rebuildModels();
 		return json(sink, 200, { provider: providerView(settingsStore.getProvider(provider.id)!) });
 	}

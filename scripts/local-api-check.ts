@@ -195,6 +195,53 @@ const catalogModels = await api("GET", "/api/models");
 const catalogIds = (pick<Array<Record<string, unknown>>>(catalogModels.data, "models") ?? []).map((model) => model["id"]);
 check("恢复后回到静态目录", catalogIds.includes("demo/demo-large") && catalogIds.length === 1, JSON.stringify(catalogIds));
 
+// 内置目录的模型也要能改参数、加自己的、删掉不用的。
+section("一之三、内置目录的模型可配置");
+const edited = await api("POST", "/api/providers/demo/models", {
+	id: "demo-large",
+	name: "Demo Large（改过）",
+	contextWindow: 777_777,
+	maxTokens: 8_192,
+	reasoning: false,
+	thinkingLevels: ["off"],
+	cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+});
+check("改内置模型的参数回 200", edited.status === 200, edited.text.slice(0, 200));
+const afterEdit = await api("GET", "/api/models");
+const editedModel = (pick<Array<Record<string, unknown>>>(afterEdit.data, "models") ?? []).find(
+	(model) => model["id"] === "demo/demo-large",
+);
+check("改过的上下文窗口立刻生效", editedModel?.["contextWindow"] === 777_777, JSON.stringify(editedModel));
+check("改过的名称立刻生效", editedModel?.["name"] === "Demo Large（改过）", JSON.stringify(editedModel));
+
+const manual = await api("POST", "/api/providers/demo/models", {
+	id: "my-extra",
+	name: "我自己的笔",
+	contextWindow: 200_000,
+	maxTokens: 4_096,
+	reasoning: false,
+	thinkingLevels: ["off"],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+});
+check("手动新增模型回 200", manual.status === 200, manual.text.slice(0, 200));
+const afterManual = await api("GET", "/api/models");
+const manualIds = (pick<Array<Record<string, unknown>>>(afterManual.data, "models") ?? []).map((model) => model["id"]);
+check("手动新增的模型出现在可用清单里", manualIds.includes("demo/my-extra"), JSON.stringify(manualIds));
+
+const removedModel = await api("DELETE", "/api/providers/demo/models/demo-large");
+check("删掉内置目录里的模型回 200", removedModel.status === 200, removedModel.text.slice(0, 200));
+const afterRemove = await api("GET", "/api/models");
+const removedIds = (pick<Array<Record<string, unknown>>>(afterRemove.data, "models") ?? []).map((model) => model["id"]);
+check("删掉的模型不再出现", !removedIds.includes("demo/demo-large"), JSON.stringify(removedIds));
+check("手动的模型不受影响", removedIds.includes("demo/my-extra"), JSON.stringify(removedIds));
+
+const restoredAgain = await api("POST", "/api/providers/demo/models/catalog");
+check("再次恢复内置目录回 200", restoredAgain.status === 200, restoredAgain.text);
+const afterRestore = await api("GET", "/api/models");
+const restoredIds = (pick<Array<Record<string, unknown>>>(afterRestore.data, "models") ?? []).map((model) => model["id"]);
+check("恢复后内置模型回来了", restoredIds.includes("demo/demo-large"), JSON.stringify(restoredIds));
+check("恢复后手动添加的模型被清掉（目录回到出厂状态）", !restoredIds.includes("demo/my-extra"), JSON.stringify(restoredIds));
+
 // ───────────────────────────────────────────── 二、工程与正文
 
 section("二、工程、章节、正文的读写");

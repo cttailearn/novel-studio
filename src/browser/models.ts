@@ -274,11 +274,14 @@ export function createBrowserModels(options: BrowserModelsOptions): BrowserModel
 	 * 参数覆盖（作者调过上下文窗口/输出上限/思考档位时以他填的为准）。
 	 */
 	function modelsOf(provider: ProviderConfig, entry: CatalogProvider | undefined): ModelConfig[] {
-		if (provider.kind === "custom" || !entry) return provider.models;
+		if (provider.kind === "custom" || !entry) return provider.models.filter((model) => !model.hidden);
 		// 实时模式只认上游清单；静态目录一个都不混入。
-		if (provider.modelsSource === "upstream") return provider.models;
+		if (provider.modelsSource === "upstream") return provider.models.filter((model) => !model.hidden);
 		const overrides = new Map(provider.models.map((model) => [model.id, model]));
-		return entry.models.map((model) => {
+		const hidden = new Set(provider.models.filter((model) => model.hidden).map((model) => model.id));
+		const rows: ModelConfig[] = [];
+		for (const model of entry.models) {
+			if (hidden.has(model.id)) continue;
 			const override = overrides.get(model.id);
 			const base: ModelConfig = {
 				id: model.id,
@@ -289,7 +292,10 @@ export function createBrowserModels(options: BrowserModelsOptions): BrowserModel
 				thinkingLevels: thinkingLevelsFor(model.reasoning),
 				cost: model.cost,
 			};
-			if (!override) return base;
+			if (!override) {
+				rows.push(base);
+				continue;
+			}
 			// 只有作者真的写过参数（不是占位值）才覆盖目录。
 			const contextWindow =
 				isPlaceholderModel(override) || override.contextWindow === base.contextWindow
@@ -298,7 +304,7 @@ export function createBrowserModels(options: BrowserModelsOptions): BrowserModel
 			const maxTokens =
 				isPlaceholderModel(override) || override.maxTokens === base.maxTokens ? base.maxTokens : override.maxTokens;
 			const reasoning = override.reasoning ?? base.reasoning;
-			return {
+			rows.push({
 				id: base.id,
 				name: override.name?.trim() ? override.name : base.name,
 				contextWindow,
@@ -306,8 +312,19 @@ export function createBrowserModels(options: BrowserModelsOptions): BrowserModel
 				reasoning,
 				thinkingLevels: thinkingLevelsFor(reasoning, override.thinkingLevels),
 				cost: override.cost ?? base.cost,
-			};
-		});
+			});
+		}
+		// 手动添加、目录里没有的模型也要能用 —— 用户填了 id 与参数就该出现在模型选择里。
+		for (const override of provider.models) {
+			if (override.hidden) continue;
+			if (entry.models.some((model) => model.id === override.id)) continue;
+			rows.push({
+				...override,
+				name: override.name?.trim() ? override.name : override.id,
+				thinkingLevels: thinkingLevelsFor(override.reasoning, override.thinkingLevels),
+			});
+		}
+		return rows;
 	}
 
 	/** 这个厂商现在能不能用：有 key，或者它自己声明不需要鉴权。 */

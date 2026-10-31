@@ -189,15 +189,27 @@ async function serveStatic(res: ServerResponse, urlPath: string): Promise<void> 
 	/*
 	 * 缓存策略分两种活法：
 	 *   - 单机自用（fs）：本机开发工具，一律 no-store —— 改完刷新就该看到新版。
-	 *   - 多用户部署（idb）：`browser/` 下那一兆多的构建产物（vendor 副本 + 转译结果）
-	 *     是手机每次冷启动都要重下的大头，给十分钟私有缓存；页面本身仍旧 no-store，
-	 *     免得部署方改了配置还得让所有人清缓存。没上文件名指纹，所以不标 immutable。
+	 *   - 多用户部署（idb）：脚本、样式、图标、catalog 这些静态资源给 ETag +
+	 *     `max-age=0, must-revalidate`。没上文件名指纹，所以不敢标 immutable：
+	 *     每次打开都带条件请求回来，没变就是 304（几百字节），变了立刻拿到新版。
+	 *     页面本身仍旧 no-store，免得部署方改了配置还得让所有人清缓存。
 	 */
-	const deployCached = localOnly && relative.startsWith("browser/");
-	sink.writeHead(200, {
+	const cacheable =
+		localOnly && !relative.endsWith(".html") && /\.(?:js|css|mjs|svg|json|webmanifest|woff2?)$/i.test(relative);
+	const cacheControl = cacheable ? "private, max-age=0, must-revalidate" : "no-store";
+	const info = cacheable ? await stat(target).catch(() => undefined) : undefined;
+	const etag = info ? `W/"${info.size.toString(16)}-${Math.floor(info.mtimeMs).toString(16)}"` : undefined;
+	if (etag && res.req.headers["if-none-match"] === etag) {
+		res.writeHead(304, { etag, "cache-control": cacheControl });
+		res.end();
+		return;
+	}
+	const headers: Record<string, string> = {
 		"content-type": MIME[path.extname(target)] ?? "application/octet-stream",
-		"cache-control": deployCached ? "private, max-age=600" : "no-store",
-	});
+		"cache-control": cacheControl,
+	};
+	if (etag) headers.etag = etag;
+	sink.writeHead(200, headers);
 	sink.end(body);
 }
 

@@ -53,6 +53,13 @@ export interface ModelConfig {
 	/** 支持的思考档位，导出到 pi-ai 的 thinkingLevelMap。 */
 	thinkingLevels: ModelThinkingLevel[];
 	cost: CostRates;
+	/**
+	 * 内置目录里这一条被用户删掉了。
+	 *
+	 * 只对内置厂商有意义：目录由代码维护，删不掉，只能留一块墓碑把它挡住。
+	 * 「恢复内置目录」会清空 models，墓碑一并消失。
+	 */
+	hidden?: boolean;
 }
 
 export interface ProviderConfig {
@@ -193,7 +200,7 @@ export function normalizeSettings(raw: unknown): Settings {
 
 function normalizeModel(raw: ModelConfig): ModelConfig {
 	const id = String(raw?.id ?? "").trim();
-	return {
+	const model: ModelConfig = {
 		id,
 		name: String(raw?.name ?? id).trim() || id,
 		contextWindow: positiveInt(raw?.contextWindow, DEFAULT_CONTEXT_WINDOW),
@@ -211,6 +218,9 @@ function normalizeModel(raw: ModelConfig): ModelConfig {
 			cacheWrite: numberOr(raw?.cost?.cacheWrite, 0),
 		},
 	};
+	// 墓碑只在明确写 true 时保留；false 与缺省都不写，免得 settings.json 里全是噪声。
+	if (raw?.hidden === true) model.hidden = true;
+	return model;
 }
 
 function positiveInt(value: unknown, fallback: number): number {

@@ -129,15 +129,50 @@ export async function openSettings() {
 	// 直接落进详情会让人一睁眼就在陌生的表单里。
 	view.pane = "list";
 	setSection("models");
-	await refresh();
-	applyPane();
+
+	// 先把对话框打开，再去取数据。
+	// 之前是 `await refresh()` 之后才 showModal：慢网下第一次拉设置要等好几秒，
+	// 用户看到的就是「点了没反应」。现在立刻给出反馈，数据到了再填进去。
 	const dialog = $("settings-dialog");
-	dialog.showModal();
-	const heading = dialog.querySelector("h3");
+	if (dialog && !dialog.open) dialog.showModal();
+	const heading = dialog?.querySelector("h3");
 	if (heading) {
 		heading.tabIndex = -1;
 		heading.focus({ preventScroll: true });
 	}
+	if (!view.data) showSettingsLoading();
+
+	try {
+		await refresh();
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		showSettingsError(message);
+		saveStatus(`设置加载失败：${message}`, "err");
+	}
+	applyPane();
+}
+
+/** 首屏还没数据时的占位，别让用户对着一张空白纸。 */
+function showSettingsLoading() {
+	const list = $("settings-providers");
+	if (list) list.replaceChildren(el("li", "empty-hint", "正在加载设置…"));
+	const detail = $("settings-detail");
+	if (detail) detail.replaceChildren(el("div", "empty-hint", "正在加载设置…"));
+}
+
+/** 设置拉取失败时，把原因留在纸面上，而不是静默地什么都不发生。 */
+function showSettingsError(message) {
+	const list = $("settings-providers");
+	if (list) {
+		list.replaceChildren(
+			el("li", "empty-hint", `设置加载失败：${message}`),
+			el("li", "empty-hint", "检查网络后关掉这个窗口重开一次。"),
+		);
+	}
+	const detail = $("settings-detail");
+	if (detail) detail.replaceChildren(el("div", "notice err", `设置加载失败：${message}`));
+	const summary = $("provider-summary");
+	if (summary) summary.textContent = "加载失败";
 }
 
 /**
@@ -677,6 +712,27 @@ function hintLine(short, full) {
 }
 
 /**
+ * 这个部署形态下密钥存在哪。
+ *
+ * 同一份界面既跑在「服务端 + data/credentials.json」的单机模式，也跑在
+ * 「数据全在浏览器」的多用户模式，提示文案不能写死 —— 否则用户会以为
+ * 密钥被传到服务器上了（恰恰相反）。
+ */
+function isBrowserStorage() {
+	return window.__DSH_LOCAL_MODE__ === true || window.__NOVEL_LOCAL_MODE__ === true;
+}
+
+function keyStorageShort() {
+	return isBrowserStorage() ? "仅存这台设备的浏览器里" : "仅存本机";
+}
+
+function keyStorageFull() {
+	return isBrowserStorage()
+		? "仅保存在这台设备的浏览器里（IndexedDB），不会上传到服务器；换设备或清理浏览器数据后需要重新填写。"
+		: "仅保存在本机 data/credentials.json，不会上传到服务器。";
+}
+
+/**
  * 「细则」折叠块：纯背景解释收进来，默认收起。
  *
  * 用原生 details/summary，键盘可达与读屏语义都是白送的，
@@ -723,10 +779,10 @@ function renderBuiltinDetail(box, provider, status) {
 			status?.error
 				? `注册失败：${status.error}`
 				: provider.modelsSource === "upstream"
-					? `上游实时清单（${status?.modelCount ?? 0} 个）` +
+					? `上游实时清单（${status?.modelCount ?? 0} 个）：模型参数可以自行修改` +
 						(provider.modelsFetchedAt ? ` · ${new Date(provider.modelsFetchedAt).toLocaleString("zh-CN")} 拉取` : "") +
 						` · 接入点：${status?.baseUrl ?? "未配置"}`
-					: `内置供应商，模型目录由应用维护（当前 ${status?.modelCount ?? 0} 个）。` +
+					: `内置供应商（当前 ${status?.modelCount ?? 0} 个模型）：接入点由应用维护，模型参数可以自行修改。` +
 						`环境变量：${(status?.envVars ?? []).join("、") || "无"}` +
 						(status?.baseUrl ? ` · 接入点：${status.baseUrl}` : ""),
 		),
@@ -758,7 +814,7 @@ function renderBuiltinDetail(box, provider, status) {
 		field(
 			"API Key",
 			keyRow,
-			status?.authSource === "env" ? `当前来自环境变量 ${status.envVars[0]}` : "仅保存在本机 data/credentials.json",
+			status?.authSource === "env" ? `当前来自环境变量 ${status.envVars[0]}` : keyStorageFull(),
 		),
 	);
 
@@ -779,6 +835,7 @@ function renderBuiltinDetail(box, provider, status) {
 	actions.append(pull);
 	if (provider.modelsSource === "upstream") {
 		const restore = el("button", "btn btn-ghost btn-sm", "恢复内置目录");
+		restore.title = "清掉从上游拉来的清单与所有参数改动，回到应用内置的模型目录";
 		restore.addEventListener("click", async () => {
 			await operation("正在恢复内置目录…", async () => {
 				await api(`/api/providers/${provider.id}/models/catalog`, { method: "POST" });
@@ -804,8 +861,29 @@ function renderBuiltinDetail(box, provider, status) {
 	actions.append(toggleButton(provider));
 	box.append(actions);
 
-	// 内置目录只读展示：模型清单由应用维护，改了也不生效，只给检索与查看。
-	renderModelZone(box, provider, false);
+	// 内置供应商的模型同样可以改：上下文、输出上限、思考档位、成本，以及增删。
+	// 改动以「同 id 参数覆盖」的形式存在设置里，内置目录本身不动；
+	// 点「恢复内置目录」会把覆盖清掉，回到出厂清单。
+	renderModelZone(box, provider, true, { pickable: false, backfill: false });
+
+	const addRow = el("div", "actions");
+	const add = el("button", "btn btn-sm", "+ 手动添加模型");
+	add.addEventListener("click", () => {
+		const name = prompt("模型 id（发送给服务端的 model 字段）");
+		if (!name?.trim()) return;
+		const defaults = defaultLimits();
+		void saveModel(provider.id, {
+			id: name.trim(),
+			name: name.trim(),
+			contextWindow: defaults.contextWindow,
+			maxTokens: defaults.maxTokens,
+			reasoning: false,
+			thinkingLevels: ["off"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		});
+	});
+	addRow.append(add);
+	box.append(addRow);
 }
 
 function renderCustomDetail(box, provider, status) {
@@ -864,8 +942,8 @@ function renderCustomDetail(box, provider, status) {
 			"API Key",
 			keyRow,
 			hintLine(
-				"仅存本机；勾选下方开关后可留空",
-				"仅保存在本机 data/credentials.json。勾选「该服务不需要鉴权」后，此字段可留空。",
+				`${keyStorageShort()}；勾选下方开关后可留空`,
+				`${keyStorageFull()}勾选「该服务不需要鉴权」后，此字段可留空。`,
 			),
 		),
 	);
@@ -979,28 +1057,64 @@ function modelEntries(provider) {
 			};
 		});
 	}
-	return view.models
-		.filter((model) => model.provider === provider.id)
-		.map((model) => {
-			const reason = unavailableReason(provider);
-			return {
-				key: model.id,
-				modelId: model.modelId,
-				name: model.name || model.modelId,
-				contextWindow: model.contextWindow,
-				maxTokens: model.maxTokens,
-				reasoning: model.reasoning === true,
-				thinkingLevels: Array.isArray(model.thinkingLevels) ? [...model.thinkingLevels] : ["off"],
-				cost: costOf(null, model),
-				placeholder: isPlaceholder(model, model),
-				contextPlaceholder: model.contextWindow === limits.contextWindow,
-				maxPlaceholder: model.maxTokens === limits.maxTokens,
-				available: !reason,
-				reason,
-				config: null,
-				summary: model,
-			};
+	const summaries = view.models.filter((model) => model.provider === provider.id);
+	const entries = summaries.map((model) => {
+		const reason = unavailableReason(provider);
+		const saved = (provider.models ?? []).find((config) => config.id === model.modelId) ?? null;
+		// 没存过参数的目录模型也得能改：按运行时值补一条完整配置。
+		// 只提交一个字段会被后端当成「其余字段用默认值」，成本和思考档位就丢了。
+		const config = saved ?? {
+			id: model.modelId,
+			name: model.name || model.modelId,
+			contextWindow: model.contextWindow,
+			maxTokens: model.maxTokens,
+			reasoning: model.reasoning === true,
+			thinkingLevels: Array.isArray(model.thinkingLevels) ? [...model.thinkingLevels] : ["off"],
+			cost: costOf(null, model) ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		};
+		return {
+			key: model.id,
+			modelId: model.modelId,
+			name: model.name || model.modelId,
+			contextWindow: model.contextWindow,
+			maxTokens: model.maxTokens,
+			reasoning: model.reasoning === true,
+			thinkingLevels: Array.isArray(model.thinkingLevels) ? [...model.thinkingLevels] : ["off"],
+			cost: costOf(saved, model),
+			placeholder: isPlaceholder(model, model),
+			contextPlaceholder: model.contextWindow === limits.contextWindow,
+			maxPlaceholder: model.maxTokens === limits.maxTokens,
+			available: !reason,
+			reason,
+			config,
+			summary: model,
+		};
+	});
+
+	// 手动添加、但运行时还没登记出来的模型也要露面，否则用户会以为没保存成功。
+	for (const config of provider.models ?? []) {
+		if (config.hidden) continue;
+		if (summaries.some((model) => model.modelId === config.id)) continue;
+		const reason = unavailableReason(provider, false);
+		entries.push({
+			key: `${provider.id}/${config.id}`,
+			modelId: config.id,
+			name: config.name || config.id,
+			contextWindow: config.contextWindow,
+			maxTokens: config.maxTokens,
+			reasoning: config.reasoning === true,
+			thinkingLevels: Array.isArray(config.thinkingLevels) ? [...config.thinkingLevels] : ["off"],
+			cost: costOf(config, null),
+			placeholder: isPlaceholder(config, null),
+			contextPlaceholder: config.contextWindow === limits.contextWindow,
+			maxPlaceholder: config.maxTokens === limits.maxTokens,
+			available: !reason,
+			reason,
+			config,
+			summary: null,
 		});
+	}
+	return entries;
 }
 
 /**
@@ -1018,9 +1132,14 @@ function isPlaceholder(model, summary) {
 /**
  * 供应商详情里的模型区：检索 + 统计 + 批量 + 卡片行。
  *
- * editable = false 时（内置供应商）只读展示：目录由应用维护，改了也不生效。
+ * editable = false 时只读展示。
+ * 内置供应商可编辑参数，但不给全选/批量（内置模型未必都在设置里存过条目，
+ * 批量接口只认已存的条目，静默漏掉一半会更糟）；回填同理，它做的事和
+ * 「从上游拉取模型」重叠，放在这一区容易误点成整表替换。
  */
-function renderModelZone(box, provider, editable) {
+function renderModelZone(box, provider, editable, options = {}) {
+	const pickable = editable && options.pickable !== false;
+	const withBackfill = editable && options.backfill !== false;
 	const entries = modelEntries(provider);
 	const zone = el("div", "model-zone");
 	zone.id = "model-zone";
@@ -1050,7 +1169,7 @@ function renderModelZone(box, provider, editable) {
 	head.append(stats);
 
 	// 「按上游回填」放进表头而不是另起一行：它改的就是这些数字本身。
-	if (editable) {
+	if (withBackfill) {
 		const backfill = el("button", "btn btn-sm", "按上游回填");
 		backfill.id = "model-backfill";
 		backfill.title = "从上游拉取模型并回填上下文与输出上限";
@@ -1077,10 +1196,10 @@ function renderModelZone(box, provider, editable) {
 
 	const toolbar = el("div", "model-toolbar");
 	toolbar.id = "model-toolbar";
-	const ctx = { provider, entries, editable, allBox: null, countEl: null, shown: entries, stats };
+	const ctx = { provider, entries, editable, pickable, allBox: null, countEl: null, shown: entries, stats };
 	view.modelContext = ctx;
 
-	if (editable) {
+	if (pickable) {
 		const pickAll = el("label", "model-pick-all");
 		const allBox = document.createElement("input");
 		allBox.type = "checkbox";
@@ -1144,15 +1263,17 @@ function renderModelList() {
 				"empty-hint",
 				query
 					? "没有匹配的模型。"
-					: ctx.editable
-						? "还没有模型。填好 Base URL 与 Key 后点「拉取模型」，或用下方「＋ 手动添加模型」。"
-						: statusOf(ctx.provider.id)?.authSource === "none"
-							? "保存 API Key 后，即可列出内置模型。"
-							: "该供应商当前没有可用模型。",
+					: ctx.provider.kind === "builtin"
+						? "还没有模型。点「从上游拉取模型」，或用下方「＋ 手动添加模型」。"
+						: ctx.editable
+							? "还没有模型。填好 Base URL 与 Key 后点「拉取模型」，或用下方「＋ 手动添加模型」。"
+							: statusOf(ctx.provider.id)?.authSource === "none"
+								? "保存 API Key 后，即可列出内置模型。"
+								: "该供应商当前没有可用模型。",
 			),
 		);
 	} else {
-		for (const entry of shown) list.append(modelCard(ctx.provider, entry, ctx.editable));
+		for (const entry of shown) list.append(modelCard(ctx.provider, entry, ctx.editable, ctx.pickable));
 	}
 	ctx.shown = shown;
 	updateModelStats();
@@ -1206,12 +1327,12 @@ function setAllPicked(on) {
 }
 
 /** 一个模型的卡片行。 */
-function modelCard(provider, entry, editable) {
+function modelCard(provider, entry, editable, pickable) {
 	const card = el("div", "model-card" + (entry.key === view.data.defaultModel ? " is-default" : ""));
 	card.dataset.modelKey = entry.key;
 
 	const head = el("div", "model-card-head");
-	if (editable) {
+	if (pickable) {
 		const wrap = el("label", "model-pick");
 		const check = document.createElement("input");
 		check.type = "checkbox";
@@ -1434,7 +1555,9 @@ function renderBatchPanel(ctx) {
 	const host = ctx.panelHost;
 	if (!host) return;
 	host.replaceChildren();
-	if (!view.batchOpen) return;
+	// 内置供应商不给批量：批量接口只认设置里存过的条目，
+	// 内置模型大多还没存过，勾选面板会漏人。
+	if (!ctx.pickable || !view.batchOpen) return;
 
 	const panel = el("div", "model-batch-panel");
 	panel.id = "model-batch-panel";
