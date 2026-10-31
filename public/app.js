@@ -7157,6 +7157,8 @@ $("export-form").addEventListener("submit", async (event) => {
 		submit.disabled = false;
 	}
 });
+// 设置面板里的「导出备份」按钮也走这里：同一个入口，不复制一份导出逻辑。
+window.addEventListener("novel:open-backup", () => openBackupDialog());
 $("backup-cancel").addEventListener("click", () => closeDialog($("backup-dialog")));
 $("backup-import").addEventListener("click", () => $("backup-file").click());
 // 选了文件立刻开导：这一步没有可调的东西，多一次"确定"只是多一次犹豫。

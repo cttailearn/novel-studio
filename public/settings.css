@@ -110,6 +110,61 @@
 	border-color: var(--cinnabar);
 }
 
+/* 数据与密钥存放位置：多用户部署下最容易误解的一件事，放在设置第一屏。 */
+.storage-summary {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px 14px;
+	padding: 9px var(--sp-5, 24px);
+	background: var(--paper-hi);
+	border-bottom: 1px solid var(--rule-soft);
+	font-size: var(--fs-xs, 11.5px);
+	line-height: 1.6;
+	color: var(--ink-3);
+}
+
+.storage-summary[hidden] {
+	display: none;
+}
+
+.storage-summary .storage-title {
+	font-weight: 600;
+	color: var(--ink-2);
+}
+
+.storage-summary .storage-detail {
+	flex: 1 1 280px;
+	min-width: 200px;
+}
+
+.storage-summary .storage-usage {
+	font-family: var(--mono);
+	font-size: 11px;
+	color: var(--ink-3);
+}
+
+.storage-summary .storage-actions {
+	display: flex;
+	gap: 8px;
+	margin-left: auto;
+}
+
+.storage-summary .storage-actions .btn {
+	font-size: 11px;
+}
+
+@media (max-width: 780px) {
+	.storage-summary {
+		padding: 9px 14px;
+	}
+
+	.storage-summary .storage-actions {
+		margin-left: 0;
+		width: 100%;
+	}
+}
+
 .default-extra {
 	display: flex;
 	flex-direction: column;

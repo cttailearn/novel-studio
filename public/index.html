@@ -764,7 +764,7 @@
 			<div class="settings-head">
 				<div>
 					<h3>创作环境</h3>
-					<p>模型、供应商与联网资料 · 所有密钥仅保存在本机</p>
+					<p id="settings-subtitle">模型、供应商与联网资料</p>
 				</div>
 				<button id="settings-close" class="btn btn-quiet" aria-label="关闭设置">完成</button>
 			</div>
@@ -774,6 +774,8 @@
 				<span id="settings-save-status" class="settings-save-status" role="status" aria-live="polite"></span>
 			</div>
 			<div id="settings-models-panel" role="tabpanel" aria-labelledby="settings-tab-models">
+			<!-- 数据存在哪、占多少、怎么备份：多用户部署下最容易被误解的一件事，放在设置第一屏。 -->
+			<div id="storage-summary" class="storage-summary" hidden></div>
 			<div class="settings-defaults">
 				<div class="defaults-caption"><span>默认创作模型</span><small>新对话使用；已有对话可在顶栏另选</small></div>
 				<div class="defaults-fields">

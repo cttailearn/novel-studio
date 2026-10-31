@@ -225,6 +225,7 @@ function renderAll() {
 	renderDetail();
 	renderWebSettings();
 	renderReadySummary();
+	renderStorageSummary();
 	setSection(view.section);
 	applyPane();
 }
@@ -236,6 +237,79 @@ function renderReadySummary() {
 	const badge = $("settings-web-nav-status");
 	badge.textContent = web.enabled ? (web.configured ? "已开启" : "缺密钥") : "";
 	badge.className = `settings-nav-dot${web.enabled ? web.configured ? " is-ok" : " is-warn" : ""}`;
+}
+
+/**
+ * 数据与密钥存哪、占多少、怎么带走。
+ * 多用户部署（STORAGE=idb）下服务端不保存任何作品和密钥，这件事只写在部署文档里没人看得见，
+ * 所以直接摆在设置第一屏：模式不同文案也不同，别让单机自用的人误以为数据在云端。
+ */
+function renderStorageSummary() {
+	const box = $("storage-summary");
+	const subtitle = $("settings-subtitle");
+	const browserMode = isBrowserStorage();
+	if (subtitle) {
+		subtitle.textContent = browserMode
+			? "模型、供应商与联网资料 · 数据与密钥只存在你的浏览器里"
+			: "模型、供应商与联网资料 · 所有密钥仅保存在本机";
+	}
+	if (!box) return;
+	box.hidden = false;
+	box.replaceChildren();
+	box.append(el("span", "storage-title", browserMode ? "数据与密钥只在这台设备的浏览器里" : "数据与密钥保存在本机 data/ 目录"));
+	box.append(el("span", "storage-detail", browserMode
+		? "服务器不保存作品和密钥；换设备或清理浏览器数据后会丢，建议定期导出备份。"
+		: "不会上传到服务器。"));
+	if (!browserMode) return;
+
+	const usage = el("span", "storage-usage", "正在统计占用…");
+	const actions = el("span", "storage-actions");
+	const backup = el("button", "btn btn-quiet btn-sm", "导出备份");
+	backup.type = "button";
+	backup.title = "把全部作品、素材与设置打包成 .novel 文件，存到本机";
+	backup.addEventListener("click", () => {
+		const dialog = $("settings-dialog");
+		if (dialog?.open) dialog.close();
+		window.dispatchEvent(new Event("novel:open-backup"));
+	});
+	actions.append(backup);
+
+	const storage = navigator.storage;
+	if (typeof storage?.persist === "function") {
+		const pin = el("button", "btn btn-quiet btn-sm", "固化存储");
+		pin.type = "button";
+		pin.title = "请浏览器尽量别因为空间紧张清掉本站数据";
+		pin.addEventListener("click", async () => {
+			pin.disabled = true;
+			let granted = false;
+			try {
+				granted = await storage.persist();
+			} catch {
+				// 不支持就照常提示未固化，不影响别的功能。
+			}
+			pin.textContent = granted ? "已固化" : "未获批";
+			void refreshStorageUsage(usage);
+		});
+		actions.append(pin);
+	}
+
+	box.append(usage, actions);
+	void refreshStorageUsage(usage);
+}
+
+async function refreshStorageUsage(node) {
+	try {
+		const storage = navigator.storage;
+		const estimate = await storage?.estimate?.();
+		const persisted = await storage?.persisted?.();
+		if (!node.isConnected) return;
+		const parts = [`已用 ${formatBytes(estimate?.usage ?? 0)}`];
+		if (estimate?.quota) parts.push(`可用额度 ${formatBytes(estimate.quota)}`);
+		parts.push(persisted ? "已固化" : "未固化（空间紧张时可能被清理）");
+		node.textContent = parts.join(" · ");
+	} catch {
+		if (node.isConnected) node.textContent = "";
+	}
 }
 
 let statusTimer;
@@ -1784,6 +1858,19 @@ function formatTokens(value) {
 	if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value % 1_000_000 === 0 ? 0 : 1)}M`;
 	if (value >= 1000) return `${Math.round(value / 1000)}K`;
 	return String(value);
+}
+
+function formatBytes(bytes) {
+	if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+	const units = ["B", "KB", "MB", "GB", "TB"];
+	let value = bytes;
+	let index = 0;
+	while (value >= 1024 && index < units.length - 1) {
+		value /= 1024;
+		index += 1;
+	}
+	const digits = value >= 100 || index === 0 ? 0 : 1;
+	return `${value.toFixed(digits)} ${units[index]}`;
 }
 
 // ---------------------------------------------------------------- 操作
