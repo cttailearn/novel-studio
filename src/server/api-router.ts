@@ -482,7 +482,13 @@ async function authorizedWebSearch(ctx: RouterContext) {
 	if (!apiKey) return undefined;
 	const baseUrl = ctx.deps.env.DEEPSEEK_WEB_SEARCH_BASE_URL;
 	return {
-		client: new DeepSeekWebSearchClient({ apiKey, ...(baseUrl ? { baseUrl } : {}) }),
+		client: new DeepSeekWebSearchClient({
+			apiKey,
+			...(baseUrl ? { baseUrl } : {}),
+			// 浏览器本地模式下 fetch 是跨域的，DeepSeek 的 Search/Fetch 不带 CORS 头，
+			// 所以统一走 /api/llm 中继；Node 单机模式没有 upstreamFetch，行为不变。
+			...(ctx.deps.upstreamFetch ? { fetchImpl: ctx.deps.upstreamFetch } : {}),
+		}),
 		config: web,
 	};
 }

@@ -182,12 +182,20 @@ export async function createNovelAgent(options: NovelAgentOptions): Promise<Agen
 	// 提示词、工具集、状态快照三者都要换，不是只换工具 ——
 	// 提示词里仍提「本章」会让模型去找根本不存在的章节。
 	if (options.library) {
+		// 联网工具和提示词里的放行清单必须同进同退：只给工具不改提示词，
+		// 提示词末段那句"不要调用 list_materials、upsert_material、ask_user 以外的工具"
+		// 会把 web_search 一起禁掉，作者看到的仍是"我无法联网"。
+		const libraryWebSearch = options.webSearch?.config.enabled ? options.webSearch : undefined;
 		return new Agent({
 			initialState: {
-				systemPrompt: buildLibrarySystemPrompt(options.library.list()),
+				systemPrompt: buildLibrarySystemPrompt(options.library.list(), libraryWebSearch !== undefined),
 				model,
 				thinkingLevel: options.thinkingLevel ?? config.defaultThinkingLevel,
-				tools: createLibraryTools({ library: options.library, ask: options.ask }),
+				tools: createLibraryTools({
+					library: options.library,
+					ask: options.ask,
+					...(libraryWebSearch ? { webSearch: libraryWebSearch } : {}),
+				}),
 			},
 			streamFn,
 			sessionId,

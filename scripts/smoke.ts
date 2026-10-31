@@ -252,6 +252,14 @@ try {
 	check("库提示词声明一次一条是硬要求", libPrompt.includes("一次一条是硬要求"));
 	check("库提示词默认只写一条", libPrompt.includes("只写 1 条"));
 	check("库提示词按内容定条数", libPrompt.includes("条数由内容需要决定"));
+	// 通用素材库的设定官同样需要查证资料：工具和提示词里的放行清单要同时到位，
+	// 只给工具不改提示词，末段那句"不要调用…以外的工具"会把 web_search 禁掉。
+	const libWebTools = createLibraryTools({ library: libScope, webSearch: { client: webClient, config: webConfig } });
+	const libWebNames = libWebTools.map((tool) => tool.name);
+	check("库设定官也能联网检索", libWebNames.includes("web_search") && libWebNames.includes("web_fetch"), libWebNames.join(","));
+	const libWebPrompt = buildLibrarySystemPrompt(libScope.list(), true);
+	check("库提示词放行联网工具", libWebPrompt.includes("web_search") && libWebPrompt.includes("联网资料纪律"));
+	check("库提示词未开启时不提联网", !libPrompt.includes("联网资料纪律"));
 	await new Promise((resolve) => setTimeout(resolve, 60));
 	// ---- 素材智能体工具链路 ----
 	console.log("\n素材智能体工具");

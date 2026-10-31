@@ -87,8 +87,14 @@ function readTransport(): "direct" | "relay" {
 	}
 }
 
-/** 浏览器模式的上游模型拉取：与 LLM 一样走中继，绕开厂商未开放的 CORS。 */
-function upstreamFetch(relayUrl: string): typeof globalThis.fetch {
+/**
+ * 浏览器模式的上游请求：与 LLM 一样走中继，绕开厂商未开放的 CORS。
+ *
+ * 连请求体一起转：模型列表是 GET 不需要体，但联网检索的 Search/Fetch 是 POST，
+ * 丢掉 body 会让上游收到空请求。中继的 encodeBody 把字符串原样写出，
+ * 所以这里不必 JSON.parse 再序列化，省一次往返转换。
+ */
+export function createRelayFetch(relayUrl: string): typeof globalThis.fetch {
 	return async (input, init) => {
 		const target = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
 		const requestHeaders = new Headers(init?.headers);
@@ -109,6 +115,7 @@ function upstreamFetch(relayUrl: string): typeof globalThis.fetch {
 				authHeader,
 				authScheme: authHeader === "authorization" ? "Bearer " : "",
 				headers: Object.fromEntries(requestHeaders),
+				...(typeof init?.body === "string" ? { body: init.body } : {}),
 			}),
 			signal: init?.signal,
 		});
@@ -194,7 +201,7 @@ async function bootstrap(): Promise<LocalRuntime> {
 		recordsKeep: RECORDS_KEEP,
 		newId,
 		builtinCatalog: models.builtinCatalog(),
-		upstreamFetch: upstreamFetch("/api/llm"),
+		upstreamFetch: createRelayFetch("/api/llm"),
 		createAskChannel: (sessionId: string) => new AskChannel(sessionId),
 		answerQuestion,
 		models,

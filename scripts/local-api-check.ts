@@ -110,6 +110,26 @@ let relayPayload: Record<string, unknown> | undefined;
 // 垫片装好之后再加载被测模块（它读的是全局）。
 let currentApi = await import("../src/browser/local-api.ts");
 
+// 中继桥必须把请求体一起转：模型列表是 GET 不需要体，联网检索的 Search/Fetch 是 POST，
+// 丢掉 body 上游只会收到空请求，表现成"联网失败"。这里直接验桥的载荷。
+relayPayload = undefined;
+await currentApi.createRelayFetch("/api/llm")("https://api.deepseek.com/v1/tools/search", {
+	method: "POST",
+	headers: { authorization: "Bearer sk-bridge", "content-type": "application/json" },
+	body: JSON.stringify({ query: "古代渡口", count: 3 }),
+});
+const bridgePayload = relayPayload as Record<string, unknown> | undefined;
+check(
+	"中继桥转发 POST 与请求体",
+	bridgePayload?.["method"] === "POST" &&
+		bridgePayload?.["target"] === "https://api.deepseek.com/v1/tools/search" &&
+		bridgePayload?.["apiKey"] === "sk-bridge" &&
+		bridgePayload?.["body"] === '{"query":"古代渡口","count":3}',
+	JSON.stringify(bridgePayload),
+);
+// 这一笔只是为了验桥的载荷，不计入"启动只读目录"的出网账。
+outbound.length = 0;
+
 interface ApiResult {
 	status: number;
 	data: Record<string, unknown> | null;

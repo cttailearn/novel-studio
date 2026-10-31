@@ -1188,6 +1188,11 @@ export interface LibraryToolDeps {
 	 * 给模型一个问不出去的工具，比不给更糟。
 	 */
 	ask?: AskBroker;
+	/**
+	 * 联网检索。库作用域的设定官和作品内的设定官一样需要查证现实资料，
+	 * 之前只在工程素材分支注入，导致通用素材库这边提示词写着"不能联网"。
+	 */
+	webSearch?: { client: WebSearchClient; config: WebSearchConfig };
 }
 
 /** 库条目的一行摘要。与作品素材同格式，但不带"已装入"——库里没有章节。 */
@@ -1307,6 +1312,9 @@ export function createLibraryTools(deps: LibraryToolDeps): AgentTool<any>[] {
 
 		// 库作用域同样可以问作者 —— 提示词里也放行了这一支。
 		...(deps.ask ? [askUserTool(deps.ask)] : []),
+
+		// 联网工具只由调用方决定给不给：提示词里的放行清单与这里必须一致。
+		...(deps.webSearch?.config.enabled ? createWebSearchTools(deps.webSearch.client, deps.webSearch.config) : []),
 	];
 }
 
