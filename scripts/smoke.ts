@@ -718,7 +718,7 @@ try {
 
 	// 落盘：库文件必须能被重新读回，且不能被 ProjectStore 当成一部作品。
 	library.create({ kind: "world", title: "黑水汊", content: "野渡的规矩。", usage: "渡口戏" });
-	await new Promise((resolve) => setTimeout(resolve, 80));
+	await library.flush();
 	const reopened = await MaterialLibrary.open(dir);
 	check("库能落盘并重新读回", reopened.list().length === 1 && reopened.list()[0]!.title === "黑水汊");
 

@@ -1392,28 +1392,40 @@
 	}
 
 	/* —— 两页 ——
-	   用 .settings-dialog 前缀压过 style.css 里 `.sheet-wide .settings-body`
-	   的 overflow-y:auto：整页滚会让「返回」跟着滚走，滚动必须交给列表/详情
-	   各自那一层。 */
+	   手机屏幕矮，默认模型区固定占掉上半屏后，供应商列表只剩一条缝。
+	   让 #settings-models-panel 整体滚：题签与页签留在原地，默认模型、
+	   搜索框、供应商列表依次滚过去；点进某家后详情也在这层里滚，
+	   「返回」用 sticky 钉住。 */
+	#settings-models-panel {
+		overflow-y: auto;
+		overscroll-behavior: contain;
+		-webkit-overflow-scrolling: touch;
+	}
+
 	.settings-dialog .settings-body {
-		grid-template-columns: minmax(0, 1fr);
-		grid-template-rows: minmax(0, 1fr);
-		overflow: hidden;
+		display: block;
+		flex: 0 0 auto;
+		min-height: auto;
+		overflow: visible;
 		padding-bottom: var(--safe-b, 0px);
 	}
 
 	.settings-body .providers-rail {
-		display: flex;
-		height: 100%;
+		display: block;
+		height: auto;
 		max-height: none;
 		border-bottom: 0;
 	}
 
+	.settings-body .settings-providers {
+		overflow: visible;
+		flex: none;
+	}
+
 	.settings-body .settings-detail {
 		display: none;
-		height: 100%;
-		overflow-y: auto;
-		-webkit-overflow-scrolling: touch;
+		height: auto;
+		overflow: visible;
 	}
 
 	/* 点了某一家：列表让位，详情上场 */

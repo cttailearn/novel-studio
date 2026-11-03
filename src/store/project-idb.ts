@@ -875,9 +875,21 @@ export class IdbProjectStore implements ProjectStorePort {
 			request.onupgradeneeded = () => {
 				const db = request.result;
 				for (const spec of STORE_SPECS) {
-					if (db.objectStoreNames.contains(spec.name)) continue;
-					const store = db.createObjectStore(spec.name, { keyPath: spec.keyPath });
-					for (const index of spec.indexes) store.createIndex(index.name, index.keyPath, { unique: false });
+					// 已存在的表也要补索引：旧库可能是在还没有这条索引时建的，
+					// 而版本号没变就不会再有第二次升级。createIndex 已存在会抛错，
+					// 这里按"有则跳过"处理，对真实 IndexedDB 与 SQLite 假实现都成立。
+					const existing = db.objectStoreNames.contains(spec.name);
+					const store = existing
+						? request.transaction?.objectStore(spec.name)
+						: db.createObjectStore(spec.name, { keyPath: spec.keyPath });
+					if (!store) continue;
+					for (const index of spec.indexes) {
+						try {
+							store.createIndex(index.name, index.keyPath, { unique: false });
+						} catch {
+							// 索引已存在：升级事务里重复建索引会抛 ConstraintError。
+						}
+					}
 				}
 			};
 			request.onsuccess = () => {

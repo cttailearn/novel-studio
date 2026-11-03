@@ -28,7 +28,11 @@ import { createLlmClient, type LlmClient } from "../ai/llm-client.ts";
 import { newId } from "../store/project.ts";
 import { IdbProjectStore } from "../store/project-idb.ts";
 import { openIdbStores, closeIdbStores, type IdbStores } from "../store/idb-stores.ts";
+import type { CredentialStorePort } from "../store/store-port.ts";
 import { createBrowserModels, parseCatalog, syncBuiltinProvidersFromCatalog, type BrowserCatalog } from "./models.ts";
+import { createTauriFetch, isTauri } from "./tauri.ts";
+import { TauriCredentialStore } from "./tauri-credentials.ts";
+import { tauriIdbFactory } from "./tauri-idb.ts";
 
 /** 目录文件的固定位置（构建产物，见 `scripts/browser-build.ts`）。 */
 const CATALOG_URL = "/browser/vendor/catalog.json";
@@ -153,8 +157,24 @@ async function bootstrap(): Promise<LocalRuntime> {
 		/* 隐私模式或老浏览器：忽略，不影响主流程 */
 	}
 
-	// 1) 存储：六个端口全部落到 IndexedDB。
-	const [store, stores] = await Promise.all([IdbProjectStore.open(), openIdbStores()]);
+	// 1) 存储：六个端口全部落到 IndexedDB；Tauri 下换成 SQLite 假 IDB 工厂。
+	const idbFactory = tauriIdbFactory();
+	const storeOptions = idbFactory ? { indexedDB: idbFactory as never } : undefined;
+	const storesOptions = idbFactory ? { indexedDB: idbFactory as never } : undefined;
+	const [store, stores] = await Promise.all([IdbProjectStore.open(storeOptions), openIdbStores(storesOptions)]);
+	// Tauri 桌面把厂商 key 放进系统密钥串；移动端/浏览器仍用原凭据存储。
+	let credentialStore: CredentialStorePort = stores.credentials;
+	if (isTauri()) {
+		try {
+			credentialStore = await TauriCredentialStore.open(stores.credentials);
+		} catch {
+			credentialStore = stores.credentials;
+		}
+	}
+
+	// Tauri 没有 Node 服务端：LLM 与联网检索都走 Rust 原生代理，浏览器里继续走中继/直连。
+	const nativeFetch = isTauri() ? createTauriFetch() : undefined;
+	const transport = nativeFetch ? "direct" : readTransport();
 
 	// 2) 目录：构建期在 Node 侧导出的纯数据。缺了也不致命，只是没有内置厂商。
 	let catalog: BrowserCatalog = { providers: [] };
@@ -175,13 +195,14 @@ async function bootstrap(): Promise<LocalRuntime> {
 	let models: ReturnType<typeof createBrowserModels> | null = null;
 	const client = createLlmClient({
 		resolveApiKey: (provider: string) => (models ? models.apiKey(provider) : Promise.resolve(undefined)),
-		transport: readTransport(),
+		transport,
 		relayUrl: "/api/llm",
+		...(nativeFetch ? { fetchImpl: nativeFetch } : {}),
 	});
 
 	models = createBrowserModels({
 		settingsStore: stores.settings,
-		credentialStore: stores.credentials,
+		credentialStore,
 		catalog,
 		client,
 	});
@@ -192,7 +213,7 @@ async function bootstrap(): Promise<LocalRuntime> {
 		libraryStore: stores.library,
 		kindStore: stores.kinds,
 		settingsStore: stores.settings,
-		credentialStore: stores.credentials,
+		credentialStore,
 		recordStore: stores.records,
 		sessions: new Map<string, Session>(),
 		config: browserConfig(),
@@ -201,7 +222,7 @@ async function bootstrap(): Promise<LocalRuntime> {
 		recordsKeep: RECORDS_KEEP,
 		newId,
 		builtinCatalog: models.builtinCatalog(),
-		upstreamFetch: createRelayFetch("/api/llm"),
+		upstreamFetch: nativeFetch ?? createRelayFetch("/api/llm"),
 		createAskChannel: (sessionId: string) => new AskChannel(sessionId),
 		answerQuestion,
 		models,

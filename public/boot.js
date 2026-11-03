@@ -16,6 +16,10 @@
 	var MODE_KEY = "novel-studio/mode";
 	var LOCAL_API_MODULE = "/browser/local-api.js";
 
+	function isTauri() {
+		return Boolean(window.__TAURI__ || window.__TAURI_INTERNALS__);
+	}
+
 	function hasLocalFlag() {
 		// 部署方把服务端配成 STORAGE=idb 时，服务端会在页面里预先置上这个标记。
 		// 那种部署形态下服务端本来就不存数据，用户不该还要自己去拼一个 ?local=1。
@@ -32,8 +36,9 @@
 		}
 	}
 
-	/** 本地模式开关：没有 IndexedDB（隐私模式等）就不进本地模式。 */
+	/** 本地模式开关：Tauri 一定本地；浏览器里没有 IndexedDB（隐私模式等）就不进本地模式。 */
 	function shouldRunLocal() {
+		if (isTauri()) return true;
 		if (!window.indexedDB) return false;
 		return hasLocalFlag();
 	}
@@ -100,6 +105,49 @@
 			return Promise.reject(new Error("fetch 不可用"));
 		}
 		return originalFetch(input, init);
+	};
+
+	/**
+	 * 桌面端原生保存。
+	 *
+	 * 返回 "saved" | "cancelled" | "unsupported"：
+	 *   - saved：用户选了路径并且文件已写入；
+	 *   - cancelled：用户在系统对话框里取消，页面不要再偷偷触发浏览器下载；
+	 *   - unsupported：浏览器/PWA 或调用失败，调用方回退到 <a download>。
+	 */
+	window.__mogengSaveFile = async function (name, content, binary) {
+		if (!isTauri()) return "unsupported";
+		try {
+			var core = window.__TAURI__ && window.__TAURI__.core;
+			var invoke = core && core.invoke;
+			if (typeof invoke !== "function") return "unsupported";
+			var path;
+			if (binary) {
+				var bytes;
+				if (content instanceof Uint8Array) bytes = content;
+				else if (content && typeof content.arrayBuffer === "function") {
+					bytes = new Uint8Array(await content.arrayBuffer());
+				} else bytes = new Uint8Array(content);
+				var chunks = [];
+				var step = 32768;
+				for (var i = 0; i < bytes.length; i += step) {
+					chunks.push(String.fromCharCode.apply(null, bytes.subarray(i, i + step)));
+				}
+				path = await invoke("save_binary_file", {
+					suggestedName: name,
+					base64Data: btoa(chunks.join("")),
+				});
+			} else {
+				path = await invoke("save_text_file", {
+					suggestedName: name,
+					content: String(content),
+				});
+			}
+			return path ? "saved" : "cancelled";
+		} catch (err) {
+			console.warn("原生保存失败，回退浏览器下载", err);
+			return "unsupported";
+		}
 	};
 
 	window.__DSH_LOCAL_MODE__ = true;

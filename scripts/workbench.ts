@@ -1753,7 +1753,7 @@ try {
 	// 暗色不是反相，而是把纸压成暖黑、把墨提成月白：两套令牌都要在，
 	// 且各自独立定义纸与墨，浓淡关系才不塌。
 	check("有主题开关", indexHtml.includes('id="theme-toggle"'));
-	check("首帧前定主题（防白闪）", indexHtml.includes("novel-studio-theme") && indexHtml.indexOf("novel-studio-theme") < indexHtml.indexOf("/style.css"));
+	check("首帧前定主题（防白闪）", indexHtml.includes('src="/theme-init.js"') && indexHtml.indexOf('src="/theme-init.js"') < indexHtml.indexOf("/style.css"));
 	check("样式里有暗色主题块", styleSource.includes(':root[data-theme="dark"]'));
 	check("暗色声明了 color-scheme", styleSource.includes("color-scheme: dark"));
 	check("开关图元有样式", styleSource.includes(".theme-glyph"));

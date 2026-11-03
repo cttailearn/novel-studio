@@ -2803,6 +2803,22 @@ function openExportDialog(chapterId) {
 }
 
 /**
+ * 桌面端优先走系统保存对话框；浏览器/PWA 回退到 <a download>。
+ * 返回 true 表示已另存（或用户取消，不应再下载），false 表示应回退浏览器下载。
+ */
+async function saveFileNatively(name, content, binary) {
+	if (typeof window.__mogengSaveFile !== "function") return false;
+	const result = await window.__mogengSaveFile(name, content, Boolean(binary));
+	if (result === "saved") {
+		toast("已导出：" + name, "ok", 3200);
+		return true;
+	}
+	// 用户在系统对话框里点了取消：不要接着弹浏览器下载。
+	if (result === "cancelled") return true;
+	return false;
+}
+
+/**
  * 下载导出件。
  *
  * 不用 window.location 直接跳：那样一旦失败，用户只会看到浏览器里一页看不懂的 JSON。
@@ -2831,10 +2847,11 @@ async function exportProject(chapterId, format = "txt") {
 		}
 		const text = await res.text();
 		if (!text.trim()) throw new Error("这部作品还没有正文可导出");
+		const name = exportName(res) || ("novel." + (format === "md" ? "md" : "txt"));
+		if (await saveFileNatively(name, text, false)) return true;
 		const type = format === "md" ? "text/markdown;charset=utf-8" : "text/plain;charset=utf-8";
 		const url = URL.createObjectURL(new Blob([text], { type }));
 		const link = document.createElement("a");
-		const name = exportName(res) || ("novel." + (format === "md" ? "md" : "txt"));
 		link.href = url;
 		link.download = name;
 		document.body.append(link);
@@ -2912,10 +2929,11 @@ async function exportBackup(options) {
 			throw new Error(detail?.error || "导出失败（" + res.status + "）");
 		}
 		const blob = await res.blob();
+		const name = exportName(res) || (scope === "book" ? "novel.novel" : "novel-studio.novel");
+		if (await saveFileNatively(name, blob, true)) return true;
 		const url = URL.createObjectURL(blob);
 		const link = document.createElement("a");
 		link.href = url;
-		const name = exportName(res) || (scope === "book" ? "novel.novel" : "novel-studio.novel");
 		link.download = name;
 		document.body.append(link);
 		link.click();
@@ -3171,7 +3189,7 @@ function renderMaterialsBench() {
 				"div",
 				"bench-empty",
 				project.materials.length === 0
-					? "素材库还是空的。\n左边上传资料，或直接交代要立什么设定 —— 素材是一切之先。"
+					? "素材库还是空的。\n上传资料，或直接交代要立什么设定 —— 素材是一切之先。"
 					: state.materialQuery.trim()
 						? "没有匹配「" + state.materialQuery.trim() + "」的素材。\n换个词，或清空检索框。"
 						: "此类尚无素材。",
@@ -3464,7 +3482,7 @@ async function assemblePicked() {
 	if (picked.length === 0) return;
 	const chapter = state.project?.outline.find((item) => item.id === state.chapterId);
 	if (!chapter) {
-		toast("先在左栏点开一章，再装料。", "warn", 4200);
+		toast("先在章目里点开一章，再装料。", "warn", 4200);
 		return;
 	}
 	const add = picked.filter((material) => !chapter.materialIds.includes(material.id)).map((material) => material.id);
@@ -3531,7 +3549,7 @@ function materialById(id) {
 /** 直接装料 / 摘料。与智能体的 attach_materials 写的是同一份数据。 */
 async function assemble(add, remove) {
 	if (!state.chapterId) {
-		toast("先在左栏点开一章。", "warn");
+		toast("先在章目里点开一章。", "warn");
 		return;
 	}
 	try {
@@ -4212,7 +4230,7 @@ function renderWriteActions(project, chapter) {
 				? "只动你在下面点名的地方，其余一字不改。"
 				: "这一章还没有正文：先按「从零写起」写一遍，再来局部改。";
 		} else if (assembled.length === 0) {
-			modeNote.textContent = "这一章还没装料：先到左栏「库中可装」里挑几条。";
+			modeNote.textContent = "这一章还没装料：先到「库中可装」里挑几条。";
 		} else {
 			modeNote.textContent = "带 " + assembled.length + " 条料落笔；下面输入框里写的交代会一并附上。";
 		}
@@ -4808,7 +4826,7 @@ function submitWriting(text) {
 	const project = state.project;
 	const chapterId = state.chapterId;
 	if (!project || !chapterId) {
-		toast("先在左栏点开一章。", "warn");
+		toast("先在章目里点开一章。", "warn");
 		return;
 	}
 	if (streamBusy("writing")) {
@@ -4817,7 +4835,7 @@ function submitWriting(text) {
 	}
 	const chapter = project.outline.find((item) => item.id === chapterId);
 	if (!chapter) {
-		toast("先在左栏点开一章。", "warn");
+		toast("先在章目里点开一章。", "warn");
 		return;
 	}
 	const mode = state.writeMode;
@@ -5077,7 +5095,7 @@ function openRecords(pane) {
 	if (!spec) return;
 	if (!state.projectId) return;
 	if (pane === "writing" && !state.chapterId) {
-		toast("先在左栏点开一章，再看这一章的记录。", "warn");
+		toast("先在章目里点开一章，再看这一章的记录。", "warn");
 		return;
 	}
 	const layer = ensureRecordsEls();
@@ -5333,8 +5351,8 @@ async function selectProject(id) {
 		? rememberedChapter
 		: null;
 	renderChapters();
-	appendMessage("material", "assistant", "《" + state.project.title + "》已展上案头。左边上传资料，或直接交代要立什么设定。");
-	appendMessage("writing", "assistant", "执笔者在此。左栏装配本章素材，或直接交代要写什么。");
+	appendMessage("material", "assistant", "《" + state.project.title + "》已展上案头。上传资料，或直接交代要立什么设定。");
+	appendMessage("writing", "assistant", "执笔者在此。装配本章素材，或直接交代要写什么。");
 }
 
 /**
@@ -6197,7 +6215,7 @@ async function sendMessage(pane, text, options = {}) {
 		return;
 	}
 	if (pane === "writing" && !state.chapterId) {
-		appendMessage("writing", "error", "先在左栏点开一章。");
+		appendMessage("writing", "error", "先在章目里点开一章。");
 		return;
 	}
 	// 素材工作台：选中了素材就把「改哪几条」拼进指令；作者看到的仍是他自己的原话。

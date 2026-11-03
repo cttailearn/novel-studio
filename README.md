@@ -8,6 +8,14 @@
 
 仓库在 [github.com/cttailearn/novel-studio](https://github.com/cttailearn/novel-studio)，问题与建议走 [Issues](https://github.com/cttailearn/novel-studio/issues)。
 
+## 下载
+
+首个公开版本 **v0.1.0**：
+
+- [Windows x64 便携版](https://github.com/cttailearn/novel-studio/releases/download/v0.1.0/novel-studio-v0.1.0-windows-x64.exe)：双击运行，无需安装；未签名，SmartScreen 可能提示。
+- [Android arm64 APK](https://github.com/cttailearn/novel-studio/releases/download/v0.1.0/novel-studio-v0.1.0-android-arm64.apk)：Android 7.0+；debug 签名，需允许安装未知来源应用。
+- [发布说明](https://github.com/cttailearn/novel-studio/releases/tag/v0.1.0) · [更新日志](CHANGELOG.zh.md)
+
 ## 目录
 
 | 开始 | 使用 | 参考 |
@@ -59,8 +67,12 @@ pnpm dev        # http://127.0.0.1:8787
 | `pnpm dev` | 启动并监听文件变化 |
 | `pnpm start` | 启动，不监听 |
 | `pnpm typecheck` | 只跑 `tsc --noEmit` |
-| `pnpm test` | `typecheck` + 十二个测试套件，全部离线，不需要 API Key |
+| `pnpm test` | `typecheck` + 十二个测试套件（含 Tauri 静态契约），全部离线，不需要 API Key |
 | `pnpm build:browser` | 生成浏览器端产物 `public/browser/**`（多用户部署必做） |
+| `pnpm build:web` | 生成 Tauri 用的完整前端 `dist/web/**` |
+| `pnpm dev:tauri` | 启动 Tauri 桌面窗口（开发模式） |
+| `pnpm build:tauri` | 构建 Tauri 桌面应用（安装包需 WiX/NSIS） |
+| `pnpm test:browser` | 单独检查浏览器端产物（需本机有 Chrome） |
 
 ## 多用户部署（数据全在用户浏览器里）
 
@@ -85,6 +97,46 @@ STORAGE=idb HOST=0.0.0.0 PORT=8787 node --experimental-strip-types src/server/ma
 没有云同步，也不打算做 —— 那等于把数据又搬回服务器。
 
 细节见 [`docs/deployment.md`](docs/deployment.md) 与 [`docs/multi-user-browser-local-plan.md`](docs/multi-user-browser-local-plan.md)。
+
+## Tauri 桌面与移动端
+
+同一份前端也可以装进 Tauri 2 壳：桌面和手机都不启动 Node 服务，业务层继续在前端跑，
+只把「原生能力」交给 Rust —— 流式 LLM 代理、SQLite、系统密钥串、文件对话框。
+
+```bash
+pnpm build:web      # 生成 dist/web（含 public/browser 模块）
+pnpm dev:tauri      # 开发模式启动桌面窗口
+pnpm build:tauri    # 构建桌面应用（安装包需 WiX/NSIS）
+```
+
+Android 首次需要初始化工程：
+
+```bash
+pnpm exec tauri android init --ci
+pnpm exec tauri android build --debug --apk -t aarch64 --ci
+```
+
+APK 产物在 `src-tauri/gen/android/app/build/outputs/apk/arm64/debug/app-arm64-debug.apk`。
+模拟器通常是 x86_64，需要 `-t x86_64`，产物在 `.../apk/x86_64/debug/app-x86_64-debug.apk`：
+
+```bash
+adb install -r src-tauri/gen/android/app/build/outputs/apk/x86_64/debug/app-x86_64-debug.apk
+adb shell am start -n com.mogeng.novelstudio.debug/com.mogeng.novelstudio.MainActivity
+```
+
+`src-tauri/package.json` 只用于让 Gradle 的 Rust 构建任务解析 `pnpm tauri`，它把命令转发到仓库根。
+
+前提：Rust ≥ 1.90；Windows 需要 VS C++ 生成工具与 WebView2；Android 需要 SDK、NDK、JDK 17
+并设置 `ANDROID_HOME`；iOS 只能在 macOS/Xcode 上构建。
+
+数据落在系统应用数据目录的 `novel-studio.sqlite3`。可以用 `NOVEL_STUDIO_DATA_DIR`
+覆盖（便携模式/测试）；桌面 API Key 写系统凭据管理器，不写 SQLite。移动端 v1
+尚未接 Keychain/Keystore，会明确回退到本地凭据存储；原生保存/打开对话框也只在桌面启用，
+手机上继续走系统分享或浏览器下载。这些边界在界面上不假装支持。
+
+Tauri 里的模型请求走 Rust `proxy_stream`：只允许 HTTPS（本机 HTTP 例外）、校验证书与目标地址、
+拒绝私网/回环/云元数据、不跟随重定向，并限制请求体、响应体与超时。PWA 模式不受影响，
+仍然默认走 `/api/llm` 中继。
 
 ## 三块面板
 
@@ -330,7 +382,7 @@ data/          运行时数据（git 忽略）：工程、正文、密钥、记�
 
 ## 测试
 
-类型检查与十二组离线回归：`test:config`（供应商与设置）、`test:tools`（工具契约与素材逻辑）、`test:context`（对话配对与上下文预算）、`test:storage`（分层存储、失败恢复与回收站）、`test:server`（真进程 HTTP、互斥与幂等）、`test:loop`（用 `pi-ai` 的 `fauxProvider` 跑完整素材链与组装链）、`test:frontend`（前端静态契约，不能代替真实浏览器交互）、`test:idb`（IndexedDB 工程存储与其余五个存储）、`test:package`（`.novel` 包的导出导入与口令加密）、`test:local`（把真路由架在 IndexedDB 上跑，含"关掉重开数据还在"）、`test:relay`（中继的 SSRF、限流、不留痕）。
+类型检查与十二组离线回归：`test:config`（供应商与设置）、`test:tools`（工具契约与素材逻辑）、`test:context`（对话配对与上下文预算）、`test:storage`（分层存储、失败恢复与回收站）、`test:server`（真进程 HTTP、互斥与幂等）、`test:loop`（用 `pi-ai` 的 `fauxProvider` 跑完整素材链与组装链）、`test:frontend`（前端静态契约，不能代替真实浏览器交互）、`test:idb`（IndexedDB 工程存储与其余五个存储）、`test:package`（`.novel` 包的导出导入与口令加密）、`test:local`（把真路由架在 IndexedDB 上跑，含"关掉重开数据还在"）、`test:relay`（中继的 SSRF、限流、不留痕）、`test:tauri`（Tauri 配置、Rust 命令、SQLite/密钥串/文件桥与 CSP 静态契约）。
 
 另有两条不进 `pnpm test` 的：`test:browser`（浏览器产物契约，其中"真实浏览器冒烟"需要本机有能启动的 Chrome）与 `build:browser`（生成产物）。
 

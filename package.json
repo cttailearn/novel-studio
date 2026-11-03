@@ -31,15 +31,20 @@
     "test:package": "node --experimental-strip-types scripts/novel-package-check.ts",
     "test:local": "node --experimental-strip-types scripts/local-api-check.ts",
     "test:relay": "node --experimental-strip-types scripts/relay-check.ts",
+    "test:tauri": "node --experimental-strip-types scripts/tauri-contracts.ts",
     "build:browser": "node --experimental-strip-types scripts/browser-build.ts",
+    "build:web": "node --experimental-strip-types scripts/build-web.ts",
+    "dev:tauri": "tauri dev",
+    "build:tauri": "tauri build",
     "test:browser": "node --experimental-strip-types scripts/browser-build-check.ts",
-    "test": "pnpm typecheck && pnpm test:config && pnpm test:tools && pnpm test:context && pnpm test:storage && pnpm test:server && pnpm test:loop && pnpm test:frontend && pnpm test:idb && pnpm test:package && pnpm test:local && pnpm test:relay"
+    "test": "pnpm typecheck && pnpm test:config && pnpm test:tools && pnpm test:context && pnpm test:storage && pnpm test:server && pnpm test:loop && pnpm test:frontend && pnpm test:idb && pnpm test:package && pnpm test:local && pnpm test:relay && pnpm test:tauri"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "1.2.0",
     "@earendil-works/pi-ai": "1.2.0"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.12.4",
     "@types/node": "^24.3.0",
     "typescript": "^5.9.2"
   }

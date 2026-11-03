@@ -209,7 +209,8 @@ function resolveOutDir(explicit: string | undefined): { outDir: string; fallback
 			const probe = path.join(candidate, ".write-probe");
 			fs.writeFileSync(probe, "ok");
 			fs.rmSync(probe, { force: true });
-			return { outDir: candidate, fallback: candidate !== path.join(REPO_ROOT, DEFAULT_OUT_REL) };
+			// 显式指定输出目录是正常构建，不算“退让”；只有默认目录写不进去才提示。
+			return { outDir: candidate, fallback: !explicit && candidate !== path.join(REPO_ROOT, DEFAULT_OUT_REL) };
 		} catch (err) {
 			errors.push(`${candidate}: ${(err as Error).message}`);
 		}

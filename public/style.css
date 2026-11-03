@@ -18,8 +18,9 @@
 	   所以 ink-4 只许用于描边、分隔、圆点、滚动条这些不成句的地方；
 	   凡是能读的句子（含占位符、标签、字数、时间）一律降到 ink-3 或更高。
 	   ink-3 原为 #6d665c，在 paper-lo / paper-sunk 上只有 4.12 / 3.85，够不着自己
-	   承诺的 4.5；压深一档后四种纸面上是 5.16 / 5.64 / 4.58 / 4.28。 */
-	--ink-3:       #665f55;   /* 淡墨（次要文字，可读） */
+	   承诺的 4.5；再压一档到 #615a51，四种纸面上是 5.57 / 6.08 / 4.94 / 4.62，
+	   连凹陷的输入框内里也过线。 */
+	--ink-3:       #615a51;   /* 淡墨（次要文字，可读） */
 	--ink-4:       #8a8274;   /* 飞白（最淡，只做描边与点缀，不承载文字） */
 	--rule:        rgba(42, 38, 32, 0.13);
 	--rule-soft:   rgba(42, 38, 32, 0.07);
@@ -100,11 +101,11 @@
 	--r-1: 3px;
 	--r-2: 6px;
 	--r-3: 10px;
-	--fs-xs: 11.5px;
-	--fs-sm: 12.5px;
-	--fs-md: 14px;
-	--fs-lg: 16px;
-	--fs-xl: 19px;
+	--fs-xs: 12px;
+	--fs-sm: 13px;
+	--fs-md: 14.5px;
+	--fs-lg: 16.5px;
+	--fs-xl: 20px;
 	/* 一笔刷下去的时长与曲线：所有新动效共用，快而收得住。
 	   不要用弹性曲线 —— 纸上不会弹。 */
 	--brush: 320ms cubic-bezier(0.2, 0.7, 0.3, 1);
@@ -1519,6 +1520,10 @@ select { max-width: 230px; cursor: pointer; }
 .bench {
 	flex: 1;
 	min-height: 0;
+	width: 100%;
+	/* 超宽屏上别把三栏拉成三条过长的阅读线；1680 之外留一点纸边。 */
+	max-width: 1680px;
+	margin-inline: auto;
 	display: grid;
 	/* 左栏宽度由拖提手写下的 --bench-a 决定（见下面「分栏提手」一节）。
 	   没拖过时退回 1fr，与原来的两等分一致；minmax(0, …) 不能省，
@@ -2094,16 +2099,31 @@ body.is-splitting * {
 .form-row { display: grid; grid-template-columns: 148px minmax(0, 1fr); gap: 12px; }
 
 @media (max-width: 1180px) {
-	.bench { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
-	/* 案头那三栏也要跟着堆叠：.bench-three 特异性更高，不显式写会把它顶掉，
-	   结果窄屏下三栏继续并排，每栏只剩一百来像素。 */
-	.bench.bench-three { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr); }
+	/* 窄屏不再把一屏切成几块「各自内部滚动」的小窗：那样每块只剩两三百像素，
+	   卡片和素材正文都被栏高裁掉，用户必须先猜哪一块能滚。改成整页纵向滚动，
+	   每栏按内容自然展开；只有对议栏保留固定高度，免得输入框被顶到屏幕外。 */
+	.bench {
+		grid-template-columns: minmax(0, 1fr);
+		grid-template-rows: none;
+		grid-auto-rows: max-content;
+		overflow-y: auto;
+		overscroll-behavior: contain;
+	}
+	.bench.bench-three { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; }
+	.bench-pane { overflow: visible; min-height: 0; }
+	.bench-pane:not(.bench-talk) { overflow: visible; padding-bottom: 28px; }
+	.bench-talk { height: min(70dvh, 640px); min-height: 440px; }
+	/* 整栏在滚，栏头再 sticky 就会盖住上一栏的尾巴。 */
+	.pane-head, .mat-filter { position: static; }
 	.bench-pane + .bench-pane { border-left: 0; border-top: 1px solid var(--rule); }
 	/* 堆叠成一列后没有左右可拖，提手收掉。这一节在「分栏提手」之后，
 	   同特异性下后写者胜，能盖掉前面 .bench-split 的 display:flex。 */
 	.bench-split { display: none; }
 	/* 提手夹在两栏之间，相邻选择器断了一环，横的分界线得单独补回来 */
 	.bench.has-split > .bench-split + .bench-pane { border-left: 0; border-top: 1px solid var(--rule); }
+	/* 页脚固定在最底下，会在整栏还能往下滚的时候冒充「到底了」；
+	   窄屏把它收掉，让下一栏的栏头露出来当滚动提示。 */
+	.bench-foot { display: none; }
 	.desk.is-bench { grid-template-columns: minmax(0, 1fr); grid-template-areas: "beam" "alert" "stage"; }
 	.desk.is-bench .rail { display: none; }
 }
@@ -3264,6 +3284,17 @@ body.focus-mode { background: var(--paper); }
 	.bench-talk .composer { padding-bottom: calc(18px + var(--safe-b)); }
 	/* 稿台的操作条在窄屏上常常放不下，允许换行，别把稿子挤走 */
 	.stage-bar { flex-wrap: wrap; row-gap: 6px; padding: 8px 16px; }
+	/* 三个页签等分一行：320px 下“素材工作台/生文工作台”原本会折成两行 */
+	.tabs { width: 100%; gap: 2px; }
+	.tab {
+		flex: 1 1 0;
+		min-width: 0;
+		justify-content: center;
+		gap: 4px;
+		padding: 6px 4px;
+	}
+	.tab b { font-size: 15px; }
+	.tab span { font-size: 11px; letter-spacing: 0; white-space: nowrap; }
 	.stage-actions { flex-wrap: wrap; row-gap: 6px; }
 }
 
@@ -3444,10 +3475,29 @@ body.focus-mode { background: var(--paper); }
 	}
 	.stream { padding: 20px 14px 10px; }
 	.bench-pane:not(.bench-talk) { padding: 0 14px 32px; }
-	/* 案头三栏在手机上竖着排，每栏本来平分一屏。可对议栏还要装头部与输入框，
-	   平分下来流里只剩二十六像素 —— 一句引导话都读不全，只露出最后半行。
-	   给对议栏多分一倍，流里才容得下四五行字。 */
-	.bench.bench-three { grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 2fr); }
+	/* 窄屏高度由 1180 断点里的「内容自然展开 + 对议栏定高」接管；
+	   这里不要再写 1fr/1fr/2fr，否则会把整页滚动重新压回三块小窗。 */
+
+	/* 料/文两页在手机上把对议栏提到最前：打开工作台的第一件事是交代或
+	   看执笔者，不是先滚过一整屏装配清单。装配区仍完整保留在下面。 */
+	#view-materials .bench,
+	#view-writing .bench {
+		display: flex;
+		flex-direction: column;
+	}
+	#view-materials .bench-pane,
+	#view-writing .bench-pane { flex: none; width: 100%; }
+	#view-materials .bench-talk,
+	#view-writing .bench-talk {
+		order: -1;
+		/* 56dvh 是给「顶栏 + 页签 + 提示」留下的余量：390×844 上对议栏
+		   约 472px，输入框刚好落在首屏内；再高就会把「呈上」推到屏幕外。 */
+		height: min(56dvh, 560px);
+		min-height: 360px;
+		border-top: 0;
+	}
+	#view-materials .bench-pane:not(.bench-talk),
+	#view-writing .bench-pane:not(.bench-talk) { border-top: 1px solid var(--rule); }
 	.composer { padding: 12px 12px calc(12px + var(--safe-b)); }
 	.composer textarea { font-size: 16px; }
 	.bench-talk .composer { padding: 10px 12px calc(10px + var(--safe-b)); }
@@ -3553,19 +3603,27 @@ body.focus-mode { background: var(--paper); }
 	border-bottom: 1px solid var(--rule-soft);
 }
 
-/* 手机顶栏只剩一个单字：「目 / 笔 / 案」。
-   单字靠字形认，所以用楷体写；靠字号按得准，所以撑到触控尺寸。
-   全名留在 aria-label 与 title 里，读屏与长按都拿得到。 */
+/* 手机顶栏用两字短名：「章目 / 笔墨 / 右案」。
+   单字省地方，但「搜 笔 案」三个字隔着一整屏，读起来像暗号；
+   两字既认得出，也还塞得进 390px。 */
 @media (max-width: 640px) {
+	.beam-controls {
+		justify-content: flex-end;
+		gap: 4px;
+	}
+	/* 检索留在最左，其余动作靠右成组，不再被 space-between 拉散。 */
+	.beam-search { margin-right: auto; padding: 0 10px; }
+	/* 手机上不再只留一个「搜」字：把桌面端的「检索」露出来，去掉重复字形与键帽。 */
+	.beam-search-glyph, .beam-kbd { display: none; }
+	.beam-search-label { display: inline; }
 	.beam-controls .btn[data-cap] {
 		font-family: var(--kai);
-		font-size: 15px;
-		letter-spacing: 0;
-		padding: 0;
-		min-width: var(--tap-lg);
+		font-size: 13px;
+		letter-spacing: 0.04em;
+		padding: 0 10px;
+		min-width: 52px;
+		width: auto;
 		height: var(--tap-lg);
-		/* 撑满高度但不居中，单字就贴在钮的上沿 —— 旁边「搜」「设置」是居中的，
-		   一排看过去这三位矮了半截。方形钮里的字本来就该落在正中。 */
 		align-items: center;
 		justify-content: center;
 	}
@@ -3976,6 +4034,23 @@ body.focus-mode { background: var(--paper); }
 	.records-head { padding: var(--sp-3) var(--sp-4); }
 	.records-item { padding: var(--sp-3); }
 }
+
+/* ── 可读性微调 ──────────────────────────────────────────────
+   2026-11 UI 审查：纸墨与朱砂的配色体系保留，问题不在颜色，在字阶和
+   窄屏分栏。这里只把长期偏小的次级字抬半档到一档，主标题与正文的
+   层级不变；栏头仍是楷体，卡名仍是宋体。 */
+.brand-text p { font-size: 11.5px; }
+.beam-stats { font-size: 12px; }
+.pane-head h3 { font-size: 15px; letter-spacing: 0.1em; }
+.pane-count, .pane-note { font-size: 12px; }
+.pane-lead { font-size: 13px; line-height: 1.95; }
+.card.record h4 { font-size: 17px; }
+.card.record .tagline { font-size: 12.5px; }
+.card.mat .usage { font-size: 13px; }
+.card.mat .mat-body { font-size: 14px; }
+.mat-group-head h3 { font-size: 15px; }
+.msg-role { font-size: 11.5px; }
+.bench-foot-note { font-size: 12px; }
 
 
 

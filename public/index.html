@@ -23,24 +23,7 @@
 		<link rel="manifest" href="/manifest.json" />
 		<link rel="icon" href="/icon.svg" type="image/svg+xml" />
 		<link rel="apple-touch-icon" href="/icon.svg" />
-		<script>
-			// 主题必须在首帧之前定下来，否则暗色用户会先看到一屏白纸。
-			// 这段要排在样式表之前：data-theme 晚于 CSS 生效，第一帧就已经是错色了。
-			// 三档：存过就用存的，没存过就听系统的。
-			(function () {
-				try {
-					var saved = localStorage.getItem("novel-studio-theme");
-					var prefers = window.matchMedia("(prefers-color-scheme: dark)").matches;
-					var theme = saved === "light" || saved === "dark" ? saved : prefers ? "dark" : "light";
-					document.documentElement.dataset.theme = theme;
-					// 顶栏颜色也跟着昼夜走，手机上的地址栏才不会在暗色里留一条白边。
-					var meta = document.querySelector('meta[name="theme-color"]:not([media])');
-					if (meta) meta.setAttribute("content", theme === "dark" ? "#17150f" : "#efe8d9");
-				} catch (e) {
-					document.documentElement.dataset.theme = "light";
-				}
-			})();
-		</script>
+		<script src="/theme-init.js"></script>
 		<!-- 首屏骨架的结构兜底。
 		     它盖着的是整个应用：定位、层级、尺寸必须由这里保证 —— 万一 style.css
 		     还没写这一块、或者压根没取到，它也不能变成页面顶上的一块空白把布局顶下去。
@@ -245,7 +228,7 @@
 					<!-- 手机上顶栏放不下两个下拉，收进这块浮层里；桌面端用 display:contents 把它们还原成顶栏的一行。 -->
 					<!-- data-cap：手机上按钮只剩一个单字，样式层可用 ::after 把全名缀在下面；
 					     aria-label 与 title 都在，读屏与长按都能看到全称。 -->
-					<button id="toggle-rail" class="btn btn-quiet btn-sm only-phone" data-cap="章目" title="章目：打开左栏的章目抽屉" aria-label="章目" aria-controls="chapter-list" aria-expanded="false">目</button>
+					<button id="toggle-rail" class="btn btn-quiet btn-sm only-phone" data-cap="章目" title="章目：打开左栏的章目抽屉" aria-label="章目" aria-controls="chapter-list" aria-expanded="false">章目</button>
 					<div class="beam-tools" id="beam-tools">
 						<div class="beam-tools-head">
 							<span class="beam-tools-title">笔墨</span>
@@ -256,8 +239,8 @@
 						<span class="beam-tools-cap">档位</span>
 						<select id="thinking-select" title="推理档位"></select>
 					</div>
-					<button id="toggle-tools" class="btn btn-quiet btn-sm only-phone" data-cap="笔墨" title="笔墨：选模型与推理档位" aria-label="笔墨" aria-controls="beam-tools" aria-expanded="false">笔</button>
-					<button id="toggle-bible" class="btn btn-quiet btn-sm only-narrow" data-cap="右案" title="右案：素材、大纲与待办" aria-label="右案" aria-controls="bible" aria-expanded="false">案</button>
+					<button id="toggle-tools" class="btn btn-quiet btn-sm only-phone" data-cap="笔墨" title="笔墨：选模型与推理档位" aria-label="笔墨" aria-controls="beam-tools" aria-expanded="false">笔墨</button>
+					<button id="toggle-bible" class="btn btn-quiet btn-sm only-narrow" data-cap="右案" title="右案：素材、大纲与待办" aria-label="右案" aria-controls="bible" aria-expanded="false">右案</button>
 					<button id="open-shortcuts" class="btn btn-quiet theme-toggle icon-btn" title="键盘快捷键" aria-label="键盘快捷键">?</button>
 					<button id="theme-toggle" class="btn btn-quiet theme-toggle icon-btn" title="切换昼夜" aria-label="切换昼夜">
 						<span class="theme-glyph" aria-hidden="true"></span>

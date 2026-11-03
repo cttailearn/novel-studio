@@ -52,6 +52,14 @@ storage/
 # 不进版本库（第三方代码会腐坏），部署时在目标机上跑一次即可。
 public/browser/
 
+# ---- Tauri 构建产物 ----
+# Rust target 与 `tauri android init` 生成的 Gradle 工程都按机器生成，不进版本库。
+src-tauri/target/
+src-tauri/gen/
+src-tauri/.cargo/
+*.apk
+*.aab
+
 # ---- 编辑器与系统 ----
 .DS_Store
 Thumbs.db

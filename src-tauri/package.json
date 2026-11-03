@@ -1,0 +1,7 @@
+{
+  "name": "novel-studio-tauri",
+  "private": true,
+  "scripts": {
+    "tauri": "pnpm --dir .. exec tauri"
+  }
+}
