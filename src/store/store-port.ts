@@ -19,6 +19,13 @@ import type { GenerationRecord, RecordFilter, RecordRole, RecordSummary } from "
 import type { CustomKind, KindResult } from "./kinds.ts";
 import type { LibraryMaterial, LibraryMaterialInput } from "./library.ts";
 import type {
+	NovelChapter,
+	NovelSearchHit,
+	NovelSearchOptions,
+	NovelSourceInput,
+	NovelSourceMeta,
+} from "./novel-source.ts";
+import type {
 	ChapterMeta,
 	DeletedProject,
 	DraftBody,
@@ -117,6 +124,29 @@ export interface LibraryStorePort {
 	flush(): Promise<void>;
 	/** 不改内存地补写最近状态，供启动或显式恢复流程使用。 */
 	retryPending(): Promise<void>;
+}
+
+/**
+ * 小说拆解库（跨作品）。
+ *
+ * 一本小说拆成多章保存，元数据与正文分开：列表只返回章节名/字数，
+ * 正文在需要时按章读取。搜索由存储实现负责，避免把整本书塞进上下文。
+ */
+export interface NovelSourceStorePort {
+	/** 全部已拆解小说，最新的在前。 */
+	list(): NovelSourceMeta[];
+	/** 取一本的元数据。 */
+	get(id: string): NovelSourceMeta | undefined;
+	/** 拆解并保存一本小说。 */
+	create(input: NovelSourceInput): Promise<NovelSourceMeta>;
+	/** 删一本（含全部章节）。 */
+	remove(id: string): Promise<boolean>;
+	/** 读一章正文。 */
+	readChapter(sourceId: string, chapterId: string): Promise<NovelChapter | undefined>;
+	/** 在指定小说里检索，按相关度返回章节片段。 */
+	search(sourceId: string, query: string, options?: NovelSearchOptions): Promise<NovelSearchHit[]>;
+	/** 等落盘完成。 */
+	flush(): Promise<void>;
 }
 
 /** 作者自建的素材种类表。 */

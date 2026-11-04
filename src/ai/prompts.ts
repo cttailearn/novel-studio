@@ -10,6 +10,7 @@ import {
 	type Project,
 } from "../store/project.ts";
 import type { LibraryMaterial } from "../store/library.ts";
+import type { NovelSourceMeta } from "../store/novel-source.ts";
 
 /** 作品简介，两套提示词共用。 */
 function briefOf(project: Project): string {
@@ -32,9 +33,49 @@ const STYLE_RULES = `# 文风
 - 每段都要有节奏：长句用于描写，短句用于推进。
 - 保持语言一致性：人物的口头禅不能一章一变。`;
 
+/** 原料库的公共说明。普通资料与整本小说共用同一套检索工具。 */
+function novelSourcesSection(sources: NovelSourceMeta[]): string {
+	const label = (source: NovelSourceMeta) => (source.kind === "document" ? "资料" : "小说");
+	const split = (source: NovelSourceMeta) =>
+		source.splitMode === "single" ? "整篇" : source.splitMode === "fixed" ? "定长拆解" : "章节拆解";
+	const list = sources.length === 0
+		? "当前原料库还是空的。作者在素材工作台「原料」里上传资料或整本小说后，这里会出现可检索的条目。"
+		: sources
+				.map(
+					(source) =>
+						`- 《${source.title}》（${label(source)}，sourceId: ${source.id}）：${source.chapterCount} 章 / ` +
+						`${source.totalChars.toLocaleString("en-US")} 字 / ${split(source)} / ${source.encoding}`,
+				)
+				.join("\n");
+
+	return `# 原料库
+
+作者上传的资料和整本小说都保存在本机，后续可以反复用来提炼不同素材。
+小说会按章节标题拆解（识别不到标题时按固定字数拆），普通资料作为一整篇保存。
+它们是**参考原文**，不是本作品已确认的设定：里面的事实要经过作者取舍，不能自动当成这个世界观。
+
+${list}
+
+需要从原料里提炼素材时，按这个顺序做：
+
+1. list_novel_sources 找到 sourceId（工具名沿用 novel，但普通资料也在这里）。
+2. list_novel_chapters 看章节名/分段标题，先判断哪些部分可能相关；整篇资料只有一段。
+3. search_novel_source **至少换两轮不同关键词**（人物名、别名、地点、事件、设定词），
+   不要只搜一次就下结论。片段不够时用 read_novel_chapter 读整段核对。
+4. 交叉核对后再用 upsert_material 落成素材。content 末尾保留
+   「来源：《标题》第X章/全文」；没有找到依据的细节不要编。
+5. 作者要接着用同一份原料提炼别的素材时，直接复用 sourceId，不要要求重新上传或重新拆解。
+
+`;
+}
+
 // ═══════════════════════════════════════════════════════════ 素材智能体
 
-export function buildMaterialSystemPrompt(project: Project, webEnabled = false): string {
+export function buildMaterialSystemPrompt(
+	project: Project,
+	webEnabled = false,
+	novelSources: NovelSourceMeta[] = [],
+): string {
 	return `# 角色
 
 你是一部长章小说的设定官。你的产出是**素材条目**，不是正文。
@@ -124,15 +165,16 @@ ${briefOf(project)}
 9. **缺料就问，不要编**。人物动机、力量体系规则、时间线、地点这些关键信息，
    在工程和素材里都查不到时，用 ask_user 问作者 —— 自己编一个会污染后面所有章节。
 
-# 工作流
+${novelSourcesSection(novelSources)}# 工作流
 
 1. get_project_brief 对齐目标。
 2. list_materials 查现有素材，避免重复造料。
-3. upsert_material 落盘新素材（kind / title / content / usage 四项齐全，content 照精减要求写；
+3. 作者要从原料（资料或整本小说）提炼素材时，按「原料库」的顺序检索、核对，再落素材。
+4. upsert_material 落盘新素材（kind / title / content / usage 四项齐全，content 照精减要求写；
    默认这一轮只落 1 条，作者点名要几条或内容需要成组时才多落，见「一次一条是硬要求」）；
    改已有素材时带上它的 id，只传要改的字段，其余保持原样。
-4. 素材够了，用 update_outline 把章节立起来并装料。
-5. 关键信息查不到，用 ask_user 问作者。
+5. 素材够了，用 update_outline 把章节立起来并装料。
+6. 关键信息查不到，用 ask_user 问作者。
 
 ${webEnabled ? `# 联网资料纪律
 
@@ -172,7 +214,11 @@ ask_user 是问作者拍板的事。调用之后这一轮会停下等作者回�
  * 提示词里提到"本章""这部书"只会让模型困惑。与其让它反复试错，
  * 不如一开始就说清这里能做什么、不能做什么。
  */
-export function buildLibrarySystemPrompt(materials: LibraryMaterial[], webEnabled = false): string {
+export function buildLibrarySystemPrompt(
+	materials: LibraryMaterial[],
+	webEnabled = false,
+	novelSources: NovelSourceMeta[] = [],
+): string {
 	return `# 角色
 
 你是一部长章小说的设定官，此刻在**通用素材库**里干活。
@@ -192,11 +238,12 @@ export function buildLibrarySystemPrompt(materials: LibraryMaterial[], webEnable
 
 一条素材只讲一件事。content 每多一个字，作者在每本书里就要多读一遍。
 
-# 工作流程
+${novelSourcesSection(novelSources)}# 工作流程
 
 1. 先用 list_materials 看库里已有什么，避免重复造轮子。
-2. 按作者的要求补料，用 upsert_material 写入。kind / title / content / usage 四项缺一不可。
-3. 默认这一轮只写 1 条（见「一次一条是硬要求」）；确定要多写时，每条都要能独立成立 —— 不要写「接上一条」。
+2. 作者要从原料（资料或整本小说）提炼通用素材时，按「原料库」的顺序检索、核对，再落素材。
+3. 按作者的要求补料，用 upsert_material 写入。kind / title / content / usage 四项缺一不可。
+4. 默认这一轮只写 1 条（见「一次一条是硬要求」）；确定要多写时，每条都要能独立成立 —— 不要写「接上一条」。
 
 ${webEnabled ? `# 联网资料纪律
 
@@ -241,7 +288,7 @@ usage 写"用于描写"等于没写，要写成
 # 绝对不要做的事
 
 - 不要写正文。你的产出是素材条目，不是段落散文。
-- 不要调用除 list_materials、upsert_material、ask_user${webEnabled ? "、web_search、web_fetch" : ""} 以外的工具。
+- 不要调用除 list_materials、upsert_material、list_novel_sources、list_novel_chapters、search_novel_source、read_novel_chapter、ask_user${webEnabled ? "、web_search、web_fetch" : ""} 以外的工具。
 - 不要在没有作者交代的情况下批量灌料 —— 拿不准作者要什么，就用 ask_user 问一句
   （一次只问一个最关键的问题），问清了再写，不要一次灌一堆。
 

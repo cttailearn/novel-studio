@@ -10,13 +10,13 @@
 
 ## 下载
 
-当前版本 **v0.1.1**：
+当前版本 **v0.1.0**（重新发布的第一个公开版本，已包含检查更新、小说拆解与统一原料库）：
 
-- [Windows x64 安装版](https://github.com/cttailearn/novel-studio/releases/download/v0.1.1/novel-studio-v0.1.1-windows-x64-setup.exe)：NSIS 安装包，支持应用内检查与安装更新；未做 Authenticode 签名，SmartScreen 可能提示。
-- [Android arm64 APK](https://github.com/cttailearn/novel-studio/releases/download/v0.1.1/novel-studio-v0.1.1-android-arm64.apk)：Android 7.0+；debug 签名，需允许安装未知来源应用。
-- [发布说明](https://github.com/cttailearn/novel-studio/releases/tag/v0.1.1) · [更新日志](CHANGELOG.zh.md)
+- [Windows x64 安装版](https://github.com/cttailearn/novel-studio/releases/download/v0.1.0/novel-studio-v0.1.0-windows-x64-setup.exe)：NSIS 安装包，支持应用内检查与安装更新；未做 Authenticode 签名，SmartScreen 可能提示。
+- [Android arm64 APK](https://github.com/cttailearn/novel-studio/releases/download/v0.1.0/novel-studio-v0.1.0-android-arm64.apk)：Android 7.0+；release 优化版，使用测试签名，需允许安装未知来源应用。
+- [发布说明](https://github.com/cttailearn/novel-studio/releases/tag/v0.1.0) · [更新日志](CHANGELOG.zh.md)
 
-> **从 0.1.0 升级**：0.1.0 便携版不内置更新器，需要手动安装一次 0.1.1；从 0.1.1 起可在「设置 → 关于」检查更新。Android 版每次更新仍需下载 APK 覆盖安装。
+> 从这一版起，Windows 可在「设置 → 关于」手动检查更新，或开启启动时自动检查。Android 版每次更新仍需下载 APK 覆盖安装。
 
 ## 目录
 
@@ -51,6 +51,18 @@
 
 `scripts/smoke.ts` 与 `scripts/agent-loop.ts` 有工具边界断言：设定官拿不到 `write_chapter`，执笔者拿不到 `upsert_material` / `attach_materials` / `update_outline`。改坏了，`pnpm test` 会红。
 
+## 原料库：资料与小说
+
+素材工作台左栏只有一个「原料」区，普通资料和整本小说都从这里进入，长期保存在本机。普通资料按整篇保存；小说先按行首章节标题拆解，保留「第 1 章……」这样的章节名，识别不到标题时按固定字数切块，并保留前言。
+
+- 编码按 BOM 优先识别 UTF-8 / UTF-16LE / UTF-16BE；无 BOM 时严格尝试 UTF-8，再尝试 GB18030。识别失败会直接报错，不会静默显示乱码。
+- 服务端原文落在 `data/material-sources/<id>/meta.json` 与 `chapters/*.txt`；浏览器/Tauri 落在 IndexedDB 的 `novelSources` / `novelChapters`。列表只带类型、章节名与字数，正文按需读取。
+- 设定官多了四个只读工具：`list_novel_sources`、`list_novel_chapters`、`search_novel_source`、`read_novel_chapter`。资料与小说共用这四个工具；提示词要求至少换两轮关键词检索、读原文核对后再写素材，并在素材末尾保留「来源：《书名》第X章」。
+- 拆解结果可以长期保留，同一本书后续还能继续提炼其它素材；「据此提炼」只把 `sourceId` 填进对话，不会把整本正文塞进上下文。
+- 兼容入口：旧客户端仍可调用 `/api/novel-sources`；新代码统一用 `/api/material-sources?kind=document|novel`。
+
+`pnpm test:novel` 覆盖编码、章节/定长拆解、磁盘与 IndexedDB、工具边界，并用一部 20MB、两千多章的小说做过真实导入。
+
 ## 快速开始
 
 需要 Node.js ≥ 22.6（用 `--experimental-strip-types` 直接跑 TS）与 pnpm 10。
@@ -69,7 +81,7 @@ pnpm dev        # http://127.0.0.1:8787
 | `pnpm dev` | 启动并监听文件变化 |
 | `pnpm start` | 启动，不监听 |
 | `pnpm typecheck` | 只跑 `tsc --noEmit` |
-| `pnpm test` | `typecheck` + 十二个测试套件（含 Tauri 静态契约），全部离线，不需要 API Key |
+| `pnpm test` | `typecheck` + 十三个测试套件（含 Tauri 静态契约），全部离线，不需要 API Key |
 | `pnpm build:browser` | 生成浏览器端产物 `public/browser/**`（多用户部署必做） |
 | `pnpm build:web` | 生成 Tauri 用的完整前端 `dist/web/**` |
 | `pnpm dev:tauri` | 启动 Tauri 桌面窗口（开发模式） |
@@ -412,8 +424,9 @@ data/          运行时数据（git 忽略）：工程、正文、密钥、记�
 - 多用户模式的真实浏览器端到端尚未自动化（本机沙箱起不了 Chrome）；`pnpm test:local` 用真路由 + 假 IndexedDB 覆盖了同一批逻辑。
 - 不能删章、拖拽排序；卷也不能拖拽重排。
 - 本地素材检索只在当前作品与通用素材库内，不跨作品全文检索；联网检索是设定官的可选工具，不代替本章素材检索。
-- 上传只收 UTF-8 文本与 `.docx`；`pdf` / `epub` / `doc` 明确拒绝（415），GBK 文本会乱码。上传的原料不落盘。
-- 上下文按预算裁剪旧对话，长素材主要依赖本章内检索；单次上传超过 20 万字截断，超过 6 万字会提示。
+- 原料库支持 `.txt` / `.md` / `.html` / `.docx`；`pdf` / `epub` / `doc` 明确拒绝（415）。编码按 BOM 或严格 UTF-8 / GB18030 识别，识别失败会报错而不是显示乱码。
+- 旧的 `POST /api/uploads` 仍只按 UTF-8 解析并截断 20 万字，仅为兼容保留；素材工作台的新导入都走持久化原料库，不截断整本小说。
+- 上下文按预算裁剪旧对话，长素材主要依赖本章内检索；普通资料会整篇保存，但交给设定官时仍受上下文预算限制。
 - 自定义模型的参数要人工核对；`usage` 写得好不好，仍取决于作者。
 - 通用素材库取用是复制，不自动同步；库与作品之间没有引用关系（刻意如此）。
 - 上游可能把错误塞进 HTTP 200；服务端会尽量识别，但不保证覆盖所有中转格式。

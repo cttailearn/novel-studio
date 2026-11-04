@@ -55,11 +55,25 @@ import {
 	type LibraryMaterial,
 	type LibraryMaterialInput,
 } from "./library.ts";
+import {
+	chapterIdAt,
+	makeNovelSourceMeta,
+	normalizeNovelSourceMeta,
+	queryTokens,
+	searchNovelChapter,
+	splitNovelText,
+	type NovelChapter,
+	type NovelSearchHit,
+	type NovelSearchOptions,
+	type NovelSourceInput,
+	type NovelSourceMeta,
+} from "./novel-source.ts";
 import { isKnownKind, MATERIAL_KINDS, newId, type MaterialKind } from "./project.ts";
 import type {
 	CredentialStorePort,
 	KindsStorePort,
 	LibraryStorePort,
+	NovelSourceStorePort,
 	RecordStorePort,
 	SettingsStorePort,
 } from "./store-port.ts";
@@ -138,16 +152,18 @@ export interface IdbFactory {
 /** 元数据库的库名。刻意与工程库（novel-studio）分开：版本号各管各的。 */
 export const META_DB_NAME = "novel-studio-meta";
 
-/** 元数据库的版本号。 */
-export const META_DB_VERSION = 1;
+/** 元数据库的版本号。2 起增加小说拆解库。 */
+export const META_DB_VERSION = 2;
 
-/** 五张表。 */
+/** 七张表。 */
 export const META_STORE = {
 	library: "library",
 	kinds: "kinds",
 	settings: "settings",
 	credentials: "credentials",
 	records: "records",
+	novelSources: "novelSources",
+	novelChapters: "novelChapters",
 } as const;
 
 type MetaStoreName = (typeof META_STORE)[keyof typeof META_STORE];
@@ -159,6 +175,8 @@ const KEY_PATHS: Record<MetaStoreName, string> = {
 	settings: "key",
 	credentials: "providerId",
 	records: "id",
+	novelSources: "id",
+	novelChapters: "key",
 };
 
 /** settings 表里那一行的键：整份设置放一行里。 */
@@ -383,6 +401,13 @@ async function readAll<T>(db: IdbDatabase, store: string): Promise<T[]> {
 	const request = tx.objectStore(store).getAll();
 	const rows = await requestResult(request);
 	return rows as T[];
+}
+
+/** 读一行。 */
+async function readOne<T>(db: IdbDatabase, store: string, key: unknown): Promise<T | undefined> {
+	const tx = db.transaction([store], "readonly");
+	const request = tx.objectStore(store).get(key);
+	return (await requestResult(request)) as T | undefined;
 }
 
 /** 等一个请求出结果。 */
@@ -1245,35 +1270,224 @@ export class IdbRecordStore implements RecordStorePort {
 	}
 }
 
+// ───────────────────────────────────────────── 小说拆解库
+
+interface StoredNovelChapter {
+	key: string;
+	sourceId: string;
+	chapterId: string;
+	content: string;
+}
+
+/**
+ * 原料库的 IndexedDB 实现（普通资料与整本小说共用）。
+ *
+ * 元数据很小，启动时全读进内存；正文按章存，第一次搜索/读取时才载入，
+ * 之后留在内存里复用。7M 字的长篇不会在打开页面时全部解压。
+ */
+export class IdbNovelSourceStore implements NovelSourceStorePort {
+	private readonly options: IdbStoresOptions;
+	private readonly loading: Promise<void>;
+	private sources: NovelSourceMeta[] = [];
+	private connection: IdbConnection | null = null;
+	private loadError: unknown = null;
+	private writeChain: Promise<void> = Promise.resolve();
+	private readonly chapterCache = new Map<string, Map<string, string>>();
+
+	constructor(options: IdbStoresOptions = {}) {
+		this.options = options;
+		this.loading = this.initialize();
+		this.loading.catch(() => undefined);
+	}
+
+	static async open(options: IdbStoresOptions = {}): Promise<IdbNovelSourceStore> {
+		const store = new IdbNovelSourceStore(options);
+		await store.loading;
+		return store;
+	}
+
+	private async initialize(): Promise<void> {
+		try {
+			const connection = await connect(this.options);
+			this.connection = connection;
+			const rows = await readAll<unknown>(connection.db, META_STORE.novelSources);
+			this.sources = rows
+				.map((row) => normalizeNovelSourceMeta(row))
+				.filter((row): row is NovelSourceMeta => row !== undefined)
+				.sort((a, b) => b.updatedAt - a.updatedAt);
+		} catch (error) {
+			this.loadError = error;
+			throw error;
+		}
+	}
+
+	private requireDb(): IdbDatabase {
+		if (!this.connection) throw new Error("小说拆解库还没打开", { cause: this.loadError ?? undefined });
+		return this.connection.db;
+	}
+
+	list(): NovelSourceMeta[] {
+		return this.sources.map((source) => ({ ...source, chapters: source.chapters.map((chapter) => ({ ...chapter })) }));
+	}
+
+	get(id: string): NovelSourceMeta | undefined {
+		const source = this.sources.find((item) => item.id === id);
+		return source ? { ...source, chapters: source.chapters.map((chapter) => ({ ...chapter })) } : undefined;
+	}
+
+	async create(input: NovelSourceInput): Promise<NovelSourceMeta> {
+		const kind = input.kind === "document" ? "document" : "novel";
+		const split = splitNovelText(input.text, {
+			splitMode: kind === "document" ? "single" : input.splitMode,
+			fixedChars: input.fixedChars,
+		});
+		const meta = makeNovelSourceMeta({ ...input, kind }, split);
+		const chapters = split.chapters.map((chapter, index) => ({
+			id: chapterIdAt(index),
+			index,
+			title: chapter.title,
+			content: chapter.content,
+		}));
+		const db = this.requireDb();
+		this.writeChain = this.writeChain.catch(() => undefined).then(() =>
+			runWrite(db, [META_STORE.novelSources, META_STORE.novelChapters], (tx) => {
+				tx.objectStore(META_STORE.novelSources).put(meta);
+				const store = tx.objectStore(META_STORE.novelChapters);
+				for (const chapter of chapters) {
+					store.put({
+						key: `${meta.id}:${chapter.id}`,
+						sourceId: meta.id,
+						chapterId: chapter.id,
+						content: chapter.content,
+					} satisfies StoredNovelChapter);
+				}
+			}),
+		);
+		await this.writeChain;
+		const cache = new Map<string, string>();
+		for (const chapter of chapters) cache.set(chapter.id, chapter.content);
+		this.chapterCache.set(meta.id, cache);
+		this.sources.unshift(meta);
+		return { ...meta, chapters: meta.chapters.map((chapter) => ({ ...chapter })) };
+	}
+
+	async remove(id: string): Promise<boolean> {
+		const index = this.sources.findIndex((source) => source.id === id);
+		if (index < 0) return false;
+		const db = this.requireDb();
+		const rows = (await readAll<StoredNovelChapter>(db, META_STORE.novelChapters)).filter((row) => row.sourceId === id);
+		this.writeChain = this.writeChain.catch(() => undefined).then(() =>
+			runWrite(db, [META_STORE.novelSources, META_STORE.novelChapters], (tx) => {
+				tx.objectStore(META_STORE.novelSources).delete(id);
+				const store = tx.objectStore(META_STORE.novelChapters);
+				for (const row of rows) store.delete(row.key);
+			}),
+		);
+		await this.writeChain;
+		this.sources.splice(index, 1);
+		this.chapterCache.delete(id);
+		return true;
+	}
+
+	async readChapter(sourceId: string, chapterId: string): Promise<NovelChapter | undefined> {
+		const source = this.sources.find((item) => item.id === sourceId);
+		const chapter = source?.chapters.find((item) => item.id === chapterId);
+		if (!source || !chapter) return undefined;
+		const content = await this.readContent(sourceId, chapterId);
+		if (content === undefined) return undefined;
+		return { id: chapter.id, index: chapter.index, title: chapter.title, content, chars: chapter.chars };
+	}
+
+	async search(sourceId: string, query: string, options: NovelSearchOptions = {}): Promise<NovelSearchHit[]> {
+		const source = this.sources.find((item) => item.id === sourceId);
+		if (!source) return [];
+		const tokens = queryTokens(query);
+		if (tokens.length === 0) return [];
+		const cache = await this.loadChapters(sourceId);
+		const hits: NovelSearchHit[] = [];
+		for (const chapter of source.chapters) {
+			const content = cache.get(chapter.id);
+			if (content === undefined) continue;
+			const hit = searchNovelChapter(
+				{ id: chapter.id, index: chapter.index, title: chapter.title, content, chars: chapter.chars },
+				tokens,
+			);
+			if (hit) hits.push(hit);
+		}
+		hits.sort((a, b) => b.score - a.score || a.chapterId.localeCompare(b.chapterId));
+		const offset = Math.max(0, Math.floor(options.offset ?? 0));
+		const limit = Math.max(1, Math.min(20, Math.floor(options.limit ?? 8)));
+		return hits.slice(offset, offset + limit);
+	}
+
+	async flush(): Promise<void> {
+		await this.writeChain;
+	}
+
+	private async readContent(sourceId: string, chapterId: string): Promise<string | undefined> {
+		const cached = this.chapterCache.get(sourceId)?.get(chapterId);
+		if (cached !== undefined) return cached;
+		const db = this.requireDb();
+		const row = await readOne<StoredNovelChapter>(db, META_STORE.novelChapters, `${sourceId}:${chapterId}`);
+		if (!row) return undefined;
+		let cache = this.chapterCache.get(sourceId);
+		if (!cache) {
+			cache = new Map();
+			this.chapterCache.set(sourceId, cache);
+		}
+		cache.set(chapterId, row.content);
+		return row.content;
+	}
+
+	private async loadChapters(sourceId: string): Promise<Map<string, string>> {
+		const cached = this.chapterCache.get(sourceId);
+		if (cached) return cached;
+		const db = this.requireDb();
+		const rows = (await readAll<StoredNovelChapter>(db, META_STORE.novelChapters)).filter((row) => row.sourceId === sourceId);
+		const cache = new Map<string, string>();
+		for (const row of rows) cache.set(row.chapterId, row.content);
+		this.chapterCache.set(sourceId, cache);
+		return cache;
+	}
+}
+
+/** 兼容旧命名：这个 store 现在同时保存资料与整本小说。 */
+export const IdbMaterialSourceStore = IdbNovelSourceStore;
+
 // ───────────────────────────────────────────── 一起打开
 
-/** 五个 store。 */
+/** 六个 store。 */
 export interface IdbStores {
 	library: IdbLibraryStore;
 	kinds: IdbKindStore;
 	settings: IdbSettingsStore;
 	credentials: IdbCredentialStore;
 	records: IdbRecordStore;
+	/** 通用原料库：普通资料与整本小说都在这里。 */
+	materialSources: IdbNovelSourceStore;
+	/** 兼容旧字段名。 */
+	novelSources: IdbNovelSourceStore;
 }
 
 /**
- * 打开一个数据库，拿到五个 store。
+ * 打开一个数据库，拿到六个 store。
  *
  * 同一个库在同一个页面里只开一次连接，后来的人拿同一个 ——
  * 两个 open 请求撞在一起跑 onupgradeneeded 是会把版本号顶坏的。
  */
 export async function openIdbStores(options: IdbStoresOptions = {}): Promise<IdbStores> {
-	const [library, kinds, settings, credentials, records] = await Promise.all([
+	const [library, kinds, settings, credentials, records, novelSources] = await Promise.all([
 		IdbLibraryStore.open(options),
 		IdbKindStore.open(options),
 		IdbSettingsStore.open(options),
 		IdbCredentialStore.open(options),
 		IdbRecordStore.open(options),
+		IdbNovelSourceStore.open(options),
 	]);
-	return { library, kinds, settings, credentials, records };
+	return { library, kinds, settings, credentials, records, materialSources: novelSources, novelSources };
 }
 
-/** 关掉共享的数据库连接。五个 store 共用一个，关一个就都关了。 */
+/** 关掉共享的数据库连接。六个 store 共用一个，关一个就都关了。 */
 export function closeIdbStores(stores: IdbStores): void {
 	stores.library.close();
 }

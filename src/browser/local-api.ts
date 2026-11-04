@@ -211,6 +211,7 @@ async function bootstrap(): Promise<LocalRuntime> {
 	const router = createApiRouter({
 		store,
 		libraryStore: stores.library,
+		novelStore: stores.novelSources,
 		kindStore: stores.kinds,
 		settingsStore: stores.settings,
 		credentialStore,

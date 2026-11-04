@@ -2,37 +2,7 @@
 
 本项目的版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [0.1.1] - 2026-11-03
-
-第一个带「检查更新」的版本。Windows 安装版可以在设置 → 关于与更新里手动检查，也可以开启启动时自动检查；发现新版后下载、校验、安装并自动重启。Android 版仍走发布页手动安装 APK。
-
-### 新增
-
-- **关于与更新**：设置页新增「关于」页，显示当前版本、检查更新、更新说明与发布页入口。
-- **桌面自动更新**：Windows 使用 Tauri updater + 签名 NSIS 安装包，更新包在安装前用 minisign 公钥校验；安装完成后应用自动重启。
-- **启动时自动检查**：默认开启，可在「关于」页关闭；只读取版本清单，不会上传作品、素材或密钥。
-- **Android 检查新版**：读取 GitHub 最新 Release，发现新版后打开发布页下载 APK 覆盖安装；不伪装成应用内静默更新。
-- **更新状态提示**：检查中、发现新版本、已是最新、失败原因都有可见反馈；网页版明确显示随服务器更新。
-
-### 修复
-
-- Android/桌面设置页不再把应用数据误称为「浏览器数据」；Tauri 端改为「本机应用数据目录」，并说明卸载或清除应用数据需要备份。
-- 设置页开关在弹层里被 `.sheet` 样式撑成整行的问题。
-- 静默自动检查失败时不再把状态改成红字。
-
-### 发布产物
-
-- Windows x64 安装版：`novel-studio-v0.1.1-windows-x64-setup.exe`
-- Android arm64：`novel-studio-v0.1.1-android-arm64.apk`（debug 签名）
-- 更新清单：`latest.json`；校验文件：`SHA256SUMS`
-
-### 已知限制
-
-- 0.1.0 便携版不内置更新器，需要手动安装一次 0.1.1；从 0.1.1 起才能接收应用内更新。
-- Windows 安装包由墨耕更新密钥签名，但没有 Authenticode 代码签名，SmartScreen 仍可能提示。
-- Android 更新仍需手动下载 APK 覆盖安装；移动端 Keychain/Keystore 尚未接入。
-
-## [0.1.0] - 2026-11-03
+## [0.1.0] - 2026-11-04
 
 墨耕的第一个公开版本。数据默认留在本机，模型只在你发起生成时收到当次所需的上下文。
 
@@ -42,11 +12,17 @@
 - **双智能体分工**：设定官（`material`）负责设定、人物、地点、伏笔与章节装配；执笔者（`writing`）只写当前章。两边的工具集按职责隔离，素材未落盘前不会返回成功。
 - **章节级上下文**：执笔者只拿到本章装配的素材、上一章的要略/小结/结尾；读取正文限制在本章与上一章，避免越章取料。
 - **四种写法**：从零写起、整章重写、续写下去、局部修改。局部修改按逐字原文定位并校验唯一性，0 处或多处命中都会报错重来；每次修改保留版本历史。
+- **统一原料库**：素材工作台把「原料」和「小说拆解」合并成一个原料区，普通资料按整篇保存，整本小说按章节或固定字数拆解；两类原料都长期保存在本机，可在后续会话继续提炼不同素材。原料按「资料 / 小说」分组，组头可折叠。
+- **设定官检索原文**：新增 `list_novel_sources`、`list_novel_chapters`、`search_novel_source`、`read_novel_chapter` 四个只读工具。资料与小说共用；设定官会先列章节、换多轮关键词检索，再读原文核对后落素材；执笔者不获得这些工具。
+- **编码识别**：按 BOM 识别 UTF-8 / UTF-16LE / UTF-16BE，无 BOM 时严格尝试 UTF-8，再尝试 GB18030；识别失败直接报错，不静默产出乱码。
+- **持久化与多端**：服务端存 `data/material-sources/<id>/meta.json` 与按章正文；浏览器/Tauri 存 IndexedDB 的 `novelSources` / `novelChapters` 两张表。章节正文按需读取，不把整本书塞进 `library.json` 或提示词。
+- **兼容接口**：新增 `/api/material-sources?kind=document|novel`，旧 `/api/novel-sources` 继续可用。
 - **素材与工程管理**：素材种类、章节装配、分卷、章目编辑、待办、通用素材库、回收站与作品恢复。
 - **备份与恢复**：导出/导入 `.novel` 项目包，支持 gzip 与 AES-GCM 口令加密；密钥默认不随包导出。
 - **模型与供应商设置**：42 个内置供应商条目（含 CTTAI 中转与 9 个预置模型），支持自定义供应商、模型参数、上下文窗口与推理档位；密钥只写系统凭据管理器或本机/浏览器存储，界面只显示脱敏值。
 - **联网资料（可选）**：设定官可按需搜索和读取网页，执笔者没有联网工具；默认关闭，结果保留来源、日期与权威性评分。搜索走 DeepSeek Search/Fetch 协议。
 - **Tauri 2 桌面与移动端**：同一份前端装进原生壳，不启动 Node 服务；Rust 侧提供流式 LLM 代理、SQLite、系统密钥串与原生文件对话框。
+- **检查更新与自动更新**：设置页新增「关于」页；Windows 使用 Tauri updater + 签名 NSIS 安装包，支持启动时自动检查、下载、校验、安装并自动重启。Android 读取 GitHub 最新 Release，发现新版后打开发布页下载 APK 覆盖安装；网页版明确显示随服务器更新。
 - **多端界面**：桌面三栏、平板/手机单列自然滚动；手机端对议优先、设置页整页滚动；亮/暗纸墨主题，支持减少动态效果。
 - **多用户部署形态**：`STORAGE=idb` 时业务层在浏览器运行，服务端只发静态文件并按需做无状态 LLM 转发，用户数据不落服务器。
 
@@ -60,22 +36,27 @@
 - Tauri LLM 代理限制 HTTPS、拒绝私网/回环/云元数据与重定向，并限制请求体、响应体与超时；CSP 收紧到所需来源。
 - 桌面密钥迁移到系统凭据管理器，SQLite 只留 metadata；历史明文自动迁移。
 - 修复切章/后台重载丢正文、快照按钮失效、移动端横向溢出、设置页在矮屏上无法滚动到供应商列表等问题。
+- Android/桌面设置页不再把应用数据误称为「浏览器数据」；Tauri 端改为「本机应用数据目录」，并说明卸载或清除应用数据需要备份。
+- 设置页开关在弹层里被 `.sheet` 样式撑成整行的问题；静默自动检查失败时不再把状态改成红字。
+
+### 测试
+
+- 完整 `pnpm test`：typecheck + config/tools/novel/context/storage/server/loop/frontend/idb/package/local/relay/tauri。
+- `scripts/novel-source-check.ts` 覆盖编码、章节/定长/整篇拆解、磁盘/IDB、工具边界与真实 20MB 文件；服务端新增小说拆解与统一原料库路由用例；前端静态契约与 IndexedDB 用例同步覆盖。
 
 ### 发布产物
 
-- Windows x64 便携版：`novel-studio-v0.1.0-windows-x64.exe`
-- Android arm64：`novel-studio-v0.1.0-android-arm64.apk`（debug 签名）
-- 校验文件：`SHA256SUMS`
+- Windows x64 安装版：`novel-studio-v0.1.0-windows-x64-setup.exe`
+- Android arm64：`novel-studio-v0.1.0-android-arm64.apk`（release 优化，测试签名）
+- 更新清单：`latest.json`；校验文件：`SHA256SUMS`
 
 ### 已知限制
 
-- Windows 可执行文件未做代码签名，首次运行可能触发 SmartScreen；没有 MSI/NSIS 安装包。
-- Android APK 使用 debug 签名，未上架应用商店；移动端尚未接入 Keychain/Keystore，会回退到本地凭据存储；iOS 未构建。
-- 原生保存/打开对话框只在桌面启用，手机走系统分享或浏览器下载。
+- Windows 安装包由墨耕更新密钥签名，但没有 Authenticode 代码签名，SmartScreen 仍可能提示。
+- Android 使用测试签名，适合直接安装体验，不适合上架应用商店；移动端 Keychain/Keystore 尚未接入。
+- iOS 未构建；Windows 未生成 MSI 安装包。
 - 会话历史保存在内存中，进程重启会丢对话；工程、设置与生成记录保留。
 - 版本保留最近 10 版，没有逐字 diff；导出只支持 TXT / Markdown 与 `.novel` 包，没有 docx / epub。
-- 上传只收 UTF-8 文本与 `.docx`；PDF / EPUB / DOC 会明确拒绝，GBK 文本会乱码。
 - 首个版本，数据格式仍可能调整；升级前建议先导出 `.novel` 备份。
 
-[0.1.1]: https://github.com/cttailearn/novel-studio/releases/tag/v0.1.1
 [0.1.0]: https://github.com/cttailearn/novel-studio/releases/tag/v0.1.0

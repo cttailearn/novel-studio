@@ -322,7 +322,7 @@
 								<span class="pane-note">备通用素材，不写正文</span>
 								<div class="pane-tools">
 									<button class="btn btn-quiet btn-sm" data-newchat="library">另起一席</button>
-									<button id="library-upload-pick" class="btn btn-quiet btn-sm">＋ 传资料</button>
+									<button id="library-upload-pick" class="btn btn-quiet btn-sm">＋ 资料</button>
 									<input
 										id="library-upload-input"
 										type="file"
@@ -332,6 +332,7 @@
 									/>
 								</div>
 							</header>
+							<div id="library-material-sources" class="novel-source-list is-compact"></div>
 							<div id="library-stream" class="stream"></div>
 							<ul id="library-uploads" class="upload-list compact"></ul>
 							<form id="library-composer" class="composer">
@@ -367,8 +368,9 @@
 						<div class="bench-pane">
 							<header class="pane-head">
 								<h3>原料</h3>
+								<span id="material-source-count" class="pane-count"></span>
 								<div class="pane-tools">
-									<button id="upload-pick" class="btn btn-quiet btn-sm">选择文件</button>
+									<button id="upload-pick" class="btn btn-quiet btn-sm">＋ 资料</button>
 									<input
 										id="upload-input"
 										type="file"
@@ -376,13 +378,21 @@
 										hidden
 										accept=".txt,.text,.md,.markdown,.log,.csv,.tsv,.json,.yaml,.yml,.html,.htm,.xml,.docx"
 									/>
+									<button id="novel-pick" class="btn btn-quiet btn-sm">＋ 小说</button>
+									<input
+										id="novel-input"
+										type="file"
+										multiple
+										hidden
+										accept=".txt,.text,.md,.markdown,.html,.htm,.docx"
+									/>
 								</div>
 							</header>
 							<div id="upload-zone" class="dropzone">
-								<p>把资料拖到这里，或点「选择文件」</p>
-								<p class="dropzone-hint">支持 .txt / .md / .csv / .json / .html / .docx</p>
+								<p>拖入资料，或点「＋ 资料」；整本小说点「＋ 小说」</p>
+								<p class="dropzone-hint">资料整篇保存；小说自动按章节拆解，识别不到标题时按定长切分</p>
 							</div>
-							<ul id="upload-list" class="upload-list"></ul>
+							<div id="material-source-list" class="novel-source-list"></div>
 
 							<header class="pane-head">
 								<h3>素材库</h3>

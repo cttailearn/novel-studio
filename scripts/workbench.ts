@@ -633,6 +633,61 @@ try {
 	const uploadUnknown = await req("POST", "/api/projects/nope/uploads?filename=a.txt", undefined, Buffer.from("x", "utf8"));
 	check("往不存在的工程上传返回 404", uploadUnknown.status === 404);
 
+	// ---- 小说拆解库 ----
+	console.log("\n小说拆解");
+	const novelBytes = Buffer.concat([
+		Buffer.from([0xef, 0xbb, 0xbf]),
+		Buffer.from("第1章 开端\n阿青在渡口等船。\n第2章 转折\n阿青发现船底有洞。\n第3章 结局\n阿青游回了岸。", "utf8"),
+	]);
+	const novel = await req(
+		"POST",
+		`/api/novel-sources?filename=${encodeURIComponent("整本小说.txt")}`,
+		undefined,
+		novelBytes,
+	);
+	check("上传整本小说返回 201", novel.status === 201 && Boolean(novel.data.source?.id), JSON.stringify(novel.data));
+	check("整本小说识别编码与章节", novel.data.source?.encoding === "UTF-8" && novel.data.source?.chapterCount === 3);
+	check("整本小说不截断", novel.data.source?.totalChars === 24, String(novel.data.source?.totalChars));
+	const novelId = String(novel.data.source.id);
+	const novelList = await req("GET", "/api/novel-sources");
+	check("小说列表可见", novelList.status === 200 && novelList.data.sources.some((item: any) => item.id === novelId));
+	const novelChapter = await req("GET", `/api/novel-sources/${novelId}/chapters/ch002`);
+	check("小说章节可读", novelChapter.status === 200 && String(novelChapter.data.chapter?.content).includes("船底有洞"));
+	const fixedNovel = await req(
+		"POST",
+		`/api/novel-sources?filename=${encodeURIComponent("无标题.txt")}&splitMode=fixed&fixedChars=2000`,
+		undefined,
+		Buffer.from("没有章节标题。".repeat(600), "utf8"),
+	);
+	check("无标题回退定长拆解", fixedNovel.status === 201 && fixedNovel.data.source?.splitMode === "fixed");
+
+	const document = await req(
+		"POST",
+		`/api/material-sources?kind=document&filename=${encodeURIComponent("资料.txt")}`,
+		undefined,
+		Buffer.from("一份普通资料，讲渡口的风俗。", "utf8"),
+	);
+	check(
+		"普通资料按整篇保存",
+		document.status === 201 &&
+			document.data.source?.kind === "document" &&
+			document.data.source?.splitMode === "single" &&
+			document.data.source?.chapterCount === 1,
+		JSON.stringify(document.data),
+	);
+	const documentId = String(document.data.source.id);
+	const documentChapter = await req("GET", `/api/material-sources/${documentId}/chapters/ch001`);
+	check("普通资料可读正文", documentChapter.status === 200 && String(documentChapter.data.chapter?.content).includes("渡口"));
+	const unifiedList = await req("GET", "/api/material-sources");
+	check(
+		"资料与小说共用原料列表",
+		unifiedList.status === 200 &&
+			unifiedList.data.sources.some((item: any) => item.id === documentId) &&
+			unifiedList.data.sources.some((item: any) => item.id === novelId),
+	);
+	const novelDelete = await req("DELETE", `/api/novel-sources/${novelId}`);
+	check("小说拆解可删除", novelDelete.status === 200 && (await req("GET", "/api/novel-sources")).data.sources.every((item: any) => item.id !== novelId));
+
 	// ---- 素材增删改 ----
 	console.log("\n素材");
 	const madeMaterial = await req("POST", `/api/projects/${projectId}/materials`, {
@@ -1708,7 +1763,11 @@ try {
 	check("案头不再藏模型选择", !styleSource.includes(".desk.is-home #model-select"));
 	check("库面板有传资料入口", indexHtml.includes('id="library-upload-pick"') && indexHtml.includes('id="library-upload-input"'));
 	check("库面板有原料列表", indexHtml.includes('id="library-uploads"'));
-	check("库上传走不绑工程的接口", appSource.includes('"/api/uploads"') && appSource.includes('handleFiles([...event.target.files], "library")'));
+	check(
+		"库上传走统一原料接口",
+		appSource.includes('fetch("/api/material-sources" + query') &&
+			appSource.includes('handleFiles([...event.target.files], "library")'),
+	);
 	check("库原料列表有样式", styleSource.includes(".upload-list.compact"));
 	check("库提炼指令要求脱离作品", appSource.includes("脱离本书也成立"));
 

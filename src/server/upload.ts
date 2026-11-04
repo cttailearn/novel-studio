@@ -13,6 +13,8 @@
 //   · 解压走标准 CompressionStream（Node 18+ 与浏览器都有），不用 node:zlib
 //   · 解压是异步的，extractText 因此返回 Promise
 
+import { decodeNovelBytes, normalizeNovelText } from "../store/novel-source.ts";
+
 /** 提取结果的字数上限。超出部分截断，并如实回报。 */
 export const MAX_TEXT_CHARS = 200_000;
 /** 上传体积上限（字节）。 */
@@ -236,6 +238,46 @@ async function extractDocx(bytes: Uint8Array): Promise<string> {
 	const document = entries.find((entry) => entry.name === "word/document.xml");
 	if (!document) throw new UnsupportedUploadError("这个 .docx 里没有 word/document.xml，可能不是 Word 文档");
 	return docxXmlToText(decoder.decode(await readZipFile(bytes, document)));
+}
+
+/**
+ * 解码整本小说。
+ *
+ * 与 extractText 的区别：不截断、不默认 UTF-8。整本书要保存下来反复检索，
+ * 截掉后文等于把后半本丢了。编码交给 decodeNovelBytes 严格判断。
+ */
+export interface ExtractedNovel {
+	title: string;
+	text: string;
+	encoding: string;
+	format: "text" | "docx";
+}
+
+export async function extractNovelText(filename: string, bytes: Uint8Array): Promise<ExtractedNovel> {
+	const ext = extensionOf(filename);
+	const title = titleFromFilename(filename);
+	let text: string;
+	let encoding: string;
+	let format: ExtractedNovel["format"];
+	if (ext === ".docx") {
+		text = await extractDocx(bytes);
+		encoding = "DOCX";
+		format = "docx";
+	} else if (TEXT_EXTENSIONS.has(ext)) {
+		const decoded = decodeNovelBytes(bytes);
+		text = ext === ".html" || ext === ".htm" || ext === ".xml" ? htmlToText(decoded.text) : decoded.text;
+		encoding = decoded.encoding;
+		format = "text";
+	} else {
+		throw new UnsupportedUploadError(
+			ext
+				? "原料暂不支持 " + ext + " 格式。请先转成 .txt / .md / .docx 再上传。"
+				: "这个文件没有扩展名，无法判断格式。请先转成 .txt / .md / .docx 再上传。",
+		);
+	}
+	const cleaned = normalizeNovelText(text);
+	if (!cleaned) throw new UnsupportedUploadError("这个文件里没有可提取的文字");
+	return { title, text: cleaned, encoding, format };
 }
 
 /** 扩展名，小写并带点。没有扩展名时返回空串。 */

@@ -34,6 +34,7 @@ import { loadEnvFile, readConfig } from "../config/env.ts";
 import { newId, registerCustomKinds } from "../store/project.ts";
 import { ProjectStore } from "../store/project-disk.ts";
 import { MaterialLibrary } from "../store/library-disk.ts";
+import { NovelSourceLibrary } from "../store/novel-source-disk.ts";
 import { KindStore } from "../store/kinds-disk.ts";
 import { answerQuestion, AskChannel } from "./ask.ts";
 import { RECORDS_KEEP } from "./records.ts";
@@ -103,6 +104,7 @@ if (localOnly) {
 	registerCustomKinds(kindStore.list());
 	store = await ProjectStore.open(config.dataDir);
 	const libraryStore = await MaterialLibrary.open(config.dataDir);
+	const novelStore = await NovelSourceLibrary.open(config.dataDir);
 	const settingsStore = await SettingsStore.open(config.dataDir);
 	const credentialStore = await FileCredentialStore.open(config.dataDir);
 	const recordStore = await RecordStore.open(config.dataDir);
@@ -126,6 +128,7 @@ if (localOnly) {
 	router = createApiRouter({
 		store,
 		libraryStore,
+		novelStore,
 		kindStore,
 		settingsStore,
 		credentialStore,

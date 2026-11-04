@@ -503,6 +503,23 @@ check("删记录返回 true", (await stores.records.remove(record.id)) === true)
 check("删掉之后取不到", stores.records.get(record.id) === undefined);
 check("删不存在的返回 false", (await stores.records.remove("没有这个 id")) === false);
 
+// ───────────────────────────────────────── 小说拆解库
+
+console.log("\n小说拆解库");
+const novel = await stores.novelSources.create({
+	filename: "测试.txt",
+	encoding: "UTF-8",
+	text: "第1章 开端\n裴渡在渡口等船。\n\n第2章 夜航\n夜里下起了雨，裴渡撑船过江。\n\n第3章 收网\n天亮时，他在码头收网。",
+});
+check("拆出三章", novel.chapterCount === 3 && novel.chapters[1]?.title === "第2章 夜航");
+check("列表里有一本", stores.novelSources.list().some((item) => item.id === novel.id));
+const novelChapter = await stores.novelSources.readChapter(novel.id, "ch002");
+check("按章读得到正文", novelChapter?.content.includes("撑船过江") === true);
+check("正文按需读，元数据不带正文", !("content" in (stores.novelSources.get(novel.id)?.chapters[1] ?? {})));
+const novelHits = await stores.novelSources.search(novel.id, "裴渡");
+check("检索命中章节", novelHits.length >= 2 && novelHits[0]?.chapterId === "ch001");
+await stores.novelSources.flush();
+
 // ───────────────────────────────────────── 关掉重开
 
 console.log("\n关掉重开");
@@ -523,6 +540,8 @@ check("重开后密钥还在", reopened.credentials.hasKey("cred-keep"));
 check("重开后设置还在", reopened.settings.get().defaultModel === "留下记号/gpt-4o");
 check("重开后记录还在", reopened.records.list({ projectId: "book-2" }, 50).length === 1);
 check("重开后自建种类还在", reopened.kinds.list().length >= 1);
+check("重开后小说源还在", reopened.novelSources.get(novel.id)?.chapterCount === 3);
+check("重开后小说正文还能读", (await reopened.novelSources.readChapter(novel.id, "ch002"))?.content.includes("撑船过江") === true);
 check("重开后落盘的表都还在", factory.row(DB, "library", keptMaterial.id) !== undefined);
 
 // ───────────────────────────────────────── 落盘失败

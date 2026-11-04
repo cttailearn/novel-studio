@@ -13,7 +13,7 @@ import {
 	type NoteSeverity,
 	type Project,
 } from "../store/project.ts";
-import type { ProjectStorePort } from "../store/store-port.ts";
+import type { NovelSourceStorePort, ProjectStorePort } from "../store/store-port.ts";
 import type { LibraryMaterial, MaterialLibrary } from "../store/library.ts";
 import type { AskBroker } from "./ask.ts";
 import { createWebSearchTools, type WebSearchClient, type WebSearchConfig } from "./web-search.ts";
@@ -99,6 +99,8 @@ export interface NovelToolDeps {
 	previousChapterId?: string;
 	/** 由服务端授权后注入，仅供设定官使用。 */
 	webSearch?: { client: WebSearchClient; config: WebSearchConfig };
+	/** 小说拆解库；只在设定官作用域注入。 */
+	novelStore?: NovelSourceStorePort;
 }
 
 function getProject(deps: NovelToolDeps): Project {
@@ -949,6 +951,142 @@ function attachMaterialsTool(deps: NovelToolDeps): AgentTool<any> {
 }
 
 /**
+ * 小说拆解库的只读工具。
+ *
+ * 上传的整本书不进入系统提示词，也不进入对话历史。设定官只能通过
+ * 章节列表与检索按需取料；搜索只回片段，读完再决定要不要读整章。
+ * 只读工具不给写作智能体 —— 执笔者没有拆解小说的职责。
+ */
+function novelSourceTools(deps: { novelStore?: NovelSourceStorePort }): AgentTool<any>[] {
+	if (!deps.novelStore) return [];
+	const store = deps.novelStore;
+
+	return [
+		defineTool({
+			name: "list_novel_sources",
+			label: "查看原料库",
+			description:
+				"列出作者上传并保存的原料：普通资料与整本小说。每条含 sourceId、标题、类型、编码、章节数、总字数与拆解方式。" +
+				"要基于某份原料提炼素材时，先调用它拿到 sourceId。",
+			parameters: Type.Object({}, { description: "查看原料库" }),
+			execute: async () => {
+				const sources = store.list();
+				if (sources.length === 0) {
+					return result("原料库还是空的。作者需要先在素材工作台的「原料」里上传资料或小说。", []);
+				}
+				const text = sources
+					.map(
+						(source) =>
+							`《${source.title}》（${source.kind === "document" ? "资料" : "小说"}，sourceId: ${source.id}）\n` +
+							`  ${source.chapterCount} 章 / ${source.totalChars.toLocaleString("en-US")} 字 / ` +
+							`${source.splitMode === "single" ? "整篇" : source.splitMode === "fixed" ? "定长拆解" : "章节拆解"} / ${source.encoding}`,
+					)
+					.join("\n");
+				return result(
+					text,
+					sources.map(({ chapters: _chapters, ...meta }) => meta),
+				);
+			},
+		}),
+
+		defineTool({
+			name: "list_novel_chapters",
+			label: "查看原料章节",
+			description:
+				"列出某份原料的章节/分段标题与字数，可按关键词过滤标题。先用它确定要检索或细读的范围。" +
+				"整篇资料只有一段；分页参数 offset/limit 用于长篇，默认返回前 100 条。",
+			parameters: Type.Object(
+				{
+					sourceId: nonEmpty("原料 sourceId，来自 list_novel_sources"),
+					query: optionalText("按章节/分段标题过滤，如「人物」「结局」"),
+					offset: Type.Optional(Type.Integer({ minimum: 0, description: "跳过前几条，默认 0" })),
+					limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200, description: "最多返回几条，默认 100" })),
+				},
+				{ description: "查看原料章节" },
+			),
+			execute: async (_toolCallId, params) => {
+				const source = store.get(params.sourceId);
+				if (!source) return result("找不到这份原料，先用 list_novel_sources 确认 sourceId。");
+				const query = params.query?.trim().toLowerCase();
+				const chapters = query
+					? source.chapters.filter((chapter) => chapter.title.toLowerCase().includes(query))
+					: source.chapters;
+				const offset = Math.max(0, params.offset ?? 0);
+				const limit = Math.max(1, Math.min(200, params.limit ?? 100));
+				const page = chapters.slice(offset, offset + limit);
+				if (page.length === 0) return result("没有符合条件的章节。");
+				return result(
+					`《${source.title}》共 ${source.chapterCount} 条，当前显示第 ${offset + 1}–${offset + page.length} 条：\n` +
+						page.map((chapter) => `${chapter.id}  ${chapter.title}（${chapter.chars.toLocaleString("en-US")} 字）`).join("\n"),
+					{ sourceId: source.id, sourceTitle: source.title, chapters: page, total: chapters.length },
+				);
+			},
+		}),
+
+		defineTool({
+			name: "search_novel_source",
+			label: "检索原料原文",
+			description:
+				"在一份原料里检索关键词，返回最相关的章节/分段与原文片段。检索是提炼素材的主要手段：" +
+				"按人物名、地点、事件、设定词分别多搜几轮，不要只搜一次就下结论。" +
+				"sourceId 必填；limit 默认 6，最多 12。",
+			parameters: Type.Object(
+				{
+					sourceId: nonEmpty("原料 sourceId，来自 list_novel_sources"),
+					query: nonEmpty("检索词；中文可用人物名、地点、事件或设定词"),
+					limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 12, description: "返回几条，默认 6" })),
+				},
+				{ description: "检索原料原文" },
+			),
+			execute: async (_toolCallId, params) => {
+				const source = store.get(params.sourceId);
+				if (!source) return result("找不到这份原料，先用 list_novel_sources 确认 sourceId。");
+				const hits = await store.search(params.sourceId, params.query, { limit: params.limit ?? 6 });
+				if (hits.length === 0) {
+					return result(`《${source.title}》里没有检索到「${params.query}」。换个同义词、人物别名或地点名再试。`);
+				}
+				return result(
+					`《${source.title}》检索「${params.query}」命中 ${hits.length} 章：\n\n` +
+						hits
+							.map(
+								(hit) =>
+									`[${hit.chapterId}] ${hit.chapterTitle}（相关度 ${hit.score}）\n${hit.snippet}`,
+							)
+							.join("\n\n") +
+						"\n\n片段不够时用 read_novel_chapter 读整章；要交叉核对，再换关键词搜一轮。",
+					hits,
+				);
+			},
+		}),
+
+		defineTool({
+			name: "read_novel_chapter",
+			label: "细读原料章节",
+			description:
+				"读一章/一段的正文。默认最多返回 12000 字；超长内容会截断并提示。只在检索命中、需要核对细节时使用，不要逐段通读。",
+			parameters: Type.Object(
+				{
+					sourceId: nonEmpty("原料 sourceId"),
+					chapterId: nonEmpty("章节/分段 id，如 ch001"),
+				},
+				{ description: "细读原料章节" },
+			),
+			execute: async (_toolCallId, params) => {
+				const chapter = await store.readChapter(params.sourceId, params.chapterId);
+				if (!chapter) return result("找不到这一段，先用 list_novel_chapters 确认章节 id。");
+				const limit = 12_000;
+				const body = chapter.content.length > limit ? chapter.content.slice(0, limit) : chapter.content;
+				return result(
+					`[${chapter.id}] ${chapter.title}（${chapter.chars.toLocaleString("en-US")} 字）\n\n${body}` +
+						(chapter.content.length > limit ? `\n\n（本章超过 ${limit} 字，以上为前 ${limit} 字；需要后文请用检索定位。）` : ""),
+					chapter,
+				);
+			},
+		}),
+	];
+}
+
+/**
  * 素材智能体的工具集。
  *
  * 刻意不含 write_chapter —— 工具边界就是职责边界，
@@ -960,6 +1098,7 @@ export function createMaterialTools(deps: NovelToolDeps): AgentTool<any>[] {
 		updateOutlineTool(deps),
 		upsertMaterialTool(deps),
 		attachMaterialsTool(deps),
+		...novelSourceTools(deps),
 		...(deps.webSearch?.config.enabled ? createWebSearchTools(deps.webSearch.client, deps.webSearch.config) : []),
 	];
 }
@@ -1193,6 +1332,8 @@ export interface LibraryToolDeps {
 	 * 之前只在工程素材分支注入，导致通用素材库这边提示词写着"不能联网"。
 	 */
 	webSearch?: { client: WebSearchClient; config: WebSearchConfig };
+	/** 小说拆解库；库作用域同样可以据此提炼通用素材。 */
+	novelStore?: NovelSourceStorePort;
 }
 
 /** 库条目的一行摘要。与作品素材同格式，但不带"已装入"——库里没有章节。 */
@@ -1309,6 +1450,8 @@ export function createLibraryTools(deps: LibraryToolDeps): AgentTool<any>[] {
 				);
 			},
 		}),
+
+		...novelSourceTools(deps),
 
 		// 库作用域同样可以问作者 —— 提示词里也放行了这一支。
 		...(deps.ask ? [askUserTool(deps.ask)] : []),

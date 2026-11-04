@@ -107,4 +107,24 @@ assert.match(settings, /const order = \["推荐", "国际通用", "国内厂商"
 assert.match(settings, /保存 API Key 后，即可列出内置模型。/);
 assert.ok(!settings.includes("innerHTML"), "设置页不应以 HTML 字符串拼接用户数据");
 
+assert.match(html, /id="upload-pick"/);
+assert.match(html, /id="novel-pick"/);
+assert.match(html, /id="novel-input"/);
+assert.match(html, /id="material-source-list"/);
+assert.match(html, /id="material-source-count"/);
+assert.match(html, /id="library-material-sources"/);
+assert.match(app, /async function loadNovelSources\(/);
+assert.match(app, /async function importMaterialFiles\(/);
+assert.match(app, /fetch\("\/api\/material-sources" \+ query/);
+assert.match(app, /kind=\$\{kind\}/);
+assert.match(app, /function renderMaterialSources\(/);
+assert.match(app, /function materialSourceGroup\(/);
+assert.match(app, /el\("details", "material-source-group"\)/);
+assert.match(app, /materialSourceGroup\(kind, grouped, pane\)/);
+assert.match(app, /function materialSourceCard\(/);
+assert.match(app, /source\.kind === "document" \? "资料" : "小说"/);
+const useNovel = functionBody("useNovelSource");
+assert.match(useNovel, /sourceId: \$\{source\.id\}/);
+assert.ok(!useNovel.includes("entry.text") && !useNovel.includes("source.text"), "原料提炼只能传 sourceId，不能把全文塞进对话");
+
 console.log("frontend contracts: OK（静态契约；真实浏览器交互未验证）");

@@ -1,6 +1,6 @@
 [package]
 name = "novel-studio"
-version = "0.1.1"
+version = "0.1.0"
 description = "墨耕 · 本地优先的长篇小说创作台"
 authors = ["novel-studio"]
 license = "MIT"
@@ -34,3 +34,6 @@ tauri-plugin-updater = "2"
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+strip = "symbols"

@@ -2,7 +2,7 @@ import { Agent, type AgentMessage, type ThinkingLevel } from "@earendil-works/pi
 import type { Model, Models } from "@earendil-works/pi-ai";
 import type { AppConfig } from "../config/env.ts";
 import { assembledMaterials, kindLabel, type ChapterDraft, type ChapterMeta, type Project } from "../store/project.ts";
-import type { ProjectStorePort } from "../store/store-port.ts";
+import type { NovelSourceStorePort, ProjectStorePort } from "../store/store-port.ts";
 import type { MaterialLibrary } from "../store/library.ts";
 import {
 	buildContextDigest,
@@ -40,6 +40,8 @@ export interface NovelAgentOptions {
 	 * 这一支下 projectId 可以是空串，工具集也换成只有素材读写的那两个。
 	 */
 	library?: MaterialLibrary;
+	/** 小说拆解库；设定官（含库作用域）可据此检索上传的小说。 */
+	novelSources?: NovelSourceStorePort;
 	thinkingLevel?: ThinkingLevel;
 	/**
 	 * 提问通道。给了才有 ask_user 工具 ——
@@ -188,12 +190,17 @@ export async function createNovelAgent(options: NovelAgentOptions): Promise<Agen
 		const libraryWebSearch = options.webSearch?.config.enabled ? options.webSearch : undefined;
 		return new Agent({
 			initialState: {
-				systemPrompt: buildLibrarySystemPrompt(options.library.list(), libraryWebSearch !== undefined),
+				systemPrompt: buildLibrarySystemPrompt(
+					options.library.list(),
+					libraryWebSearch !== undefined,
+					options.novelSources?.list() ?? [],
+				),
 				model,
 				thinkingLevel: options.thinkingLevel ?? config.defaultThinkingLevel,
 				tools: createLibraryTools({
 					library: options.library,
 					ask: options.ask,
+					...(options.novelSources ? { novelStore: options.novelSources } : {}),
 					...(libraryWebSearch ? { webSearch: libraryWebSearch } : {}),
 				}),
 			},
@@ -220,6 +227,7 @@ export async function createNovelAgent(options: NovelAgentOptions): Promise<Agen
 		store,
 		projectId,
 		ask: options.ask,
+		...(role === "material" && options.novelSources ? { novelStore: options.novelSources } : {}),
 		...(role === "material" && options.webSearch?.config.enabled ? { webSearch: options.webSearch } : {}),
 		...(writing && options.chapterId ? {
 			allowedChapterId: options.chapterId,
@@ -228,7 +236,11 @@ export async function createNovelAgent(options: NovelAgentOptions): Promise<Agen
 	};
 	const systemPrompt =
 		role === "material"
-			? buildMaterialSystemPrompt(project, options.webSearch?.config.enabled === true)
+			? buildMaterialSystemPrompt(
+					project,
+					options.webSearch?.config.enabled === true,
+					options.novelSources?.list() ?? [],
+				)
 			: buildWritingSystemPrompt(project, writing!);
 
 	return new Agent({

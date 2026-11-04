@@ -96,6 +96,11 @@ const state = {
 	writeAbort: null,
 	/** 刚上传、还没处置的原料。 */
 	uploads: [],
+	/** 持久化原料库：普通资料 + 整本小说。 */
+	materialSources: [],
+	/** 原料分组的展开状态；默认两类都展开。 */
+	materialGroupOpen: { document: true, novel: true },
+
 	/** 展开了全文的素材 id。 */
 	openMaterials: new Set(),
 	/** 等第二次点击确认删除的素材 id。 */
@@ -1464,9 +1469,16 @@ async function fetchKinds() {
 }
 
 async function bootstrap() {
-	const [data, library] = await Promise.all([api("/api/bootstrap"), api("/api/library")]);
+	const [data, library, materialSources] = await Promise.all([
+		api("/api/bootstrap"),
+		api("/api/library"),
+		// 老服务端没有原料库路由时，不因为一份旧资料挡住整个工作台。
+		api("/api/material-sources").catch(() => ({ sources: [] })),
+	]);
 	state.projects = data.projects;
 	state.library = library.materials ?? [];
+	state.materialSources = Array.isArray(materialSources.sources) ? materialSources.sources : [];
+	renderMaterialSources();
 	state.models = data.models;
 	// 种类目录：bootstrap 里带了就用它；没带（旧服务端）再单独问一次。
 	// 两处都拿不到就留空，kindEntries() 会退回内置表，不该因此挡住起手。
@@ -3144,7 +3156,7 @@ function renderMaterialsBench() {
 		}),
 	);
 
-	renderUploads();
+	renderMaterialSources();
 
 	const filterBar = $("material-filter");
 	filterBar.replaceChildren();
@@ -3591,6 +3603,179 @@ async function reloadProjectCatching(onError) {
 	}
 }
 
+// ── 小说拆解库
+
+/** 读取持久化原料库。老服务端没有这条路由时静默留空，不挡工作台。 */
+async function loadNovelSources(options = {}) {
+	try {
+		const data = await api("/api/material-sources");
+		state.materialSources = Array.isArray(data.sources) ? data.sources : [];
+	} catch (error) {
+		state.materialSources = [];
+		if (options.loud) toast("原料库读取失败：" + error.message, "error");
+	}
+	renderMaterialSources();
+}
+
+/** 章节名只露前几章：一本书可能两千多章，全铺出来会把素材栏淹掉。 */
+function novelChapterPreview(source) {
+	const box = el("div", "novel-chapters");
+	const chapters = Array.isArray(source.chapters) ? source.chapters.slice(0, 6) : [];
+	for (const chapter of chapters) {
+		box.append(el("div", "novel-chapter", `${chapter.id}  ${chapter.title}（${chapter.chars.toLocaleString("zh-CN")} 字）`));
+	}
+	if ((source.chapters?.length ?? 0) > chapters.length) {
+		box.append(
+			el(
+				"div",
+				"novel-chapter is-more",
+				`……共 ${source.chapterCount} ${source.kind === "document" ? "段" : "章"}，完整内容可在对话里让设定官检索`,
+			),
+		);
+	}
+	return box;
+}
+
+function materialSourceLabel(source) {
+	return source.kind === "document" ? "资料" : "小说";
+}
+
+function materialSourceSplitLabel(source) {
+	if (source.splitMode === "single") return "整篇";
+	return source.splitMode === "fixed" ? "定长拆解" : "章节拆解";
+}
+
+/** 一份原料卡；工作台与通用素材库共用，保证两处看到的是同一份数据。 */
+function materialSourceCard(source, pane) {
+	const card = el("article", "novel-source material-source");
+	const head = el("div", "novel-source-head");
+	head.append(el("strong", "novel-source-title", `《${source.title}》`));
+	head.append(el("span", "novel-source-badge", materialSourceLabel(source)));
+	head.append(el("span", "novel-source-badge is-quiet", materialSourceSplitLabel(source)));
+	card.append(head);
+	card.append(
+		el(
+			"p",
+			"novel-source-meta",
+			`${source.chapterCount.toLocaleString("zh-CN")} ${source.kind === "document" ? "段" : "章"} · ` +
+				`${source.totalChars.toLocaleString("zh-CN")} 字 · ${source.encoding}`,
+		),
+	);
+	const details = el("details", "novel-source-details");
+	details.append(el("summary", "", source.kind === "document" ? "看看开头" : "看看章节名"));
+	details.append(novelChapterPreview(source));
+	card.append(details);
+	const actions = el("div", "novel-source-actions");
+	actions.append(button("据此提炼", "btn btn-quiet btn-xs", () => useNovelSource(source, pane)));
+	actions.append(button("删除", "btn btn-quiet btn-xs", () => void deleteNovelSource(source)));
+	card.append(actions);
+	return card;
+}
+
+/** 资料/小说各一组，组头可折叠；默认展开，折叠状态在本次页面内保留。 */
+function materialSourceGroup(kind, sources, pane) {
+	const group = el("details", "material-source-group");
+	group.open = state.materialGroupOpen[kind] !== false;
+	const summary = el("summary", "material-source-group-head");
+	summary.append(el("span", "material-source-group-title", kind === "document" ? "资料" : "小说"));
+	summary.append(el("span", "material-source-group-count", `${sources.length} 份`));
+	group.append(summary);
+	for (const source of sources) group.append(materialSourceCard(source, pane));
+	group.addEventListener("toggle", () => {
+		state.materialGroupOpen[kind] = group.open;
+	});
+	return group;
+}
+
+function renderMaterialSources() {
+	const boxes = [$("material-source-list"), $("library-material-sources")].filter(Boolean);
+	if (!boxes.length) return;
+	const sources = state.materialSources ?? [];
+	const count = $("material-source-count");
+	if (count) count.textContent = sources.length ? `${sources.length} 份` : "";
+	for (const box of boxes) {
+		box.replaceChildren();
+		if (sources.length === 0) {
+			box.append(el("p", "novel-empty", "还没有原料。资料会整篇保存，小说会按章拆解；两者都能反复用来提炼素材。"));
+			continue;
+		}
+		const pane = box.id === "library-material-sources" ? "library" : "material";
+		for (const kind of ["document", "novel"]) {
+			const grouped = sources.filter((source) => (source.kind === "document" ? "document" : "novel") === kind);
+			if (grouped.length > 0) box.append(materialSourceGroup(kind, grouped, pane));
+		}
+	}
+}
+
+function renderNovelSources() {
+	renderMaterialSources();
+}
+
+/** 把 sourceId 填进输入框，不把整本原料塞进消息 —— 取料交给智能体的检索工具。 */
+function useNovelSource(source, pane = "material") {
+	const input = $(pane === "library" ? "library-input" : "material-input");
+	if (!input) return;
+	const noun = source.kind === "document" ? "资料" : "小说";
+	input.value = `请根据上传${noun}《${source.title}》（sourceId: ${source.id}）提炼素材：`;
+	input.focus();
+	input.setSelectionRange(input.value.length, input.value.length);
+	input.dispatchEvent(new Event("input", { bubbles: true }));
+	toast(`已把《${source.title}》交给设定官；补上你要提炼什么，再呈上。`);
+}
+
+async function deleteNovelSource(source) {
+	if (!confirm(`删除原料《${source.title}》？原文和分段会从本机移除，已生成的素材不受影响。`)) return;
+	try {
+		await api("/api/material-sources/" + encodeURIComponent(source.id), { method: "DELETE" });
+		state.materialSources = state.materialSources.filter((item) => item.id !== source.id);
+		renderMaterialSources();
+		toast(`已删除《${source.title}》。`);
+	} catch (error) {
+		toast("删除失败：" + error.message, "error");
+	}
+}
+
+async function importMaterialFiles(files, kind = "novel") {
+	if (!files.length) return;
+	const pick = $(kind === "novel" ? "novel-pick" : "upload-pick");
+	const oldLabel = pick?.textContent ?? (kind === "novel" ? "＋ 小说" : "＋ 资料");
+	if (pick) {
+		pick.disabled = true;
+		pick.textContent = kind === "novel" ? "拆解中…" : "保存中…";
+	}
+	try {
+		for (const file of files) {
+			const query = `?kind=${kind}&filename=` + encodeURIComponent(file.name);
+			const res = await fetch("/api/material-sources" + query, {
+				method: "POST",
+				headers: { "content-type": "application/octet-stream" },
+				body: file,
+			});
+			const data = await res.json().catch(() => ({}));
+			if (!res.ok) throw new Error(data.error || "导入失败 (" + res.status + ")");
+			const source = data.source;
+			state.materialSources.unshift(source);
+			renderMaterialSources();
+			toast(
+				kind === "novel"
+					? `已拆解《${source.title}》：${source.chapterCount} 章，${source.totalChars.toLocaleString("zh-CN")} 字。`
+					: `已保存资料《${source.title}》：${source.totalChars.toLocaleString("zh-CN")} 字，之后可反复取用。`,
+			);
+		}
+	} catch (error) {
+		toast((kind === "novel" ? "导入小说失败：" : "保存资料失败：") + error.message, "error");
+	} finally {
+		if (pick) {
+			pick.disabled = false;
+			pick.textContent = oldLabel;
+		}
+	}
+}
+
+function importNovelFiles(files) {
+	return importMaterialFiles(files, "novel");
+}
+
 // ── 上传原料
 
 /**
@@ -3599,25 +3784,9 @@ async function reloadProjectCatching(onError) {
  * scope 决定两件事：往哪个接口传、传完显示在哪个列表里。
  * 库作用域不能拿 projectId 当门槛 —— 作者还没建书时也要能喂资料给设定官。
  */
-async function handleFiles(files, scope = "material") {
-	if (scope === "material" && !state.projectId) return;
-	for (const file of files) {
-		// 不能用 crypto.randomUUID()：手机通过局域网 http:// 打开时它不存在（只有安全上下文才有）。
-		const entry = { id: newRequestId(), filename: file.name, status: "loading", scope };
-		state.uploads.unshift(entry);
-		renderUploads(scope);
-		try {
-			const query = "?filename=" + encodeURIComponent(file.name);
-			const url = scope === "library" ? "/api/uploads" + query : "/api/projects/" + state.projectId + "/uploads" + query;
-			const res = await fetch(url, { method: "POST", headers: { "content-type": "application/octet-stream" }, body: file });
-			const data = await res.json().catch(() => ({}));
-			if (!res.ok) throw new Error(data.error || "上传失败 (" + res.status + ")");
-			Object.assign(entry, { status: "ready" }, data.upload);
-		} catch (error) {
-			Object.assign(entry, { status: "error", error: error.message });
-		}
-		renderUploads(scope);
-	}
+async function handleFiles(files) {
+	// 普通资料也进持久化原料库；不再依赖本次会话的 state.uploads。
+	await importMaterialFiles(files, "document");
 }
 
 function renderUploads(scope = "material") {
@@ -3789,7 +3958,7 @@ $("material-form").addEventListener("submit", async (event) => {
 			if (entry) entry.status = "stored";
 		}
 		closeDialog($("material-dialog"));
-		renderUploads();
+		renderMaterialSources();
 		// 库里改名会影响作品卡上的"已入素材库"标注，所以两边都刷。
 		if (state.projectId) await reloadProject();
 		renderView();
@@ -6967,7 +7136,14 @@ zone.addEventListener("drop", (event) => {
 	void handleFiles([...event.dataTransfer.files]);
 });
 
-// 库作用域的原料：与作品那条同一套逻辑，只是不绑工程、走 /api/uploads。
+// 小说拆解库：整本上传，只把书名/章节数带回界面，全文留在服务端或本机 IDB。
+$("novel-pick").addEventListener("click", () => $("novel-input").click());
+$("novel-input").addEventListener("change", (event) => {
+	void importNovelFiles([...event.target.files]);
+	event.target.value = "";
+});
+
+// 库作用域的原料：与作品那条同一套逻辑，统一落进持久化原料库。
 $("library-upload-pick").addEventListener("click", () => $("library-upload-input").click());
 $("library-upload-input").addEventListener("change", (event) => {
 	void handleFiles([...event.target.files], "library");

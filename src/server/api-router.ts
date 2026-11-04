@@ -68,6 +68,7 @@ import type {
 	CredentialStorePort,
 	KindsStorePort,
 	LibraryStorePort,
+	NovelSourceStorePort,
 	ProjectCreateInput,
 	ProjectStorePort,
 	RecordStorePort,
@@ -79,7 +80,7 @@ import {
 	NOVEL_PACKAGE_MAX_BYTES,
 	type NovelImportResult,
 } from "../store/novel-package.ts";
-import { extractText, MAX_UPLOAD_BYTES, UnsupportedUploadError, UploadTooLargeError } from "./upload.ts";
+import { extractNovelText, extractText, MAX_UPLOAD_BYTES, UnsupportedUploadError, UploadTooLargeError } from "./upload.ts";
 import type { AskChannel } from "./ask.ts";
 import type { RecordFilter, RecordRole } from "./records.ts";
 
@@ -281,6 +282,8 @@ export interface ApiRouterDeps {
 	store: ProjectStorePort;
 	/** 通用素材库。 */
 	libraryStore: LibraryStorePort;
+	/** 小说拆解库；旧测试可不传，相关接口返回 503。 */
+	novelStore?: NovelSourceStorePort;
 	/** 作者自建的素材种类表。 */
 	kindStore: KindsStorePort;
 	/** 应用设置。 */
@@ -509,6 +512,7 @@ async function replaceAgent(ctx: RouterContext, session: Session, model: Model<a
 		webSearch: session.role === "material" ? await authorizedWebSearch(ctx) : undefined,
 		// 库作用域传的是库，不是工程；createNovelAgent 见到它就走另一支。
 		...(session.libraryScope ? { library: ctx.deps.libraryStore } : {}),
+		...(session.role === "material" && ctx.deps.novelStore ? { novelSources: ctx.deps.novelStore } : {}),
 		...(session.chapterId ? { chapterId: session.chapterId } : {}),
 	});
 }
@@ -1259,6 +1263,7 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 	const {
 		store,
 		libraryStore,
+		novelStore,
 		kindStore,
 		settingsStore,
 		credentialStore,
@@ -2232,6 +2237,85 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 	//
 	// 以下都是作者在工作台里的直接操作。它们与智能体的工具写同一套数据结构：
 	// 装料共用 linkMaterials，所以"人装的料"和"墨客装的料"不会把双向索引写歪。
+
+	// ---------------------------------------------------------------- 原料库
+	//
+	// 普通资料和整本小说都保存下来反复检索：资料按单章存，小说按章节/定长拆解。
+	// 上传后只返回元数据（章节名/字数），正文按章读，前端不把全文塞进对话。
+	// `/api/novel-sources` 保留为旧客户端兼容入口，等价于 kind=novel。
+
+	const isMaterialSources = pathname === "/api/material-sources" || pathname === "/api/novel-sources";
+	const materialKind = pathname === "/api/material-sources" && req.searchParams.get("kind") === "document" ? "document" : "novel";
+
+	if (isMaterialSources && req.method === "GET") {
+		if (!novelStore) return json(sink, 503, { error: "当前存储不支持原料库" });
+		return json(sink, 200, { sources: novelStore.list() });
+	}
+
+	if (isMaterialSources && req.method === "POST") {
+		if (!novelStore) return json(sink, 503, { error: "当前存储不支持原料库" });
+		const filename = req.searchParams.get("filename")?.trim();
+		if (!filename) return json(sink, 400, { error: "缺少 filename" });
+		if (exceedsUploadLimit(req)) return uploadLimitError(sink);
+		let bytes: Uint8Array;
+		try {
+			bytes = await readRawBody(req, MAX_UPLOAD_BYTES);
+		} catch (error) {
+			return json(sink, 413, { error: (error as Error).message });
+		}
+		if (bytes.length === 0) return json(sink, 400, { error: "文件是空的" });
+		const splitMode =
+			materialKind === "document"
+				? "single"
+				: req.searchParams.get("splitMode") === "fixed"
+					? "fixed"
+					: "chapters";
+		const fixedCharsRaw = Number(req.searchParams.get("fixedChars"));
+		const fixedChars = Number.isFinite(fixedCharsRaw) && fixedCharsRaw > 0 ? fixedCharsRaw : undefined;
+		try {
+			const extracted = await extractNovelText(filename, bytes);
+			const source = await novelStore.create({
+				kind: materialKind,
+				title: req.searchParams.get("title")?.trim() || extracted.title,
+				filename,
+				text: extracted.text,
+				encoding: extracted.encoding,
+				splitMode,
+				fixedChars,
+			});
+			await novelStore.flush();
+			return json(sink, 201, { source });
+		} catch (error) {
+			if (error instanceof UploadTooLargeError) return json(sink, 413, { error: error.message });
+			if (error instanceof UnsupportedUploadError) return json(sink, 415, { error: error.message });
+			return json(sink, 400, { error: (error as Error).message });
+		}
+	}
+
+	const novelChapterMatch = pathname.match(/^\/api\/(?:material|novel)-sources\/([\w-]+)\/chapters\/([\w-]+)$/);
+	if (novelChapterMatch && req.method === "GET") {
+		if (!novelStore) return json(sink, 503, { error: "当前存储不支持原料库" });
+		const chapter = await novelStore.readChapter(novelChapterMatch[1]!, novelChapterMatch[2]!);
+		if (!chapter) return json(sink, 404, { error: "章节不存在" });
+		return json(sink, 200, { chapter });
+	}
+
+	const novelSourceMatch = pathname.match(/^\/api\/(?:material|novel)-sources\/([\w-]+)$/);
+	if (novelSourceMatch) {
+		if (!novelStore) return json(sink, 503, { error: "当前存储不支持原料库" });
+		const id = novelSourceMatch[1]!;
+		if (req.method === "GET") {
+			const source = novelStore.get(id);
+			if (!source) return json(sink, 404, { error: "原料不存在" });
+			return json(sink, 200, { source });
+		}
+		if (req.method === "DELETE") {
+			const removed = await novelStore.remove(id);
+			if (!removed) return json(sink, 404, { error: "原料不存在" });
+			await novelStore.flush();
+			return json(sink, 200, { ok: true });
+		}
+	}
 
 	/**
 	 * 上传原料：只提取文本交回前端预览，不落盘、不建素材。
