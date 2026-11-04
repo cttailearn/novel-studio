@@ -2,6 +2,7 @@ mod files;
 mod llm;
 mod secure;
 mod sqlite;
+mod update;
 
 use std::io;
 use std::path::PathBuf;
@@ -10,7 +11,11 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+
+    builder
         .setup(|app| {
             // 便携/测试模式：允许把数据目录指到任意可写位置。
             // 正常启动仍用系统标准的 app_data_dir。
@@ -56,6 +61,9 @@ pub fn run() {
             files::save_text_file,
             files::save_binary_file,
             files::open_text_file,
+            update::app_version,
+            update::update_check,
+            update::update_install,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

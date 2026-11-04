@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 
 const app = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
 const settings = await readFile(new URL("../public/settings.js", import.meta.url), "utf8");
+const update = await readFile(new URL("../public/update.js", import.meta.url), "utf8");
 const html = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
 
 function functionBody(name) {
@@ -24,6 +25,7 @@ const { SourceTextModule } = await import("node:vm");
 if (typeof SourceTextModule === "function") {
 	new SourceTextModule(app);
 	new SourceTextModule(settings);
+	new SourceTextModule(update);
 }
 
 const manuscript = functionBody("renderManuscriptView");
@@ -78,6 +80,19 @@ assert.match(search, /input\.focus\(\{ preventScroll: true \}\)/);
 assert.match(html, /id="settings-tab-models"[^>]*role="tab"[^>]*aria-controls="settings-models-panel"/);
 assert.match(html, /id="settings-tab-web"[^>]*role="tab"[^>]*aria-controls="settings-web-panel"/);
 assert.match(html, /id="settings-web-panel"[^>]*role="tabpanel"[^>]*aria-labelledby="settings-tab-web"/);
+assert.match(html, /id="settings-tab-about"[^>]*role="tab"[^>]*aria-controls="settings-about-panel"/);
+assert.match(html, /id="settings-about-panel"[^>]*role="tabpanel"[^>]*aria-labelledby="settings-tab-about"/);
+assert.match(settings, /from "\.\/update\.js"/);
+assert.match(settings, /\["models", "web", "about"\]/);
+assert.match(settings, /function isTauriShell\(\)/);
+assert.match(settings, /数据与密钥保存在本机应用数据目录/);
+assert.match(settings, /仅保存在本机应用数据目录（SQLite）/);
+assert.match(update, /const AUTO_CHECK_KEY = "mogeng\.update\.auto-check"/);
+assert.match(update, /invoke\("update_check"\)/);
+assert.match(update, /invoke\("update_install"\)/);
+assert.match(update, /LATEST_RELEASE_API/);
+assert.match(update, /aria-live/);
+assert.ok(!update.includes("innerHTML"), "更新面板不应以 HTML 字符串拼接远端说明");
 assert.match(settings, /function setSection\(section\)/);
 assert.match(settings, /\["ArrowLeft", "ArrowRight", "Home", "End"\]/);
 assert.match(settings, /test\.disabled = !\(web\.enabled && web\.configured\)/);

@@ -1,6 +1,6 @@
 [package]
 name = "novel-studio"
-version = "0.1.0"
+version = "0.1.1"
 description = "墨耕 · 本地优先的长篇小说创作台"
 authors = ["novel-studio"]
 license = "MIT"
@@ -29,6 +29,7 @@ url = "2"
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 rfd = "0.15"
+tauri-plugin-updater = "2"
 
 [features]
 default = ["custom-protocol"]

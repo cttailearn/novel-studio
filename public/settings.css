@@ -1659,7 +1659,8 @@
 .settings-save-status.is-ok { color: var(--moss); }
 .settings-save-status.is-err { color: var(--cinnabar); }
 #settings-models-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-#settings-models-panel[hidden], #settings-web-panel[hidden] { display: none; }
+#settings-models-panel[hidden], #settings-web-panel[hidden], #settings-about-panel[hidden] { display: none; }
+.settings-about-panel [hidden] { display: none !important; }
 .settings-defaults { display: grid; grid-template-columns: minmax(190px, .34fr) minmax(0, 1fr); align-items: start; }
 .defaults-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 7px 22px; min-width: 0; }
 .defaults-fields > label { display: flex; flex-direction: column; align-items: stretch; min-width: 0; }
@@ -1683,7 +1684,31 @@
 .model-card-details > summary:hover { color: var(--ink); }
 .model-card-details[open] > summary { color: var(--ink-2); }
 .model-card-details .model-card-body { border-top: 0; }
-.settings-web-panel { flex: 1; min-height: 0; overflow-y: auto; padding: 32px clamp(22px, 5vw, 72px) 48px; overscroll-behavior: contain; }
+.settings-web-panel, .settings-about-panel { flex: 1; min-height: 0; overflow-y: auto; padding: 32px clamp(22px, 5vw, 72px) 48px; overscroll-behavior: contain; }
+.about-intro { max-width: 760px; }
+.about-card { display: flex; flex-direction: column; gap: 18px; max-width: 760px; margin-top: 24px; padding: 22px 24px; border: 1px solid var(--rule-soft); background: var(--paper-lo); }
+.about-version-line { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.about-version { font: 600 30px var(--kai); letter-spacing: .06em; color: var(--ink); }
+.about-version-note { display: block; margin-top: 4px; font-size: 11px; letter-spacing: .14em; color: var(--ink-3); }
+.about-status { margin-top: 4px; font-size: 12px; line-height: 1.6; color: var(--ink-3); }
+.about-status.is-ok { color: var(--moss); }
+.about-status.is-warn, .about-status.is-err { color: var(--cinnabar); }
+.about-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.about-auto { max-width: 760px; }
+.about-switch { display: flex; align-items: center; gap: 9px; font-size: 12px; color: var(--ink-2); cursor: pointer; }
+.about-update { max-width: 760px; margin-top: 18px; padding: 18px 20px; border-left: 2px solid var(--cinnabar); background: var(--paper-lo); }
+.about-update-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.about-update-head strong { font: 600 17px var(--kai); letter-spacing: .06em; color: var(--ink); }
+.about-update-date { font-size: 11px; color: var(--ink-3); }
+.about-notes { max-height: 180px; margin: 12px 0 16px; overflow-y: auto; white-space: pre-wrap; font-size: 12px; line-height: 1.8; color: var(--ink-3); }
+.about-progress { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.about-progress > span { flex: none; width: 14px; height: 14px; border: 2px solid var(--rule); border-top-color: var(--cinnabar); border-radius: 50%; animation: about-spin .8s linear infinite; }
+.about-progress p { margin: 0; font-size: 11.5px; line-height: 1.6; color: var(--ink-3); }
+.about-platform-note { max-width: 760px; margin: 18px 0 0; font-size: 11.5px; line-height: 1.8; color: var(--ink-3); }
+@keyframes about-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+	.about-progress > span { animation-duration: 2.4s; }
+}
 .web-intro { position: relative; max-width: 760px; padding-bottom: 24px; border-bottom: 1px solid var(--rule-soft); }
 .settings-eyebrow { display: block; margin-bottom: 8px; font: 10px var(--mono); letter-spacing: .12em; color: var(--cinnabar); }
 .web-intro h4 { margin: 0 0 9px; font: 600 25px var(--kai); letter-spacing: .08em; color: var(--ink); }
@@ -1721,7 +1746,11 @@
 	.defaults-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 	.default-extra { grid-template-columns: 1fr; }
 	.default-search { grid-row: auto; }
-	.settings-web-panel { padding: 24px 18px 36px; }
+	.settings-web-panel, .settings-about-panel { padding: 24px 18px 36px; }
+	.about-card { margin-top: 18px; padding: 18px; }
+	.about-version { font-size: 26px; }
+	.about-version-line, .about-update-head { flex-direction: column; align-items: flex-start; gap: 6px; }
+	.about-actions .btn { flex: 1 1 auto; justify-content: center; }
 	.web-section .field { grid-template-columns: 1fr; }
 	.web-section .field > .hint { grid-column: 1; }
 	.web-content-switch { margin-left: 0; }

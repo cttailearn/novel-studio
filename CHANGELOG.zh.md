@@ -2,6 +2,36 @@
 
 本项目的版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.1.1] - 2026-11-03
+
+第一个带「检查更新」的版本。Windows 安装版可以在设置 → 关于与更新里手动检查，也可以开启启动时自动检查；发现新版后下载、校验、安装并自动重启。Android 版仍走发布页手动安装 APK。
+
+### 新增
+
+- **关于与更新**：设置页新增「关于」页，显示当前版本、检查更新、更新说明与发布页入口。
+- **桌面自动更新**：Windows 使用 Tauri updater + 签名 NSIS 安装包，更新包在安装前用 minisign 公钥校验；安装完成后应用自动重启。
+- **启动时自动检查**：默认开启，可在「关于」页关闭；只读取版本清单，不会上传作品、素材或密钥。
+- **Android 检查新版**：读取 GitHub 最新 Release，发现新版后打开发布页下载 APK 覆盖安装；不伪装成应用内静默更新。
+- **更新状态提示**：检查中、发现新版本、已是最新、失败原因都有可见反馈；网页版明确显示随服务器更新。
+
+### 修复
+
+- Android/桌面设置页不再把应用数据误称为「浏览器数据」；Tauri 端改为「本机应用数据目录」，并说明卸载或清除应用数据需要备份。
+- 设置页开关在弹层里被 `.sheet` 样式撑成整行的问题。
+- 静默自动检查失败时不再把状态改成红字。
+
+### 发布产物
+
+- Windows x64 安装版：`novel-studio-v0.1.1-windows-x64-setup.exe`
+- Android arm64：`novel-studio-v0.1.1-android-arm64.apk`（debug 签名）
+- 更新清单：`latest.json`；校验文件：`SHA256SUMS`
+
+### 已知限制
+
+- 0.1.0 便携版不内置更新器，需要手动安装一次 0.1.1；从 0.1.1 起才能接收应用内更新。
+- Windows 安装包由墨耕更新密钥签名，但没有 Authenticode 代码签名，SmartScreen 仍可能提示。
+- Android 更新仍需手动下载 APK 覆盖安装；移动端 Keychain/Keystore 尚未接入。
+
 ## [0.1.0] - 2026-11-03
 
 墨耕的第一个公开版本。数据默认留在本机，模型只在你发起生成时收到当次所需的上下文。
@@ -47,4 +77,5 @@
 - 上传只收 UTF-8 文本与 `.docx`；PDF / EPUB / DOC 会明确拒绝，GBK 文本会乱码。
 - 首个版本，数据格式仍可能调整；升级前建议先导出 `.novel` 备份。
 
+[0.1.1]: https://github.com/cttailearn/novel-studio/releases/tag/v0.1.1
 [0.1.0]: https://github.com/cttailearn/novel-studio/releases/tag/v0.1.0

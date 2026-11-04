@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "墨耕",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "identifier": "com.mogeng.novelstudio",
   "build": {
     "frontendDist": "../dist/web",
@@ -26,8 +26,20 @@
       "csp": "default-src 'self' ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'sha256-RoCo17mg2L28PKX0s91jqg5RPqGw4sJIGfWCw8anmVs='; connect-src 'self' ipc: http://ipc.localhost http://tauri.localhost https://tauri.localhost https: http://127.0.0.1:*; font-src 'self' data:;"
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDVEMzM1MjJCQTZGRENGNEMKUldSTXovMm1LMUl6WFU5emlsNnpKRGR2RGF2Z1cyNGhOcERGRUgvSnZ2SFN3QU9Xa1RPemFjNTgK",
+      "endpoints": [
+        "https://github.com/cttailearn/novel-studio/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "icon": [
       "icons/32x32.png",

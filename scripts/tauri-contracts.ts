@@ -37,13 +37,20 @@ const conf = JSON.parse(read("src-tauri/tauri.conf.json")) as {
 	identifier: string;
 	build: { frontendDist: string; beforeBuildCommand: string };
 	app: { security: { csp: string } };
-	bundle: { active: boolean };
+	bundle: { active: boolean; createUpdaterArtifacts: boolean };
+	plugins: { updater: { pubkey: string; endpoints: string[] } };
 };
 assert.equal(conf.productName, "墨耕");
 assert.equal(conf.identifier, "com.mogeng.novelstudio");
 assert.equal(conf.build.frontendDist, "../dist/web");
 assert.equal(conf.build.beforeBuildCommand, "pnpm build:web");
 assert.equal(conf.bundle.active, true);
+assert.equal(conf.bundle.createUpdaterArtifacts, true);
+assert.ok(conf.plugins.updater.pubkey.length > 40, "更新公钥应写入配置");
+assert.ok(
+	conf.plugins.updater.endpoints.some((url) => url.endsWith("/releases/latest/download/latest.json")),
+	"更新清单应指向 GitHub 最新 Release",
+);
 const csp = conf.app.security.csp;
 assert.ok(csp.includes("connect-src 'self'"), "CSP connect-src 需放行应用自身资源");
 assert.ok(csp.includes("http://tauri.localhost"), "CSP connect-src 需放行 Android WebView 源");
@@ -62,6 +69,12 @@ has("src-tauri/src/sqlite.rs", "CREATE TABLE IF NOT EXISTS indexes", "索引持�
 has("src-tauri/src/sqlite.rs", "sqlite_create_index", "命令 sqlite_create_index");
 has("src-tauri/src/secure.rs", "keyring::Entry", "系统密钥串");
 has("src-tauri/src/files.rs", "save_binary_file", "二进制保存");
+has("src-tauri/src/lib.rs", "tauri_plugin_updater::Builder", "注册更新插件");
+has("src-tauri/src/lib.rs", "update::update_check", "命令 update_check");
+has("src-tauri/src/lib.rs", "update::update_install", "命令 update_install");
+has("src-tauri/src/update.rs", "UpdaterExt", "Rust 更新器接口");
+has("src-tauri/src/update.rs", "download_and_install", "下载并安装更新");
+has("src-tauri/Cargo.toml", "tauri-plugin-updater", "更新器依赖");
 
 // 3) 浏览器适配层
 has("src/browser/tauri.ts", "proxy_stream", "代理调用");

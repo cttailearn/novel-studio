@@ -10,11 +10,13 @@
 
 ## 下载
 
-首个公开版本 **v0.1.0**：
+当前版本 **v0.1.1**：
 
-- [Windows x64 便携版](https://github.com/cttailearn/novel-studio/releases/download/v0.1.0/novel-studio-v0.1.0-windows-x64.exe)：双击运行，无需安装；未签名，SmartScreen 可能提示。
-- [Android arm64 APK](https://github.com/cttailearn/novel-studio/releases/download/v0.1.0/novel-studio-v0.1.0-android-arm64.apk)：Android 7.0+；debug 签名，需允许安装未知来源应用。
-- [发布说明](https://github.com/cttailearn/novel-studio/releases/tag/v0.1.0) · [更新日志](CHANGELOG.zh.md)
+- [Windows x64 安装版](https://github.com/cttailearn/novel-studio/releases/download/v0.1.1/novel-studio-v0.1.1-windows-x64-setup.exe)：NSIS 安装包，支持应用内检查与安装更新；未做 Authenticode 签名，SmartScreen 可能提示。
+- [Android arm64 APK](https://github.com/cttailearn/novel-studio/releases/download/v0.1.1/novel-studio-v0.1.1-android-arm64.apk)：Android 7.0+；debug 签名，需允许安装未知来源应用。
+- [发布说明](https://github.com/cttailearn/novel-studio/releases/tag/v0.1.1) · [更新日志](CHANGELOG.zh.md)
+
+> **从 0.1.0 升级**：0.1.0 便携版不内置更新器，需要手动安装一次 0.1.1；从 0.1.1 起可在「设置 → 关于」检查更新。Android 版每次更新仍需下载 APK 覆盖安装。
 
 ## 目录
 

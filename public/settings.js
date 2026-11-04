@@ -7,6 +7,8 @@
 // 一行六个思考档位复选框更是把表格撑到要横向滚动。
 // 现在改成「检索 + 卡片行 + 批量」，占位值（待核对）能一次处理掉。
 
+import { initUpdatePanel, renderUpdatePanel } from "./update.js";
+
 const $ = (id) => document.getElementById(id);
 
 // 接口格式的说明只留「怎么认」，一句话讲完。
@@ -198,8 +200,8 @@ async function refresh() {
 }
 
 function setSection(section) {
-	view.section = section === "web" ? "web" : "models";
-	for (const name of ["models", "web"]) {
+	view.section = ["models", "web", "about"].includes(section) ? section : "models";
+	for (const name of ["models", "web", "about"]) {
 		const active = view.section === name;
 		const tab = $(`settings-tab-${name}`);
 		const panel = $(`settings-${name}-panel`);
@@ -208,6 +210,7 @@ function setSection(section) {
 		tab.tabIndex = active ? 0 : -1;
 		panel.hidden = !active;
 	}
+	if (view.section === "about") renderUpdatePanel();
 }
 
 function statusOf(id) {
@@ -248,18 +251,25 @@ function renderStorageSummary() {
 	const box = $("storage-summary");
 	const subtitle = $("settings-subtitle");
 	const browserMode = isBrowserStorage();
+	const tauriShell = isTauriShell();
 	if (subtitle) {
-		subtitle.textContent = browserMode
-			? "模型、供应商与联网资料 · 数据与密钥只存在你的浏览器里"
-			: "模型、供应商与联网资料 · 所有密钥仅保存在本机";
+		subtitle.textContent = tauriShell
+			? "模型、供应商与联网资料 · 数据与密钥只存在这台设备上"
+			: browserMode
+				? "模型、供应商与联网资料 · 数据与密钥只存在你的浏览器里"
+				: "模型、供应商与联网资料 · 所有密钥仅保存在本机";
 	}
 	if (!box) return;
 	box.hidden = false;
 	box.replaceChildren();
-	box.append(el("span", "storage-title", browserMode ? "数据与密钥只在这台设备的浏览器里" : "数据与密钥保存在本机 data/ 目录"));
-	box.append(el("span", "storage-detail", browserMode
-		? "服务器不保存作品和密钥；换设备或清理浏览器数据后会丢，建议定期导出备份。"
-		: "不会上传到服务器。"));
+	box.append(el("span", "storage-title", tauriShell
+		? "数据与密钥保存在本机应用数据目录"
+		: browserMode ? "数据与密钥只在这台设备的浏览器里" : "数据与密钥保存在本机 data/ 目录"));
+	box.append(el("span", "storage-detail", tauriShell
+		? "不会上传到服务器；卸载应用或清除应用数据后会丢，建议定期导出备份。"
+		: browserMode
+			? "服务器不保存作品和密钥；换设备或清理浏览器数据后会丢，建议定期导出备份。"
+			: "不会上传到服务器。"));
 	if (!browserMode) return;
 
 	const usage = el("span", "storage-usage", "正在统计占用…");
@@ -275,7 +285,7 @@ function renderStorageSummary() {
 	actions.append(backup);
 
 	const storage = navigator.storage;
-	if (typeof storage?.persist === "function") {
+	if (!tauriShell && typeof storage?.persist === "function") {
 		const pin = el("button", "btn btn-quiet btn-sm", "固化存储");
 		pin.type = "button";
 		pin.title = "请浏览器尽量别因为空间紧张清掉本站数据";
@@ -293,6 +303,10 @@ function renderStorageSummary() {
 		actions.append(pin);
 	}
 
+	if (tauriShell) {
+		box.append(actions);
+		return;
+	}
 	box.append(usage, actions);
 	void refreshStorageUsage(usage);
 }
@@ -796,11 +810,20 @@ function isBrowserStorage() {
 	return window.__DSH_LOCAL_MODE__ === true || window.__NOVEL_LOCAL_MODE__ === true;
 }
 
+/** Android/桌面壳里也复用了 IndexedDB 接口，但数据实际落在应用自己的 SQLite 里。 */
+function isTauriShell() {
+	return Boolean(window.__TAURI__ || window.__TAURI_INTERNALS__);
+}
+
 function keyStorageShort() {
+	if (isTauriShell()) return "仅存本机应用数据";
 	return isBrowserStorage() ? "仅存这台设备的浏览器里" : "仅存本机";
 }
 
 function keyStorageFull() {
+	if (isTauriShell()) {
+		return "仅保存在本机应用数据目录（SQLite），不会上传到服务器；卸载应用或清除应用数据后需要重新填写。";
+	}
 	return isBrowserStorage()
 		? "仅保存在这台设备的浏览器里（IndexedDB），不会上传到服务器；换设备或清理浏览器数据后需要重新填写。"
 		: "仅保存在本机 data/credentials.json，不会上传到服务器。";
@@ -2222,16 +2245,24 @@ export function bindSettings() {
 		view.returnFocus = null;
 		if (target instanceof HTMLElement && target.isConnected) target.focus({ preventScroll: true });
 	});
-	for (const name of ["models", "web"]) {
+	for (const name of ["models", "web", "about"]) {
 		$(`settings-tab-${name}`).addEventListener("click", () => setSection(name));
 	}
 	document.querySelector(".settings-nav").addEventListener("keydown", (event) => {
 		if (event.isComposing || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
 		event.preventDefault();
-		const next = event.key === "Home" ? "models" : event.key === "End" ? "web" : view.section === "models" ? "web" : "models";
+		const order = ["models", "web", "about"];
+		const at = order.indexOf(view.section);
+		const next =
+			event.key === "Home"
+				? order[0]
+				: event.key === "End"
+					? order[order.length - 1]
+					: order[(at + (event.key === "ArrowRight" ? 1 : -1) + order.length) % order.length];
 		setSection(next);
 		$(`settings-tab-${next}`).focus();
 	});
+	initUpdatePanel();
 	$("settings-default-model").addEventListener("change", () => void saveDefaults().catch(() => {}));
 	$("settings-default-thinking").addEventListener("change", () => void saveDefaults().catch(() => {}));
 	// 搜索只重画列表，搜索框本身不动，焦点才留得住
