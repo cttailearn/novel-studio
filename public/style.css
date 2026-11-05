@@ -85,6 +85,8 @@
 	--safe-b: env(safe-area-inset-bottom, 0px);
 	--safe-l: env(safe-area-inset-left, 0px);
 	--safe-r: env(safe-area-inset-right, 0px);
+	/* 软键盘占掉的高度，由脚本写入；不支持 visualViewport 时保持 0。 */
+	--kb-inset: 0px;
 	/* 触屏上最小的点击目标 */
 	--tap: 44px;
 
@@ -213,6 +215,7 @@
 	--backdrop:     rgba(0, 0, 0, 0.66);
 	--scrim:        rgba(0, 0, 0, 0.4);
 	--seal-drop: rgba(0, 0, 0, 0.5);
+	--kb-inset: 0px;
 
 	/* ── 夜窗里的裱纸：纸压成暖黑之后，高光只能给极少一点 ─────── */
 	--panel-hi:   rgba(236, 229, 212, 0.06);
@@ -1334,7 +1337,7 @@ select { max-width: 230px; cursor: pointer; }
 	flex: none;
 }
 .settings-defaults label { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--ink-3); letter-spacing: 0.06em; }
-.settings-defaults select { min-width: 250px; }
+.settings-defaults select { min-width: 0; }
 
 .settings-body { flex: 1; display: grid; grid-template-columns: 274px 1fr; min-height: 0; }
 
@@ -2250,6 +2253,8 @@ body.is-splitting * {
 	border-bottom: 1px solid var(--rule);
 }
 .sheet-form .form-head h3 { margin: 0; }
+.mobile-form-submit,
+.mobile-form-cancel { display: none; }
 /* 全局的 .form-hint 带 -8px 上边距（为紧贴供应商表单的控件而设），
    在这里会把提示压到上一个控件上，所以就地压回正常边距。 */
 .sheet-form .form-hint { margin: 7px 0 0; }
@@ -3574,7 +3579,14 @@ body.focus-mode { background: var(--paper); }
 		max-height: 100dvh;
 		margin: 0;
 		border-radius: 0;
+		/* Android WebView 的 top-layer 合成偶尔会把 dialog 留在旧帧里；
+		   手机检索是整页，不需要缩放/透明过渡，直接钉死。 */
+		opacity: 1 !important;
+		transform: none !important;
+		z-index: 1000;
+		padding-top: var(--safe-t);
 	}
+	.palette::backdrop { backdrop-filter: none; }
 
 	/* 触摸：输入框不小于 16px，iOS 聚焦时才不会把整页放大。
 	   改稿框例外 —— 它跟着排版偏好走，手机上不低于 16px（见 app.js）。 */
@@ -3748,6 +3760,255 @@ body.focus-mode { background: var(--paper); }
 }
 .composer.is-typing button[type="submit"] {
 	box-shadow: inset 0 1px 0 var(--panel-hi), 0 0 0 1px var(--cinnabar-edge);
+}
+
+/* ══════════════════════════════════════════════════════════════
+   手机壳（Android / 窄屏）：一级去处收进底部导航，顶栏只留
+   书名与两个图标。桌面端的 .mobile-nav 永远不出现。
+   ══════════════════════════════════════════════════════════════ */
+
+.mobile-nav { display: none; }
+.mobile-tools-dialog { border: 0; padding: 0; background: transparent; width: min(92vw, 420px); margin: auto; }
+.mobile-tools-dialog::backdrop { background: var(--backdrop); backdrop-filter: blur(2px); }
+.mobile-tools-dialog:focus { outline: none; }
+.mobile-tools-card {
+	overflow: hidden;
+	background: var(--paper-hi);
+	border: 1px solid var(--rule);
+	border-radius: 16px;
+	box-shadow: 0 24px 60px var(--shadow);
+}
+.mobile-tools-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 14px 16px;
+	border-bottom: 1px solid var(--rule-soft);
+}
+.mobile-tools-head h3 { margin: 0; font-family: var(--kai); font-size: 18px; letter-spacing: 0.12em; }
+.mobile-tools-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 12px; }
+.mobile-tool {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	justify-content: center;
+	gap: 2px;
+	min-height: 64px;
+	padding: 10px 12px;
+	text-align: left;
+	color: var(--ink);
+	background: var(--paper);
+	border: 1px solid var(--rule);
+	border-radius: 10px;
+}
+.mobile-tool span { font-size: 15px; font-weight: 600; letter-spacing: 0.04em; }
+.mobile-tool small { font-size: 11px; line-height: 1.4; color: var(--ink-3); }
+
+@media (max-width: 640px) {
+	/* Android WebView 铺到状态栏/导航栏下面，部分系统给 0；壳内给一个保底。 */
+	html.is-tauri-shell.is-android {
+		--safe-t: max(env(safe-area-inset-top, 0px), 24px);
+		--safe-b: max(env(safe-area-inset-bottom, 0px), 48px);
+	}
+
+	/* 顶栏：一行。品牌只留印与名，动作只留检索/设置/更多。 */
+	.beam {
+		flex-wrap: nowrap;
+		align-items: center;
+		gap: 8px;
+		min-height: calc(58px + var(--safe-t));
+		padding: calc(7px + var(--safe-t)) calc(10px + var(--safe-r)) 7px calc(10px + var(--safe-l));
+	}
+	.brand { gap: 8px; }
+	.seal { width: 30px; height: 30px; font-size: 18px; }
+	.brand-text h1 { font-size: 16px; letter-spacing: 0.08em; }
+	.brand-text p { display: none; }
+	.beam-mid {
+		flex: 1 1 auto;
+		min-width: 0;
+		display: grid;
+		grid-template-columns: auto minmax(0, 1fr);
+		grid-template-rows: auto auto;
+		align-items: center;
+		column-gap: 8px;
+	}
+	.desk.is-home .beam-mid { padding-left: 8px; border-left: 1px solid var(--rule-soft); }
+	.desk:not(.is-home) .brand { display: none; }
+	.beam-mid .beam-title,
+	.beam-mid .beam-stats { display: block; }
+	.beam-title { grid-column: 2; grid-row: 1; max-width: 100%; font-size: 16px; }
+	.beam-stats { grid-column: 2; grid-row: 2; max-width: 100%; font-size: 11px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; }
+	.beam-back { grid-column: 1; grid-row: 1 / span 2; align-self: center; min-height: 40px; padding: 0 6px; font-size: 0; }
+	.beam-back::before { content: "←"; font-size: 20px; line-height: 1; }
+	.beam-controls {
+		flex: 0 0 auto;
+		width: auto;
+		margin-left: auto;
+		flex-wrap: nowrap;
+		justify-content: flex-end;
+		gap: 0;
+	}
+	#open-palette,
+	#open-settings,
+	#mobile-tools {
+		display: inline-flex !important;
+		align-items: center;
+		justify-content: center;
+		width: var(--tap-lg);
+		min-width: var(--tap-lg);
+		height: var(--tap-lg);
+		padding: 0;
+		font-size: 0;
+	}
+	#open-palette::before { content: "搜"; font-family: var(--kai); font-size: 17px; }
+	#open-settings::before { content: "设"; font-family: var(--kai); font-size: 16px; }
+	#open-palette,
+	#open-settings,
+	#mobile-tools { color: var(--ink-2); }
+	#mobile-tools { font-size: 20px; line-height: 1; }
+	#open-palette .beam-search-glyph,
+	#open-palette .beam-search-label,
+	#open-palette .beam-kbd { display: none; }
+	#theme-toggle,
+	#open-shortcuts,
+	#toggle-rail,
+	#toggle-tools,
+	#toggle-bible { display: none !important; }
+
+	/* 页签不再占一行；只留下文稿/素材/生文各自的操作条。 */
+	.stage-bar { min-height: 42px; padding: 3px 12px; flex-wrap: nowrap; gap: 6px; }
+	.stage-bar .tabs { display: none; }
+	/* 手机对议栏只留角色名与「记录 / 另起一席」；长徽标会让工具掉到第二行。 */
+	.bench-talk .pane-note { display: none; }
+	.stage-actions {
+		flex: 1 1 auto;
+		flex-wrap: nowrap;
+		justify-content: flex-start;
+		overflow-x: auto;
+		scrollbar-width: none;
+	}
+	.stage-actions::-webkit-scrollbar { display: none; }
+	.stage-actions .btn { min-height: 36px; white-space: nowrap; }
+
+	/* 底部导航占住 64px；桌面骨架不显示，手机内容让出这一条。 */
+	.desk { padding-bottom: calc(64px + var(--safe-b)); }
+	.mobile-nav {
+		display: grid;
+		grid-template-columns: repeat(4, minmax(0, 1fr));
+		position: fixed;
+		left: 0;
+		right: 0;
+		bottom: 0;
+		z-index: 80;
+		padding: 5px calc(8px + var(--safe-r)) calc(5px + var(--safe-b)) calc(8px + var(--safe-l));
+		background: var(--paper-hi);
+		border-top: 1px solid var(--rule);
+		box-shadow: 0 -10px 30px var(--lift);
+	}
+	.mobile-nav-item {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 2px;
+		min-height: 56px;
+		padding: 4px 2px;
+		color: var(--ink-3);
+		background: transparent;
+		border: 0;
+		border-radius: 12px;
+	}
+	.mobile-nav-item.is-on { color: var(--ink); background: var(--paper-lo); }
+	.mobile-nav-label { font-size: 13px; font-weight: 600; letter-spacing: 0.04em; }
+	.toast-stack { bottom: calc(78px + var(--safe-b)); }
+	.rail,
+	.desk-right { bottom: calc(64px + var(--safe-b)); }
+
+	/* 案头：作品在前，通用素材库在后；设定官不在这块小屏上摊开。 */
+	#view-home { padding-bottom: 8px; }
+	#view-home .bench-three { display: block; padding: 14px 14px 8px; }
+	#view-home .bench-pane { padding: 0 0 18px; border: 0; background: none; }
+	#view-home .bench-pane + .bench-pane { padding-top: 14px; border-top: 1px solid var(--rule-soft); }
+	#view-home #library-pane { display: none; }
+	#view-home .pane-head {
+		position: static;
+		padding: 0 2px 10px;
+		background: none;
+		border: 0;
+	}
+	#view-home .pane-head h3 { font-size: 19px; }
+	#view-home .pane-count { font-size: 11px; color: var(--ink-3); }
+	#view-home .pane-tools { gap: 4px; }
+	#view-home .pane-lead { display: none; }
+	#view-home #library-search { margin: 0 0 10px; }
+	#view-home #library-filter { margin-bottom: 8px; }
+	#view-home #library-list { max-height: 320px; overflow-y: auto; padding-right: 2px; }
+	#view-home .record-list { gap: 10px; }
+	#view-home .card.record {
+		padding: 14px;
+		background: var(--paper-hi);
+		border: 1px solid var(--rule);
+		border-radius: 12px;
+		box-shadow: 0 1px 0 var(--panel-hi);
+	}
+	#view-home .card.record h4 { font-size: 18px; }
+	#view-home .card.record .tagline { font-size: 12.5px; line-height: 1.6; color: var(--ink-2); }
+	#view-home .card.record .mat-actions { margin-top: 10px; gap: 6px; flex-wrap: wrap; }
+	#view-home .card.record .mat-actions .btn { min-height: 40px; padding: 0 12px; }
+
+	/* 手机上的阅读与对议：正文 15.5px，辅助文字不再轻到发灰。 */
+	.stream { font-size: 15.5px; }
+	.stream .msg-body { line-height: 1.85; color: var(--ink-2); }
+	.pane-note, .pane-lead, .tagline { color: var(--ink-2); }
+	.bench-empty { padding: 18px 4px; font-size: 13px; line-height: 1.8; color: var(--ink-2); }
+
+	/* 对议栏给底部导航让位，输入框不再被压到屏幕外。 */
+	#view-materials .bench-talk,
+	#view-writing .bench-talk { height: min(52dvh, 500px); min-height: 330px; }
+
+	/* 弹层：状态栏与系统导航栏都留出来；中间表单自己滚。 */
+	/* 部分 WebView 会在键盘弹起时缩小 visualViewport，把差值写进 --kb-inset；
+	   Android 15 edge-to-edge 下通常不缩，因此主要靠表单顶部的提交/取消按钮。 */
+	.sheet-form,
+	.sheet-read {
+		height: calc(100dvh - var(--kb-inset, 0px));
+		max-height: calc(100dvh - var(--kb-inset, 0px));
+	}
+	.sheet-form .form-head {
+		position: relative;
+		padding: calc(18px + var(--safe-t)) 96px 12px 76px;
+	}
+	.sheet-form .mobile-form-submit,
+	.sheet-form .mobile-form-cancel {
+		display: inline-flex;
+		position: absolute;
+		top: calc(14px + var(--safe-t));
+		height: 40px;
+		min-height: 40px;
+		padding: 0 12px;
+		font-size: 14px;
+	}
+	.sheet-form .mobile-form-submit { right: 16px; }
+	.sheet-form .mobile-form-cancel { left: 16px; color: var(--ink-2); }
+	.sheet-form .form-foot {
+		padding: 8px 16px calc(10px + var(--safe-b));
+		border-top: 0;
+		background: none;
+	}
+	.sheet-form .form-foot:has(.form-error:empty) { display: none; }
+	.sheet-form .form-foot .dialog-actions { display: none; }
+	.sheet-form .form-body { padding: 16px 16px 12px; }
+	.sheet-form .form-head h3 { font-size: 20px; }
+	.sheet .form-hint { font-size: 12.5px; line-height: 1.7; }
+	.dialog-actions .btn { min-height: 48px; }
+	.form-foot .dialog-actions { width: 100%; }
+	.form-foot .dialog-actions .btn { flex: 1 1 0; }
+
+	/* 卡片与按钮：把纸上的细线换成可点的面。 */
+	.btn { border-radius: 9px; }
+	.btn-ink { box-shadow: 0 1px 0 var(--panel-hi), 0 4px 14px var(--shadow); }
+	.material-list, .record-list { border-radius: 12px; }
 }
 
 /* 触屏上图标钮也要撑到 48px：它没有文字，小了就只剩一个点 */

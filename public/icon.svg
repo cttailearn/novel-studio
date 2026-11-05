@@ -1,14 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="墨耕">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="墨耕">
 	<title>墨耕</title>
-	<!-- 朱砂方章，白文「墨」。颜色与 style.css 的 cinnabar / paper 两枚令牌同源，
-	     改配色时这两处要一起改，否则主屏图标会跟界面脱开。
-	     注意：XML 注释里不能出现两个连字符，所以令牌名在这里不写成带前缀的形式。 -->
-	<rect width="512" height="512" rx="88" fill="#a8392b" />
-	<!-- 印边：留一圈纸色的细栏，缩到 48px 也还看得出是印章而不是一块红。 -->
-	<rect x="52" y="52" width="408" height="408" rx="52" fill="none" stroke="#efe8d9" stroke-width="10" opacity="0.62" />
-	<!-- 白文 = 阴刻：字取纸色，靠字形本身认。字体只给常见衬线族，
-	     取不到就退回系统 serif —— 字可能换脸，印章仍是印章。 -->
-	<text x="256" y="262" text-anchor="middle" dominant-baseline="central"
-		font-family="'Noto Serif CJK SC', 'Source Han Serif SC', 'Songti SC', 'STSong', 'SimSun', serif"
-		font-size="286" font-weight="600" fill="#f4ecda">墨</text>
+	<!-- 朱砂印面 + 纸色书页：把「墨」与「耕」收进一枚方章里。
+	     图标不依赖字体，缩到 32px 仍能看清书页与印色。 -->
+	<rect width="1024" height="1024" rx="192" fill="#a8392b"/>
+	<rect x="54" y="54" width="916" height="916" rx="154" fill="none" stroke="#f4ecda" stroke-width="10" opacity=".55"/>
+	<!-- 摊开的书：书页是留白，页脚线是耕过的垄。 -->
+	<path d="M170 500c108-54 250-62 342-6l0 250c-96-50-224-46-342 8z" fill="#f4ecda"/>
+	<path d="M854 500c-108-54-250-62-342-6l0 250c96-50 224-46 342 8z" fill="#f4ecda"/>
+	<path d="M236 580c66-24 146-20 210 6" fill="none" stroke="#a8392b" stroke-width="18" stroke-linecap="round"/>
+	<path d="M236 638c66-24 146-20 210 6" fill="none" stroke="#a8392b" stroke-width="18" stroke-linecap="round"/>
+	<path d="M788 580c-66-24-146-20-210 6" fill="none" stroke="#a8392b" stroke-width="18" stroke-linecap="round"/>
+	<path d="M788 638c-66-24-146-20-210 6" fill="none" stroke="#a8392b" stroke-width="18" stroke-linecap="round"/>
+	<!-- 一滴墨：从上方落进书页，暗示书写；缩小后保留为一个醒目的点。 -->
+	<path d="M512 236c-20 54-30 94-30 122 0 26 14 42 30 42s30-16 30-42c0-28-10-68-30-122z" fill="#f4ecda"/>
 </svg>

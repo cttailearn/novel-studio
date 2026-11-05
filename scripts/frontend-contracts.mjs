@@ -6,6 +6,8 @@ const app = await readFile(new URL("../public/app.js", import.meta.url), "utf8")
 const settings = await readFile(new URL("../public/settings.js", import.meta.url), "utf8");
 const update = await readFile(new URL("../public/update.js", import.meta.url), "utf8");
 const html = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
+const css = await readFile(new URL("../public/style.css", import.meta.url), "utf8");
+const manifest = JSON.parse(await readFile(new URL("../public/manifest.json", import.meta.url), "utf8"));
 
 function functionBody(name) {
 	const start = app.indexOf(`function ${name}(`);
@@ -54,6 +56,39 @@ assert.match(app, /function trapDrawerTab\(event, container\)/);
 assert.match(app, /if \(desk\) desk\.inert = true/);
 assert.match(app, /if \(desk\) desk\.inert = false/);
 assert.match(app, /function setMobileDrawerState\(kind, open\)/);
+assert.match(html, /<link rel="icon" href="\/favicon-32\.png" type="image\/png" sizes="32x32"/);
+assert.match(html, /<link rel="apple-touch-icon" href="\/apple-touch-icon\.png"/);
+assert.match(html, /<link rel="manifest" href="\/manifest\.json"/);
+for (const icon of ["/icon-192.png", "/icon-512.png"]) {
+	assert.ok(manifest.icons.some((entry) => entry.src === icon && entry.sizes !== "any"), `manifest 缺少 ${icon}`);
+}
+assert.ok(manifest.icons.some((entry) => entry.src === "/icon-512.png" && entry.purpose === "maskable"));
+assert.match(html, /id="mobile-nav"[^>]*aria-label="主导航"/);
+for (const view of ["home", "manuscript", "materials", "writing"]) {
+	assert.match(html, new RegExp(`data-mobile-view="${view}"`));
+}
+assert.match(html, /id="mobile-tools"[^>]*aria-haspopup="dialog"[^>]*aria-controls="mobile-tools-dialog"/);
+assert.match(html, /id="mobile-tools-dialog"[^>]*tabindex="-1"/);
+for (const tool of ["rail", "tools", "bible", "palette", "theme", "settings"]) {
+	assert.match(html, new RegExp(`data-mobile-tool="${tool}"`));
+}
+assert.match(app, /function updateMobileNav\(\)/);
+assert.match(app, /function showMobileView\(view\)/);
+assert.match(app, /function openMobileTools\(\)/);
+assert.match(app, /function runMobileTool\(tool\)/);
+assert.match(app, /document\.querySelectorAll\("\[data-mobile-view\]"\)/);
+assert.match(app, /document\.querySelectorAll\("\[data-mobile-tool\]"\)/);
+assert.match(app, /function enhanceMobileSheets\(\)/);
+assert.match(app, /mobile-form-submit/);
+assert.match(app, /mobile-form-cancel/);
+assert.match(app, /window\.visualViewport\?\.addEventListener\("resize", syncKeyboardInset\)/);
+assert.ok(!html.includes("mobile-nav-glyph"));
+assert.match(css, /\.bench-talk \.pane-note \{ display: none; \}/);
+assert.match(css, /\.palette \{[^}]*opacity: 1 !important;[^}]*transform: none !important;/);
+assert.match(app, /const compact = phoneQuery\?\.matches/);
+assert.match(app, /project\.stats\.chapters \+ " 章 · " \+ fmt\(project\.stats\.words\)/);
+assert.match(settings, /暂无可用模型/);
+assert.match(settings, /先在下方配置供应商并填入 API Key/);
 assert.match(app, /panel\.setAttribute\("aria-modal", "true"\)/);
 assert.match(app, /restoreFocus\(railDrawerTrigger\)/);
 assert.match(app, /restoreFocus\(bibleDrawerTrigger\)/);

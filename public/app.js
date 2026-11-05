@@ -15,6 +15,13 @@ import { bindSettings, levelText, THINKING_LEVELS } from "./settings.js";
 
 const $ = (id) => document.getElementById(id);
 
+// 手机端需要知道「这是不是 Tauri 壳」：Android 的 WebView 会铺到状态栏和
+// 导航栏下面，CSS 的 env(safe-area-inset-*) 在部分系统版本上给 0。
+// 只加一个类，不改变浏览器里的安全区行为。
+const TAURI_SHELL = Boolean(window.__TAURI__ || window.__TAURI_INTERNALS__);
+document.documentElement.classList.toggle("is-tauri-shell", TAURI_SHELL);
+document.documentElement.classList.toggle("is-android", /Android/i.test(navigator.userAgent));
+
 const MATERIAL_KIND_LABELS = {
 	premise: "核心设定",
 	character: "人物",
@@ -613,6 +620,7 @@ function fmtTime(timestamp) {
 function statsLine() {
 	const stats = state.stats;
 	if (!stats) return "";
+	if (phoneQuery?.matches) return stats.chapters + " 章 · " + fmt(stats.words) + " 字";
 	const target = state.project?.targetWords ?? 0;
 	const words = target > 0
 		? fmt(stats.words) + " / " + fmt(target) + " 字（" + Math.round((stats.words / target) * 100) + "%）"
@@ -1737,6 +1745,92 @@ function renderView() {
 	if (state.view === "manuscript") renderManuscriptView();
 	else if (state.view === "materials") renderMaterialsBench();
 	else renderWritingBench();
+	updateMobileNav();
+}
+
+/** 手机底部导航：案头 / 文稿 / 素材 / 生文。桌面端这块 CSS 不显示。 */
+function updateMobileNav() {
+	const active = state.mode === "home" ? "home" : state.view;
+	for (const item of document.querySelectorAll("[data-mobile-view]")) {
+		const on = item.dataset.mobileView === active;
+		item.classList.toggle("is-on", on);
+		if (on) item.setAttribute("aria-current", "page");
+		else item.removeAttribute("aria-current");
+	}
+}
+
+/**
+ * Android WebView 不总是让 dvh 跟着软键盘缩小，全屏表单的页脚会被键盘盖住。
+ * 用 visualViewport 把“键盘占掉的高度”写成 CSS 变量，交给手机样式收短弹层。
+ */
+function syncKeyboardInset() {
+	const viewport = window.visualViewport;
+	if (!viewport) return;
+	const inset = Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop);
+	document.documentElement.style.setProperty("--kb-inset", inset + "px");
+}
+
+/**
+ * 手机全屏表单：把底部主按钮复制到标题栏右侧。
+ * 软键盘弹起时页脚会落到键盘后面，顶部按钮仍始终可见。
+ */
+function enhanceMobileSheets() {
+	document.querySelectorAll("dialog.sheet-form form").forEach((form) => {
+		const head = form.querySelector(".form-head");
+		const submit = form.querySelector('.form-foot button[type="submit"]');
+		if (!head || !submit || head.querySelector(".mobile-form-submit")) return;
+		const button = document.createElement("button");
+		button.type = "submit";
+		button.className = "btn btn-ink mobile-form-submit";
+		button.textContent = submit.textContent.trim() || "保存";
+		button.setAttribute("aria-label", submit.textContent.trim() || "保存");
+		head.append(button);
+
+		const cancel = form.querySelector('.form-foot button[type="button"]');
+		if (cancel && !head.querySelector(".mobile-form-cancel")) {
+			const back = document.createElement("button");
+			back.type = "button";
+			back.className = "btn btn-quiet mobile-form-cancel";
+			back.textContent = cancel.textContent.trim() || "取消";
+			back.addEventListener("click", () => cancel.click());
+			head.append(back);
+		}
+	});
+}
+
+function showMobileView(view) {
+	if (view === "home") {
+		leaveWorkspace();
+		return;
+	}
+	if (!state.project) {
+		toast("先开一卷，再进" + (view === "materials" ? "素材" : view === "writing" ? "生文" : "文稿") + "。", "info", 3000);
+		return;
+	}
+	if (state.mode === "home") {
+		state.mode = "workspace";
+		writeStored(MODE_KEY, "workspace");
+		applyMode();
+	}
+	switchViewNow(view);
+	updateMobileNav();
+}
+
+function openMobileTools() {
+	const dialog = $("mobile-tools-dialog");
+	if (!dialog) return;
+	openDialog(dialog, { focus: "self" });
+}
+
+function runMobileTool(tool) {
+	const dialog = $("mobile-tools-dialog");
+	if (dialog?.open) closeDialog(dialog);
+	if (tool === "rail") $("toggle-rail")?.click();
+	else if (tool === "tools") $("toggle-tools")?.click();
+	else if (tool === "bible") $("toggle-bible")?.click();
+	else if (tool === "palette") $("open-palette")?.click();
+	else if (tool === "theme") $("theme-toggle")?.click();
+	else if (tool === "settings") $("open-settings")?.click();
 }
 
 /** 案头：只画卷宗与通用素材库，顶栏换成案头的口径。 */
@@ -1745,6 +1839,7 @@ function renderHomeView() {
 	$("project-stats").textContent =
 		state.projects.length + " 部作品 · " + state.library.length + " 条通用素材";
 	renderHomeBench();
+	updateMobileNav();
 }
 
 /** 把模式落到 DOM：案头收起左卷与右案；写作台只留中台加左卷。 */
@@ -1917,16 +2012,19 @@ function projectCard(project) {
 	card.append(el("div", "tagline", line || "尚未题写一句话骨相"));
 	const target = project.targetWords ?? 0;
 	const progress = target > 0 ? "（" + Math.round((project.stats.words / target) * 100) + "%）" : "";
+	const compact = phoneQuery?.matches;
 	card.append(
 		el(
 			"div",
 			"tagline",
-			project.stats.chapters + " 章 · " + fmt(project.stats.words) + progress + " 字 · " +
-				project.stats.materials + " 料 · " + project.stats.draftedChapters + " 章成稿" +
-				(project.stats.openNotes ? " · " + project.stats.openNotes + " 待办" : ""),
+			project.stats.chapters + " 章 · " + fmt(project.stats.words) + progress + " 字" +
+				(compact
+					? ""
+					: " · " + project.stats.materials + " 料 · " + project.stats.draftedChapters + " 章成稿" +
+						(project.stats.openNotes ? " · " + project.stats.openNotes + " 待办" : "")),
 		),
 	);
-	if (project.updatedAt) card.append(el("div", "tagline", "最近动笔 " + fmtTime(project.updatedAt)));
+	if (project.updatedAt && !compact) card.append(el("div", "tagline", "最近动笔 " + fmtTime(project.updatedAt)));
 
 	const actions = el("div", "mat-actions");
 	actions.append(button(onDesk ? "继续写" : "开卷", "btn btn-ink btn-xs", () => void enterProject(project.id)));
@@ -7504,6 +7602,26 @@ window.addEventListener("beforeunload", (event) => {
 		event.returnValue = "这一稿还没存到磁盘。";
 	}
 });
+
+// 手机底部导航与「工具」面板。桌面端元素仍在 DOM 里，但 CSS 不显示。
+for (const item of document.querySelectorAll("[data-mobile-view]")) {
+	item.addEventListener("click", () => showMobileView(item.dataset.mobileView));
+}
+$("mobile-tools")?.addEventListener("click", openMobileTools);
+for (const item of document.querySelectorAll("[data-mobile-tool]")) {
+	item.addEventListener("click", () => runMobileTool(item.dataset.mobileTool));
+}
+$("mobile-tools-dialog")?.addEventListener("click", (event) => {
+	const dialog = event.currentTarget;
+	if (event.target === dialog) closeDialog(dialog);
+});
+for (const btn of document.querySelectorAll("[data-mobile-tools-close]")) {
+	btn.addEventListener("click", () => closeDialog($("mobile-tools-dialog")));
+}
+window.visualViewport?.addEventListener("resize", syncKeyboardInset);
+window.visualViewport?.addEventListener("scroll", syncKeyboardInset);
+window.addEventListener("orientationchange", syncKeyboardInset);
+enhanceMobileSheets();
 
 bindMessageActions();
 bindSettings();

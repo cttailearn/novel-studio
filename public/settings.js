@@ -484,7 +484,7 @@ function renderDefaults() {
 
 	modelSelect.replaceChildren();
 	if (shown.length === 0) {
-		const option = el("option", "", candidates.length === 0 ? "暂无可用模型，请先配置供应商" : "没有匹配的模型");
+		const option = el("option", "", candidates.length === 0 ? "暂无可用模型" : "没有匹配的模型");
 		option.value = "";
 		modelSelect.append(option);
 		modelSelect.disabled = true;
@@ -553,6 +553,8 @@ function updateDefaultHints() {
 				text = `「${entry.name}」不支持「${levelLabel(level)}」档位。`;
 			}
 		}
+	} else if (defaultCandidates().length === 0) {
+		text = "还没有可用模型：先在下方配置供应商并填入 API Key。";
 	}
 	if (hint) {
 		hint.textContent = text;

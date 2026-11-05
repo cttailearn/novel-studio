@@ -18,11 +18,12 @@
 		<meta name="apple-mobile-web-app-capable" content="yes" />
 		<meta name="apple-mobile-web-app-title" content="墨耕" />
 		<meta name="apple-mobile-web-app-status-bar-style" content="default" />
-		<!-- 可安装到主屏：安卓 Chrome 认 manifest，图标是一枚朱砂方章。
+		<!-- 可安装到主屏：安卓 Chrome 认 manifest，图标是一枚朱砂书页与墨滴。
 		     放在主题脚本之前：图标与清单要尽早开始取，别等 DOM 解析完。 -->
 		<link rel="manifest" href="/manifest.json" />
+		<link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32" />
 		<link rel="icon" href="/icon.svg" type="image/svg+xml" />
-		<link rel="apple-touch-icon" href="/icon.svg" />
+		<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 		<script src="/theme-init.js"></script>
 		<!-- 首屏骨架的结构兜底。
 		     它盖着的是整个应用：定位、层级、尺寸必须由这里保证 —— 万一 style.css
@@ -246,6 +247,7 @@
 						<span class="theme-glyph" aria-hidden="true"></span>
 					</button>
 					<button id="open-settings" class="btn btn-quiet" title="模型与供应商">设置</button>
+					<button id="mobile-tools" class="btn btn-quiet icon-btn only-phone" title="更多工具" aria-label="更多工具" aria-haspopup="dialog" aria-controls="mobile-tools-dialog">⋯</button>
 				</div>
 		</header>
 
@@ -477,6 +479,22 @@
 				</section>
 			</main>
 
+			<!-- 手机主导航：桌面不出现。案头 / 文稿 / 素材 / 生文 四个一级去处。 -->
+			<nav id="mobile-nav" class="mobile-nav" aria-label="主导航">
+				<button type="button" class="mobile-nav-item is-on" data-mobile-view="home" aria-current="page">
+					<span class="mobile-nav-label">案头</span>
+				</button>
+				<button type="button" class="mobile-nav-item" data-mobile-view="manuscript">
+					<span class="mobile-nav-label">文稿</span>
+				</button>
+				<button type="button" class="mobile-nav-item" data-mobile-view="materials">
+					<span class="mobile-nav-label">素材</span>
+				</button>
+				<button type="button" class="mobile-nav-item" data-mobile-view="writing">
+					<span class="mobile-nav-label">生文</span>
+				</button>
+			</nav>
+
 			<!-- ── 右案 ───────────────────────────────────────────── -->
 			<aside class="desk-right" id="desk-right">
 				<div class="bible-head">
@@ -494,6 +512,23 @@
 			<!-- 章目抽屉的遮罩：与右案那一套同模，只是各管一边。 -->
 			<button id="rail-backdrop" class="rail-backdrop hidden" tabindex="-1" aria-label="收起章目"></button>
 		</div>
+
+		<dialog id="mobile-tools-dialog" class="mobile-tools-dialog" tabindex="-1" aria-labelledby="mobile-tools-title">
+			<div class="mobile-tools-card">
+				<header class="mobile-tools-head">
+					<h3 id="mobile-tools-title">工具</h3>
+					<button type="button" class="btn btn-quiet" data-mobile-tools-close>完成</button>
+				</header>
+				<div class="mobile-tools-grid">
+					<button type="button" class="mobile-tool" data-mobile-tool="rail"><span>章目</span><small>章节与分卷</small></button>
+					<button type="button" class="mobile-tool" data-mobile-tool="tools"><span>笔墨</span><small>模型与档位</small></button>
+					<button type="button" class="mobile-tool" data-mobile-tool="bible"><span>右案</span><small>素材、大纲、待办</small></button>
+					<button type="button" class="mobile-tool" data-mobile-tool="palette"><span>检索</span><small>全书搜索与跳转</small></button>
+					<button type="button" class="mobile-tool" data-mobile-tool="theme"><span>昼夜</span><small>切换纸色</small></button>
+					<button type="button" class="mobile-tool" data-mobile-tool="settings"><span>设置</span><small>模型、联网与更新</small></button>
+				</div>
+			</div>
+		</dialog>
 
 		<dialog id="project-dialog" class="sheet sheet-wide sheet-form">
 			<form id="project-form">
