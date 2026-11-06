@@ -1,3 +1,4 @@
+mod android_install;
 mod files;
 mod llm;
 mod secure;
@@ -64,6 +65,7 @@ pub fn run() {
             update::app_version,
             update::update_check,
             update::update_install,
+            android_install::android_install_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

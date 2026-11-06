@@ -2,6 +2,41 @@
 
 本项目的版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.1] - 2026-11-06
+
+Android 版可以在应用内下载并安装更新了；桌面端与网页版的更新方式不变。
+
+### 改进
+
+- **Android 应用内更新**：设置 → 关于里检查到新版后，「下载并安装」会把 arm64 安装包下到应用缓存目录，再交给系统安装器，由用户在系统弹框里确认覆盖安装；下载过程中显示百分比与已下载体积，失败时仍可打开发布页手动下载。
+- **下载前两道校验**：只接受本项目发布页的地址；落盘后检查 APK 头，错误页或半截文件不会交给安装器。
+
+### 新增
+
+- `scripts/android-patch.mjs`：构建前幂等写入 `REQUEST_INSTALL_PACKAGES` 权限。`src-tauri/gen/` 由 `tauri android init` 生成且不进版本库，权限只能这样注入。
+- `pnpm build:android`：先打补丁，再构建 arm64 APK。
+
+### 修复与加固
+
+- Android 专属依赖收进 `cfg(target_os = "android")`，桌面端编译不再引入。
+- 关于页的平台说明改为「下载完成后由系统安装器确认安装，作品与素材都会保留」。
+
+### 测试
+
+- `pnpm typecheck`、`pnpm test:frontend` 通过；`cargo check`（桌面）通过。
+- Android 侧编译通过并产出 APK；安装流程未在真机验证（本机没有设备或模拟器）。
+
+### 发布产物
+
+- Windows x64：`novel-studio-v0.2.1-windows-x64-setup.exe`（NSIS，更新密钥签名）
+- Android arm64：`novel-studio-v0.2.1-android-arm64.apk`（release 优化，测试签名）
+- 更新清单：`latest.json`；校验文件：`SHA256SUMS`
+
+### 已知限制
+
+- 安卓不允许普通应用静默安装，最后一步仍需在系统弹框里点「安装」。
+- Android 使用测试签名，只适合直接安装体验，不适合上架应用商店。
+
 ## [0.2.0] - 2026-11-06
 
 整套界面重做：浅色走宣纸、深色走夜航，重排字阶、纸面层级、图标与全部弹层。功能与数据格式不变。
@@ -105,3 +140,4 @@
 [0.1.0]: https://github.com/cttailearn/novel-studio/releases/tag/v0.1.0
 [0.1.1]: https://github.com/cttailearn/novel-studio/releases/tag/v0.1.1
 [0.2.0]: https://github.com/cttailearn/novel-studio/releases/tag/v0.2.0
+[0.2.1]: https://github.com/cttailearn/novel-studio/releases/tag/v0.2.1

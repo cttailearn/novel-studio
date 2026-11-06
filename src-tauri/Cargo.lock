@@ -2393,11 +2393,13 @@ dependencies = [
 
 [[package]]
 name = "novel-studio"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "base64 0.22.1",
  "futures-util",
+ "jni 0.21.1",
  "keyring",
+ "ndk-context",
  "reqwest 0.12.28",
  "rfd",
  "rusqlite",

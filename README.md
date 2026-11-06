@@ -10,13 +10,13 @@
 
 ## 下载
 
-当前版本 **v0.2.0**（宣纸与夜航双主题界面重做）：
+当前版本 **v0.2.1**（Android 支持应用内下载并安装更新）：
 
-- [Windows x64 安装版](https://github.com/cttailearn/novel-studio/releases/download/v0.2.0/novel-studio-v0.2.0-windows-x64-setup.exe)：NSIS 安装包，支持应用内检查与安装更新；未做 Authenticode 签名，SmartScreen 可能提示。
-- [Android arm64 APK](https://github.com/cttailearn/novel-studio/releases/download/v0.2.0/novel-studio-v0.2.0-android-arm64.apk)：Android 7.0+；release 优化版，使用测试签名，需允许安装未知来源应用。
-- [发布说明](https://github.com/cttailearn/novel-studio/releases/tag/v0.2.0) · [更新日志](CHANGELOG.zh.md)
+- [Windows x64 安装版](https://github.com/cttailearn/novel-studio/releases/download/v0.2.1/novel-studio-v0.2.1-windows-x64-setup.exe)：NSIS 安装包，支持应用内检查与安装更新；未做 Authenticode 签名，SmartScreen 可能提示。
+- [Android arm64 APK](https://github.com/cttailearn/novel-studio/releases/download/v0.2.1/novel-studio-v0.2.1-android-arm64.apk)：Android 7.0+；release 优化版，使用测试签名，需允许安装未知来源应用；可在应用内「设置 → 关于」直接下载安装。
+- [发布说明](https://github.com/cttailearn/novel-studio/releases/tag/v0.2.1) · [更新日志](CHANGELOG.zh.md)
 
-> 从这一版起，Windows 可在「设置 → 关于」手动检查更新，或开启启动时自动检查。Android 版每次更新仍需下载 APK 覆盖安装。
+> 从这一版起，Windows 可在「设置 → 关于」手动检查更新，或开启启动时自动检查。Android 版可在应用内下载安装包，最后由系统安装器确认安装。
 
 ## 目录
 

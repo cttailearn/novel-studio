@@ -2,7 +2,7 @@
 //
 // 桌面端走 Tauri updater：先取 latest.json，再用 minisign 公钥校验安装包。
 // 这一步必须由 Rust 侧完成，网页里的 JS 没有权限覆盖安装。Android/iOS
-// 没有应用内安装能力，只能检查 GitHub 最新 tag，再打开发布页手动装 APK；
+// 只做应用内下载 + 唤起系统安装器：安卓禁止静默安装，最后一步必须由用户确认；
 // 网页版则随服务器部署更新。三种入口在同一个面板里说清楚，不假装统一。
 
 const RELEASES_URL = "https://github.com/cttailearn/novel-studio/releases";
@@ -42,6 +42,14 @@ async function invoke(name, args) {
 	const call = core?.invoke ?? internals?.invoke;
 	if (typeof call !== "function") throw new Error("当前环境没有原生更新接口");
 	return call(name, args);
+}
+
+async function listen(name, handler) {
+	const api = window.__TAURI__?.event;
+	const internals = window.__TAURI_INTERNALS__;
+	const subscribe = api?.listen ?? internals?.listen;
+	if (typeof subscribe !== "function") return null;
+	return subscribe(name, (event) => handler(event?.payload));
 }
 
 function readPref() {
@@ -234,9 +242,15 @@ function sync() {
 	const available = Boolean(info?.available);
 	refs.updateBox.hidden = !available || kind === "web";
 	refs.updateBox.classList.toggle("is-installing", state.installing);
-	refs.install.hidden = kind !== "desktop";
+	refs.install.hidden = kind !== "desktop" && kind !== "android";
 	refs.install.disabled = state.installing;
-	refs.install.textContent = state.installing ? "正在安装…" : "下载并安装更新";
+	refs.install.textContent = state.installing
+		? kind === "android"
+			? "正在下载…"
+			: "正在安装…"
+		: kind === "android"
+			? "下载并安装"
+			: "下载并安装更新";
 	refs.download.hidden = kind === "desktop";
 	refs.progress.hidden = !state.installing;
 	if (available) {
@@ -252,7 +266,8 @@ function sync() {
 	if (kind === "desktop") {
 		refs.platformNote.textContent = "桌面版使用签名安装包更新；安装完成后应用会自动重启。";
 	} else if (kind === "android") {
-		refs.platformNote.textContent = "Android 版暂不支持应用内直接安装。检查到新版后，请打开发布页下载 APK 覆盖安装。";
+		refs.platformNote.textContent =
+			"下载完成后由系统安装器确认安装，作品与素材都会保留；也可以打开发布页手动下载 APK。";
 	} else if (kind === "ios") {
 		refs.platformNote.textContent = "iOS 版尚未提供安装包，请在发布页查看可用平台。";
 	} else {
@@ -283,6 +298,13 @@ async function checkViaGithub() {
 	const release = await response.json();
 	const latest = String(release.tag_name || "").replace(/^v/i, "");
 	if (!latest) throw new Error("发布页没有版本号");
+	const assets = Array.isArray(release.assets) ? release.assets : [];
+	const apk = assets.find(
+		(asset) =>
+			typeof asset?.name === "string" &&
+			asset.name.endsWith("-android-arm64.apk") &&
+			typeof asset.browser_download_url === "string",
+	);
 	const published = Date.parse(release.published_at || "");
 	return {
 		available: compareVersions(latest, state.currentVersion) > 0,
@@ -290,6 +312,7 @@ async function checkViaGithub() {
 		version: latest,
 		notes: release.body || "",
 		date: Number.isNaN(published) ? null : Math.floor(published / 1000),
+		assetUrl: apk?.browser_download_url || "",
 	};
 }
 
@@ -318,19 +341,68 @@ async function checkForUpdates(silent) {
 }
 
 async function installUpdate() {
-	if (state.installing || platformKind() !== "desktop") return;
-	const version = state.info?.version ? `v${state.info.version}` : "新版本";
-	if (!window.confirm(`将下载并安装 ${version}。安装完成后应用会自动关闭并重启，现在继续吗？`)) return;
+	if (state.installing) return;
+	const kind = platformKind();
+
+	if (kind === "desktop") {
+		const version = state.info?.version ? `v${state.info.version}` : "新版本";
+		if (!window.confirm(`将下载并安装 ${version}。安装完成后应用会自动关闭并重启，现在继续吗？`)) return;
+		state.installing = true;
+		state.error = "";
+		sync();
+		try {
+			await invoke("update_install");
+			setStatus("安装完成，应用即将重启…", "ok");
+		} catch (error) {
+			state.installing = false;
+			state.error = error instanceof Error ? error.message : String(error);
+			sync();
+		}
+		return;
+	}
+
+	if (kind !== "android") return;
+	const info = state.info;
+	const assetUrl = info?.assetUrl || "";
+	if (!assetUrl) {
+		state.error = "发布页没有找到 Android 安装包，请打开发布页手动下载";
+		sync();
+		return;
+	}
+	const version = info?.version ? `v${info.version}` : "新版本";
+	if (
+		!window.confirm(
+			`将下载 ${version} 的安装包，下载完成后由系统安装器安装，作品与素材都会保留。现在继续吗？`,
+		)
+	)
+		return;
+
 	state.installing = true;
 	state.error = "";
 	sync();
+	let stop = null;
+	let handedOff = false;
 	try {
-		await invoke("update_install");
-		setStatus("安装完成，应用即将重启…", "ok");
+		stop = await listen("update-progress", (payload) => {
+			const received = Number(payload?.received) || 0;
+			const total = Number(payload?.total) || 0;
+			const line = refs.progress?.querySelector("span");
+			if (!line) return;
+			const size = (value) => `${(value / 1024 / 1024).toFixed(1)} MB`;
+			line.textContent = total
+				? `已下载 ${Math.min(100, Math.round((received / total) * 100))}% · ${size(received)} / ${size(total)}`
+				: `已下载 ${size(received)}`;
+		});
+		await invoke("android_install_update", { url: assetUrl, version: info.version });
+		handedOff = true;
 	} catch (error) {
-		state.installing = false;
 		state.error = error instanceof Error ? error.message : String(error);
+	} finally {
+		state.installing = false;
+		if (typeof stop === "function") stop();
 		sync();
+		// sync() 会按 state 重写状态行，所以这句放在它后面。
+		if (handedOff) setStatus("安装包已交给系统，请按提示完成安装", "ok");
 	}
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "novel-studio",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.33.0",
@@ -38,7 +38,8 @@
     "dev:tauri": "tauri dev",
     "build:tauri": "tauri build",
     "test:browser": "node --experimental-strip-types scripts/browser-build-check.ts",
-    "test": "pnpm typecheck && pnpm test:config && pnpm test:tools && pnpm test:novel && pnpm test:context && pnpm test:storage && pnpm test:server && pnpm test:loop && pnpm test:frontend && pnpm test:idb && pnpm test:package && pnpm test:local && pnpm test:relay && pnpm test:tauri"
+    "test": "pnpm typecheck && pnpm test:config && pnpm test:tools && pnpm test:novel && pnpm test:context && pnpm test:storage && pnpm test:server && pnpm test:loop && pnpm test:frontend && pnpm test:idb && pnpm test:package && pnpm test:local && pnpm test:relay && pnpm test:tauri",
+    "build:android": "node scripts/android-patch.mjs && tauri android build --apk --target aarch64"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "1.2.0",

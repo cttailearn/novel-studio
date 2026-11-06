@@ -1,6 +1,6 @@
 [package]
 name = "novel-studio"
-version = "0.2.0"
+version = "0.2.1"
 description = "墨耕 · 本地优先的长篇小说创作台"
 authors = ["novel-studio"]
 license = "MIT"
@@ -30,6 +30,11 @@ url = "2"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 rfd = "0.15"
 tauri-plugin-updater = "2"
+
+[target.'cfg(target_os = "android")'.dependencies]
+# 应用内安装：取 tao 注册好的 JavaVM / Activity，直接调 FileProvider 与 ACTION_VIEW
+jni = "0.21"
+ndk-context = "0.1"
 
 [features]
 default = ["custom-protocol"]
