@@ -30,6 +30,11 @@
 - `pnpm typecheck`、`pnpm test:frontend`（`frontend contracts: OK`）通过。
 - 界面在 1440×900 桌面、390×844 手机、亮/暗两套主题下逐页截图核对。
 
+### 发布产物
+
+- Windows x64：`novel-studio-v0.2.0-windows-x64-setup.exe`（NSIS，更新密钥签名）
+- Android arm64：`novel-studio-v0.2.0-android-arm64.apk`（release 优化，测试签名）
+- 更新清单：`latest.json`；校验文件：`SHA256SUMS`
 
 ## [0.1.1] - 2026-11-05
 
