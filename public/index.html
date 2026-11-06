@@ -298,7 +298,7 @@
 								<span id="project-count" class="pane-count"></span>
 								<div class="pane-tools">
 									<button class="btn btn-quiet btn-sm" id="trash-open">回收站</button>
-									<button class="btn btn-quiet btn-sm" data-action="new-project">＋ 另起一卷</button>
+									<button class="btn btn-quiet btn-sm act act-new" data-action="new-project">另起一卷</button>
 								</div>
 							</header>
 							<div id="project-cards" class="record-list"></div>
@@ -309,7 +309,7 @@
 								<h3>通用素材库</h3>
 								<span id="library-count" class="pane-count"></span>
 								<div class="pane-tools">
-									<button class="btn btn-quiet btn-sm" data-action="new-library">＋ 收录一条</button>
+									<button class="btn btn-quiet btn-sm act act-new" data-action="new-library">收录一条</button>
 								</div>
 							</header>
 							<p class="pane-lead">这里的料不属于任何一部作品：新建时取用，作品里改好的料也能存回来。</p>
@@ -324,7 +324,7 @@
 								<span class="pane-note">备通用素材，不写正文</span>
 								<div class="pane-tools">
 									<button class="btn btn-quiet btn-sm" data-newchat="library">另起一席</button>
-									<button id="library-upload-pick" class="btn btn-quiet btn-sm">＋ 资料</button>
+									<button id="library-upload-pick" class="btn btn-quiet btn-sm act act-upload">资料</button>
 									<input
 										id="library-upload-input"
 										type="file"
@@ -372,7 +372,7 @@
 								<h3>原料</h3>
 								<span id="material-source-count" class="pane-count"></span>
 								<div class="pane-tools">
-									<button id="upload-pick" class="btn btn-quiet btn-sm">＋ 资料</button>
+									<button id="upload-pick" class="btn btn-quiet btn-sm act act-upload">资料</button>
 									<input
 										id="upload-input"
 										type="file"
@@ -380,7 +380,7 @@
 										hidden
 										accept=".txt,.text,.md,.markdown,.log,.csv,.tsv,.json,.yaml,.yml,.html,.htm,.xml,.docx"
 									/>
-									<button id="novel-pick" class="btn btn-quiet btn-sm">＋ 小说</button>
+									<button id="novel-pick" class="btn btn-quiet btn-sm act act-novel">小说</button>
 									<input
 										id="novel-input"
 										type="file"
@@ -391,7 +391,7 @@
 								</div>
 							</header>
 							<div id="upload-zone" class="dropzone">
-								<p>拖入资料，或点「＋ 资料」；整本小说点「＋ 小说」</p>
+								<p>把资料拖进来，或点上方「资料」；整本小说点「小说」</p>
 								<p class="dropzone-hint">资料整篇保存；小说自动按章节拆解，识别不到标题时按定长切分</p>
 							</div>
 							<div id="material-source-list" class="novel-source-list"></div>
@@ -517,7 +517,7 @@
 			<div class="mobile-tools-card">
 				<header class="mobile-tools-head">
 					<h3 id="mobile-tools-title">工具</h3>
-					<button type="button" class="btn btn-quiet" data-mobile-tools-close>完成</button>
+					<button type="button" class="btn btn-quiet act act-close" data-mobile-tools-close>完成</button>
 				</header>
 				<div class="mobile-tools-grid">
 					<button type="button" class="mobile-tool" data-mobile-tool="rail"><span>章目</span><small>章节与分卷</small></button>
@@ -794,7 +794,7 @@
 					<h3>创作环境</h3>
 					<p id="settings-subtitle">模型、供应商与联网资料</p>
 				</div>
-				<button id="settings-close" class="btn btn-quiet" aria-label="关闭设置">完成</button>
+				<button id="settings-close" class="btn btn-quiet act act-close" aria-label="关闭设置">完成</button>
 			</div>
 			<div class="settings-nav" role="tablist" aria-label="设置分类">
 				<button id="settings-tab-models" class="settings-tab is-on" role="tab" aria-selected="true" aria-controls="settings-models-panel" tabindex="0">模型与供应商</button>

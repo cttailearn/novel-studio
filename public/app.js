@@ -322,6 +322,19 @@ function button(label, className, onClick) {
 }
 
 /**
+ * 图标按钮：视觉上只有一个图标，文字留给读屏与悬停提示。
+ *
+ * 卡片上的「改」「删」原先是一颗颗小字，一排三颗看着像注脚；换成图标后
+ * 三颗并排才是动作条。名字仍写进 title / aria-label，不吃掉可访问性。
+ */
+function iconButton(label, className, onClick, title = label) {
+	const node = button(label, className, onClick);
+	node.title = title;
+	node.setAttribute("aria-label", title);
+	return node;
+}
+
+/**
  * 浏览器断线时只会丢一句英文过来。
  *
  * 请求根本没发出去是 "Failed to fetch"（Chrome）/"Load failed"（Safari），
@@ -1665,10 +1678,11 @@ function renderChapters() {
 		item.tabIndex = 0;
 		item.setAttribute("role", "button");
 		if (chapter.id === state.chapterId) item.setAttribute("aria-current", "true");
-		item.append(el("span", "ord", toCn(index + 1)));
+		// 楷体的「一」在 13px 上就是一根横杠，读起来像破折号；改用表格数字，序号才立得住
+	item.append(el("span", "ord", String(index + 1).padStart(2, "0")));
 		item.append(el("span", "ct", chapter.title));
 		if (!draft?.hasDraft) item.append(el("span", "dotmark"));
-		item.append(el("span", "cw", words ? fmt(words) : "—"));
+		if (words) item.append(el("span", "cw", fmt(words)));
 		item.title =
 			(chapter.summary || "（未写要略）") +
 			" · " + statusLabel(chapter.status) +
@@ -2017,7 +2031,7 @@ function projectCard(project) {
 		el(
 			"div",
 			"tagline",
-			project.stats.chapters + " 章 · " + fmt(project.stats.words) + progress + " 字" +
+			project.stats.chapters + " 章 · " + fmt(project.stats.words) + " 字" + progress +
 				(compact
 					? ""
 					: " · " + project.stats.materials + " 料 · " + project.stats.draftedChapters + " 章成稿" +
@@ -2028,13 +2042,16 @@ function projectCard(project) {
 
 	const actions = el("div", "mat-actions");
 	actions.append(button(onDesk ? "继续写" : "开卷", "btn btn-ink btn-xs", () => void enterProject(project.id)));
-	actions.append(button("改", "btn btn-quiet btn-xs", () => openProjectDialog(project)));
 	// 快照管素材与大纲的误改；整部作品误删去回收站恢复。
 	actions.append(button("存照", "btn btn-quiet btn-xs", () => void openSnapshotDialog(project)));
+	actions.append(iconButton("改", "btn btn-quiet btn-xs act act-edit", () => openProjectDialog(project), "改作品信息"));
 	const pending = state.pendingProjectDelete === project.id;
 	actions.append(
-		button(pending ? "再点一次确认删除" : "删", "btn btn-quiet btn-xs" + (pending ? " is-danger btn-danger" : ""), () =>
-			void deleteProject(project),
+		iconButton(
+			pending ? "再点一次确认删除" : "删",
+			"btn btn-quiet btn-xs act act-del" + (pending ? " is-danger btn-danger" : ""),
+			() => void deleteProject(project),
+			"删除作品",
 		),
 	);
 	card.append(actions);
@@ -2260,12 +2277,15 @@ function libraryCard(entry) {
 	const actions = el("div", "mat-actions");
 	actions.append(button(open ? "收起" : "看全文", "btn btn-quiet btn-xs", () => toggleMaterial(entry.id)));
 	actions.append(
-		button("改", "btn btn-quiet btn-xs", () => openMaterialDialog({ scope: "library", mode: "edit", entry })),
+		iconButton("改", "btn btn-quiet btn-xs act act-edit", () => openMaterialDialog({ scope: "library", mode: "edit", entry }), "改素材"),
 	);
 	const pending = state.pendingLibraryDelete === entry.id;
 	actions.append(
-		button(pending ? "再点一次确认删除" : "删", "btn btn-quiet btn-xs" + (pending ? " is-danger btn-danger" : ""), () =>
-			void deleteLibraryEntry(entry),
+		iconButton(
+			pending ? "再点一次确认删除" : "删",
+			"btn btn-quiet btn-xs act act-del" + (pending ? " is-danger btn-danger" : ""),
+			() => void deleteLibraryEntry(entry),
+			"删除素材",
 		),
 	);
 	card.append(actions);
@@ -2443,15 +2463,15 @@ function renderManuscriptView() {
 
 function renderFrontMatter(box, project) {
 	$("stage-actions").append(
-		button("拟新章", "btn btn-quiet btn-sm", () => {
+		button("拟新章", "btn btn-quiet btn-sm act act-new", () => {
 			switchViewNow("materials");
 			$("material-input").value = "接着现有的情节往后拟一章，先用 update_outline 立下章目再落笔。";
 			$("material-input").focus();
 		}),
 	);
 	// 总目这一页是「整本」的地盘，成册的出口放这里最顺手。
-	$("stage-actions").append(button("导出全书", "btn btn-quiet btn-sm", () => openExportDialog(null)));
-	$("stage-actions").append(button("备份", "btn btn-quiet btn-sm", () => openBackupDialog()));
+	$("stage-actions").append(button("导出全书", "btn btn-quiet btn-sm act act-export", () => openExportDialog(null)));
+	$("stage-actions").append(button("备份", "btn btn-quiet btn-sm act act-backup", () => openBackupDialog()));
 
 	const page = el("div", "front-matter");
 	const head = el("div", "front-head");
@@ -2756,9 +2776,10 @@ function chapterToolbar(chapter, index, content, meta) {
 	// 条数不再挂在元数据上（历史版本要连正文一起取，太重）；只标出「有过旧稿」。
 	// 服务端最多留 10 版，所以这里的估算也要封顶，别报出一个取不回来的数。
 	const historyCount = Math.min(Math.max((meta?.revision ?? 1) - 1, 0), 10);
-	bar.append(
-		button("版本" + (historyCount ? " " + historyCount : ""), "btn btn-quiet btn-sm", () => openHistoryDialog(chapter.id)),
-	);
+	const versionBtn = button("版本", "btn btn-quiet btn-sm", () => openHistoryDialog(chapter.id));
+	versionBtn.title = historyCount ? "这一章还留着 " + historyCount + " 个旧版本" : "这一章还没有旧版本";
+	if (historyCount) versionBtn.append(el("b", "num", String(historyCount)));
+	bar.append(versionBtn);
 	bar.append(button("导出", "btn btn-quiet btn-sm", () => openExportDialog(chapter.id)));
 	bar.append(button("排版", "btn btn-quiet btn-sm", () => openTypeDialog()));
 	const focusBtn = button(state.focusMode ? "退出专注" : "专注", "btn btn-quiet btn-sm" + (state.focusMode ? " is-on" : ""), () => {
@@ -3248,7 +3269,7 @@ function renderMaterialsBench() {
 	if (!project) return;
 	$("stage-actions").replaceChildren();
 	$("stage-actions").append(
-		button("让设定官查缺", "btn btn-quiet btn-sm", () => {
+		button("让设定官查缺", "btn btn-quiet btn-sm act act-supply", () => {
 			$("material-input").value = "先 list_notes 看现有待办，再看素材库里缺什么，把缺的补上。";
 			$("material-input").focus();
 		}),
@@ -3447,21 +3468,21 @@ function materialCard(material, options = {}) {
 
 	const picked = state.pickedMaterials.has(material.id);
 	actions.append(
-		button(picked ? "已选中" : "选中修改", "btn btn-quiet btn-xs" + (picked ? " is-on" : ""), () =>
+		button(picked ? "已选中" : "选中", "btn btn-quiet btn-xs" + (picked ? " is-on" : ""), () =>
 			toggleMaterialPick(material.id),
 		),
 	);
-	actions.append(button("改", "btn btn-quiet btn-xs", () => openMaterialDialog({ mode: "edit", material })));
-	actions.append(
-		button(material.originId ? "更新素材库" : "存入素材库", "btn btn-quiet btn-xs", () =>
-			openPromoteDialog(material),
-		),
+	actions.append(iconButton("改", "btn btn-quiet btn-xs act act-edit", () => openMaterialDialog({ mode: "edit", material }), "改素材"));
+	const promoteBtn = button(material.originId ? "更新" : "存库", "btn btn-quiet btn-xs act act-promote", () =>
+		openPromoteDialog(material),
 	);
+	promoteBtn.title = material.originId ? "把改动更新回通用素材库" : "存进通用素材库";
+	actions.append(promoteBtn);
 	const pending = state.pendingDelete === material.id;
 	actions.append(
-		button(pending ? "再点一次确认删除" : "删", "btn btn-quiet btn-xs" + (pending ? " is-danger btn-danger" : ""), () =>
-			void deleteMaterial(material),
-		),
+		pending
+			? button("再点一次确认删除", "btn btn-quiet btn-xs is-danger btn-danger", () => void deleteMaterial(material))
+			: iconButton("删", "btn btn-quiet btn-xs act act-del", () => void deleteMaterial(material), "删素材"),
 	);
 	return makePeekable(card, material, actions, "拖到右侧「设定官」即算呈给它");
 }
@@ -4324,7 +4345,7 @@ function renderWritingBench() {
 	if (!project) return;
 	$("stage-actions").replaceChildren();
 	$("stage-actions").append(
-		button("让设定官补料", "btn btn-quiet btn-sm", () => {
+		button("让设定官补料", "btn btn-quiet btn-sm act act-supply", () => {
 			switchView("materials");
 			$("material-input").value = "看看第一章还缺什么料，补齐。";
 			$("material-input").focus();
@@ -5509,7 +5530,9 @@ function renderBible() {
 			card.tabIndex = 0;
 			card.setAttribute("role", "button");
 			const volume = volumeOf(chapter);
-			card.append(el("h4", "", toCn(index + 1) + " · " + chapter.title + (volume ? "　〔" + volume.title + "〕" : "")));
+			card.append(
+				el("h4", "", String(index + 1).padStart(2, "0") + " · " + chapter.title + (volume ? "　〔" + volume.title + "〕" : "")),
+			);
 			card.append(el("div", "tagline", chapter.summary || "（未写要略）"));
 			const meta = [statusLabel(chapter.status), chapter.pov];
 			if (words) meta.push(fmt(words) + " 字");
@@ -7200,6 +7223,7 @@ for (const [pane, ids] of Object.entries(PANES)) {
 
 // 另起一席：三个面板共用一套接线，靠 data-newchat 区分。
 for (const btn of document.querySelectorAll("[data-newchat]")) {
+	btn.classList.add("act", "act-newchat");
 	btn.addEventListener("click", () => void startNewChat(btn.dataset.newchat));
 }
 
@@ -7208,7 +7232,7 @@ for (const pane of ["material", "writing"]) {
 	const newchat = document.querySelector('[data-newchat="' + pane + '"]');
 	const tools = newchat?.closest(".pane-tools");
 	if (!tools) continue;
-	const btn = button("记录", "btn btn-quiet btn-sm", () => openRecords(pane));
+	const btn = button("记录", "btn btn-quiet btn-sm act act-log", () => openRecords(pane));
 	btn.type = "button";
 	btn.dataset.records = pane;
 	btn.title = pane === "writing" ? "这一章的生成记录" : "这一卷的设定记录";

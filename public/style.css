@@ -5,13 +5,13 @@
 
 :root {
 	color-scheme: light;
-	--paper:       #efe8d9;   /* 宣纸 */
-	--paper-hi:    #f7f2e6;   /* 纸面高光：凸起的地方（按钮、输入框） */
-	--paper-lo:    #e4dbc7;   /* 纸面阴影 */
-	--paper-sunk:  #ded4be;   /* 凹陷：输入框内里 */
+	--paper:       #f7f2e7;   /* 宣纸：整页的底 */
+	--paper-hi:    #fffdf8;   /* 稿纸：真正的白纸，浮在底上 */
+	--paper-lo:    #efe7d7;   /* 纸面阴影 */
+	--paper-sunk:  #e9e0ce;   /* 凹陷：输入框内里 */
 
-	--ink:         #2a2620;   /* 墨：正文 */
-	--ink-2:       #5b5347;   /* 淡墨 */
+	--ink:         #1b1815;   /* 墨：正文 */
+	--ink-2:       #4a443a;   /* 淡墨 */
 	/* ink-3 / ink-4 是「淡墨 / 飞白」两级：前者承担可读的次要文字（≥4.5:1），
 	   后者是纯装饰的最淡一级（≥3:1）。两级都推满 4.5 就会糊成同一个色，
 	   水墨的浓淡关系反而没了。
@@ -20,25 +20,25 @@
 	   ink-3 原为 #6d665c，在 paper-lo / paper-sunk 上只有 4.12 / 3.85，够不着自己
 	   承诺的 4.5；再压一档到 #615a51，四种纸面上是 5.57 / 6.08 / 4.94 / 4.62，
 	   连凹陷的输入框内里也过线。 */
-	--ink-3:       #615a51;   /* 淡墨（次要文字，可读） */
-	--ink-4:       #8a8274;   /* 飞白（最淡，只做描边与点缀，不承载文字） */
-	--rule:        rgba(42, 38, 32, 0.13);
-	--rule-soft:   rgba(42, 38, 32, 0.07);
-	--rule-strong: rgba(42, 38, 32, 0.22);
-	--hover:       rgba(42, 38, 32, 0.05);
+	--ink-3:       #635b4f;   /* 淡墨（次要文字，可读） */
+	--ink-4:       #9c9384;   /* 飞白（最淡，只做描边与点缀，不承载文字） */
+	--rule:        rgba(27, 24, 21, 0.13);
+	--rule-soft:   rgba(27, 24, 21, 0.07);
+	--rule-strong: rgba(27, 24, 21, 0.22);
+	--hover:       rgba(27, 24, 21, 0.05);
 
-	--cinnabar:    #a8392b;   /* 朱砂 */
-	--cinnabar-lt: #c2543f;
+	--cinnabar:    #b23a2a;   /* 朱砂 */
+	--cinnabar-lt: #c9563f;
 	/* 朱砂当字用的时候另有一档：印、底、边用 --cinnabar 都合式，
 	   但同一支朱砂落到自家染出来的浅红底（cinnabar-wash）上，
 	   要够得着 4.5:1 才行。浅色纸上 #a8392b 本身就有 4.70–5.24，
 	   所以这一档只对暗色有意义（暗色 #d1594a 在洗红底上只有 3.91）。
 	   --cinnabar 仍然负责一切「填」的地方，字一律走 --cinnabar-ink。 */
-	--cinnabar-ink: #a8392b;
+	--cinnabar-ink: #b23a2a;
 	--cinnabar-wash: rgba(168, 57, 43, 0.09);
 	--indigo:      #3b4c66;   /* 靛青 */
 	--moss:        #55684a;   /* 苔绿 */
-	--seal:        #9c2f22;   /* 印泥 */
+	--seal:        #a4321f;   /* 印泥 */
 	--on-paper:    #f8f2e6;   /* 落在墨底上的字（亮色主题的主按钮悬停） */
 	--on-cinnabar: #f8f2e6;   /* 落在朱砂上的字 */
 	--song:   var(--serif);   /* 正文用的宋体；此前引用了未定义的 --song，会落回无衬线 */
@@ -108,6 +108,26 @@
 	--fs-md: 14.5px;
 	--fs-lg: 16.5px;
 	--fs-xl: 20px;
+
+	/* ── 排版阶梯 ────────────────────────────────────────────
+	   标题 30 / 栏目 22 / 条目 17 / 正文 16·1.9 / 标签 11。
+	   旧的四档（12/13/14.5/16.5）彼此只差 1–2px，主次看不出来；
+	   这次把跨度拉开，并且让「能读的句子」一律走宋体。 */
+	--fs-3xl: 30px;
+	--fs-2xl: 24px;
+	--fs-title: 20px;
+	--fs-item: 17px;
+	--fs-body: 16px;
+	--lh-body: 1.9;
+	--fs-label: 11px;
+	--track-label: 0.08em;
+
+	/* ── 纸的厚度：浮起一层与弹层一层 ───────────────────────
+	   亮纸上靠极浅的投影分层次，暗纸上投影几乎看不见，
+	   所以暗色里换成「内高光 + 更深的底」。 */
+	--elev-1: 0 1px 2px rgba(27, 24, 21, 0.05), 0 10px 30px -18px rgba(27, 24, 21, 0.35);
+	--elev-2: 0 2px 6px rgba(27, 24, 21, 0.06), 0 24px 60px -24px rgba(27, 24, 21, 0.45);
+	--sheet-edge: rgba(27, 24, 21, 0.08);
 	/* 一笔刷下去的时长与曲线：所有新动效共用，快而收得住。
 	   不要用弹性曲线 —— 纸上不会弹。 */
 	--brush: 320ms cubic-bezier(0.2, 0.7, 0.3, 1);
@@ -153,7 +173,7 @@
 	--skeleton-sheen: linear-gradient(100deg, transparent 0%, transparent 38%, var(--skeleton-hi) 50%, transparent 62%, transparent 100%);
 
 	/* 稿面正文：单独一个令牌，夜里才能只提亮正文而不动全局墨色 */
-	--ms-ink: #2a2620;
+	--ms-ink: #1b1815;
 }
 
 /* ── 夜窗：同一套宣纸/墨/朱砂，换在夜里读 ─────────────────────
@@ -161,30 +181,30 @@
    浓淡关系照旧，只是纸墨互换了位置。 */
 :root[data-theme="dark"] {
 	color-scheme: dark;
-	--paper:       #17150f;
-	--paper-hi:    #221f18;
-	--paper-lo:    #100e09;
-	--paper-sunk:  #0c0b07;
+	--paper:       #14120f;
+	--paper-hi:    #1c1916;
+	--paper-lo:    #0f0d0b;
+	--paper-sunk:  #0b0a08;
 
-	--ink:         #ece5d4;
-	--ink-2:       #c2bba7;
-	--ink-3:       #948c78;
+	--ink:         #ede3d2;
+	--ink-2:       #c6bba6;
+	--ink-3:       #9c9282;
 	--ink-4:       #6d6656;
 	--on-paper:    #17150f;
 
-	--ink-4:       #766f60;   /* 夜里的飞白要比白天的再抬一点，否则标签看不清 */
+	--ink-4:       #7a7263;   /* 夜里的飞白要比白天的再抬一点，否则标签看不清 */
 	--rule:        rgba(236, 229, 212, 0.14);
 	--rule-soft:   rgba(236, 229, 212, 0.075);
 	--rule-strong: rgba(236, 229, 212, 0.24);
 	--hover:       rgba(236, 229, 212, 0.07);
 
 	/* 朱砂在黑底上要提亮，否则发闷 */
-	--cinnabar:    #d1594a;
-	--cinnabar-lt: #e07a68;
+	--cinnabar:    #d2563f;
+	--cinnabar-lt: #e07762;
 	/* 夜里当字用的朱砂再抬一档：#d1594a 压在自家洗红底上只有 3.91:1，
 	   #e07a68 在洗红底上是 5.34、在纸面高光上是 5.60、在纸上是 6.22。
 	   填色（印、底、边）照旧用 --cinnabar。 */
-	--cinnabar-ink: #e07a68;
+	--cinnabar-ink: #e07a66;
 	--cinnabar-wash: rgba(209, 89, 74, 0.14);
 	--indigo:      #8fa6c4;
 	--moss:        #9db488;
@@ -200,7 +220,7 @@
 	--lift: rgba(236, 229, 212, 0.05);
 	--lift-2: rgba(236, 229, 212, 0.032);
 	--seal-edge: rgba(236, 229, 212, 0.22);
-	--amber:        #d9a445;
+	--amber:        #c9a227;
 	--cinnabar-edge: rgba(209, 89, 74, 0.42);
 	--cinnabar-soft: rgba(209, 89, 74, 0.1);
 	--cinnabar-faint: rgba(209, 89, 74, 0.18);
@@ -214,6 +234,11 @@
 	--shadow:       rgba(0, 0, 0, 0.62);
 	--backdrop:     rgba(0, 0, 0, 0.66);
 	--scrim:        rgba(0, 0, 0, 0.4);
+
+	/* 夜里的厚度：投影换成一圈更深的外描，再加一线顶部反光 */
+	--elev-1: 0 1px 2px rgba(0, 0, 0, 0.5), 0 14px 34px -20px rgba(0, 0, 0, 0.9);
+	--elev-2: 0 2px 8px rgba(0, 0, 0, 0.55), 0 30px 70px -30px rgba(0, 0, 0, 0.95);
+	--sheet-edge: rgba(237, 227, 210, 0.09);
 	--seal-drop: rgba(0, 0, 0, 0.5);
 	--kb-inset: 0px;
 
@@ -248,7 +273,7 @@
 	--skeleton-sheen: linear-gradient(100deg, transparent 0%, transparent 38%, var(--skeleton-hi) 50%, transparent 62%, transparent 100%);
 
 	/* 夜里读长章全靠正文那一档对比度：只把正文提亮，别把整页墨都推上去 */
-	--ms-ink: #f2ecdd;
+	--ms-ink: #f0e7d6;
 }
 
 * { box-sizing: border-box; }
@@ -1439,6 +1464,187 @@ select { max-width: 230px; cursor: pointer; }
 .model-id { font-family: var(--mono); font-size: 11.5px; }
 .row-actions { display: flex; gap: 4px; justify-content: flex-end; }
 .empty-hint { color: var(--ink-3); font-size: 12.5px; padding: 22px 0; text-align: center; font-family: var(--kai); line-height: 2; }
+
+/* ══════════════════════════════════════════════════════════════
+   改版 v2 · 纸的层次与排版阶梯
+   ──────────────────────────────────────────────────────────────
+   这一节只负责「看起来」：把整页从一张同色的灰纸，改成
+   底纸 / 稿纸 / 卡片三层；把挤在 12–16px 的字号拉成
+   30 / 20 / 17 / 16 / 11 五档。
+   位置在「响应式」之前：窄屏的既有规则仍然优先。
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── 底：舞台不再自带高光，白要留给稿纸 ─────────────────── */
+.stage { background: var(--paper); }
+
+/* ── 稿纸：一张真正浮起来的纸 ───────────────────────────── */
+.ms-page,
+.front-matter {
+	background: var(--paper-hi);
+	border: 1px solid var(--sheet-edge);
+	border-radius: var(--r-3);
+	box-shadow: var(--elev-1);
+	padding: var(--ms-pad-t) clamp(28px, 4.4vw, 64px) 72px;
+	margin: 26px auto 0;
+}
+/* 总目比正文窄一点：目录是一份清单，不该按版心铺满 */
+.front-matter { max-width: 48em; }
+
+/* ── 栏头：题签从 14.5 楷体长成 20 宋体 ─────────────────── */
+.pane-head {
+	padding: 22px 0 10px;
+	background: linear-gradient(180deg, var(--paper) 84%, transparent);
+}
+.pane-head::before { display: none; }
+.pane-head h3 {
+	padding-left: 0;
+	font-family: var(--serif);
+	font-size: var(--fs-title);
+	font-weight: 600;
+	letter-spacing: 0.02em;
+}
+.pane-head h3::before { display: none; }
+.pane-count,
+.pane-note {
+	font-size: var(--fs-label);
+	letter-spacing: var(--track-label);
+}
+
+/* ── 素材卡：从「一段文字」变成「一张卡」 ───────────────── */
+.mat-grid { gap: 14px; }
+/* 列表本身不画框：卡片自己已经是纸，再套一圈就成了「框里的框」 */
+.material-list,
+.pool-list,
+.assembly-list { background: none; box-shadow: none; border: 0; }
+/* 卡片样式对「网格里的卡」和「右案竖排的卡」一视同仁：
+   两处都是 .card.mat，只有网格里的那张额外受容器查询管。 */
+.card.mat {
+	background: var(--paper-hi);
+	border: 1px solid var(--sheet-edge);
+	border-radius: var(--r-2);
+	box-shadow: var(--elev-1);
+	padding: 15px 16px 14px;
+}
+.card.mat + .card.mat { margin-top: 12px; }
+.mat-grid > .card.mat + .card.mat { margin-top: 0; }
+.card.mat h4 {
+	font-family: var(--serif);
+	font-size: 15.5px;
+	font-weight: 600;
+	line-height: 1.5;
+	color: var(--ink);
+}
+.card.mat h4 .kind,
+.mat-head .kind {
+	font-size: 10px;
+	letter-spacing: var(--track-label);
+	color: var(--ink-3);
+	border: 1px solid var(--rule);
+	background: var(--paper);
+	padding: 1px 5px;
+}
+.card.mat .usage {
+	margin: 9px 0 0;
+	padding-left: 0;
+	border-left: 0;
+	font-size: 13px;
+	line-height: 1.8;
+	color: var(--ink-2);
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 3;
+	overflow: hidden;
+}
+.card.mat .mat-body {
+	margin-top: 8px;
+	font-family: var(--serif);
+	font-size: 13.5px;
+	line-height: 1.85;
+	color: var(--ink-3);
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 4;
+	overflow: hidden;
+}
+
+/* ── 卷宗卡：和素材卡同一套纸 ───────────────────────────── */
+.card.record {
+	padding: 16px 18px;
+	border: 1px solid var(--sheet-edge);
+	border-radius: var(--r-2);
+	background: var(--paper-hi);
+	box-shadow: var(--elev-1);
+}
+.card.record + .card.record { margin-top: 12px; }
+.card.record.is-on { box-shadow: var(--elev-1), inset 3px 0 0 var(--cinnabar); }
+.card.record h4 { font-family: var(--serif); font-size: 18px; font-weight: 600; letter-spacing: 0.02em; }
+.card.record .tagline { font-size: 12px; line-height: 1.75; }
+
+/* ── 页签：朱砂色块换成一条下划线 ───────────────────────── */
+.tabs { gap: 26px; }
+.tab {
+	padding: 11px 0 12px;
+	border: 0;
+	border-bottom: 2px solid transparent;
+	border-radius: 0;
+	background: none;
+	color: var(--ink-3);
+}
+.tab b { font-family: var(--serif); font-size: 17px; letter-spacing: 0.04em; }
+.tab span { font-size: var(--fs-label); letter-spacing: var(--track-label); }
+.tab:hover { background: none; color: var(--ink); }
+.tab.is-on { background: none; color: var(--cinnabar-ink); border-bottom-color: var(--cinnabar); }
+
+/* ── 顶栏：让书名当主角，控件退到次要 ───────────────────── */
+.beam { background: var(--paper); gap: 16px; }
+.brand-text h1 { font-family: var(--serif); font-size: 18px; letter-spacing: 0.12em; }
+.beam-title { font-family: var(--serif); font-size: 19px; letter-spacing: 0.02em; }
+.beam-stats { font-size: 11.5px; letter-spacing: 0.04em; color: var(--ink-3); }
+.beam-controls { gap: 6px; }
+.beam-search { border-color: transparent; color: var(--ink-3); }
+/* 「模型」「档位」两个小标题在顶栏里只是噪音：下拉框里本来就写着选中的值 */
+.beam-tools { gap: 8px; }
+.beam-tools-cap { display: none; }
+#model-select,
+#thinking-select {
+	height: 28px;
+	padding: 0 10px;
+	font-size: 12px;
+	border: 1px solid var(--rule);
+	border-radius: 999px;
+	background: transparent;
+	color: var(--ink-2);
+}
+#model-select { max-width: 220px; }
+#thinking-select { max-width: 128px; }
+#model-select:hover,
+#thinking-select:hover { border-color: var(--ink-4); }
+
+/* ── 章目：行高与字号跟着放大一档 ───────────────────────── */
+.chapter-item { min-height: 42px; }
+.chapter-item .ct { font-size: 14.5px; }
+.chapter-item .cw { font-size: 11px; letter-spacing: 0.02em; }
+
+/* ── 输入条：也当成一张纸 ───────────────────────────────── */
+.composer textarea {
+	background: var(--paper-hi);
+	border: 1px solid var(--sheet-edge);
+	border-radius: var(--r-3);
+	box-shadow: var(--elev-1);
+	font-family: var(--serif);
+	font-size: 15px;
+	line-height: 1.85;
+}
+.composer textarea:focus { background: var(--paper-hi); border-color: var(--ink-4); }
+
+/* ── 对话：用户的话给一层极淡的底，和墨客的正文分开 ─────── */
+.msg.user .msg-body {
+	padding: 10px 14px;
+	border-left: 0;
+	border-radius: var(--r-2);
+	background: var(--paper-hi);
+	box-shadow: var(--elev-1);
+}
 
 /* ── 响应式 ──────────────────────────────────────────────── */
 
@@ -4425,3 +4631,1341 @@ body.focus-mode { background: var(--paper); }
 
 
 
+
+/* ══════════════════════════════════════════════════════════════
+   改版 v2 · 收尾：拆掉「书斋层」的裱纸内框
+   ──────────────────────────────────────────────────────────────
+   旧层给每个面板套了内描线 + 顶边高光 + 底边墨影。三条线叠在
+   一起，远看就是「同一个灰框」，面板与纸面因此没有分别。
+   新设计只留一道发丝线，纸的厚度交给卡片与稿纸。
+   ══════════════════════════════════════════════════════════════ */
+.rail,
+.desk-right,
+.bench-pane,
+.record-list,
+.material-list,
+.assembly-list,
+.pool-list {
+	box-shadow: none;
+}
+
+/* 面板之间只留一道线，线要淡到像纸的折痕 */
+.rail { border-right: 1px solid var(--rule); }
+.bench-pane + .bench-pane { border-left: 1px solid var(--rule); }
+
+/* ══════════════════════════════════════════════════════════════
+   改版 v2 · 细部：搜索、栏头、页脚
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── 搜索框：从「带框的输入」变成「纸上的凹槽」 ─────────── */
+.mat-search,
+input[type="search"] {
+	background: var(--paper-lo);
+	border: 1px solid transparent;
+	border-radius: 999px;
+	padding: 7px 13px;
+	font-size: 13px;
+	font-family: var(--sans);
+	color: var(--ink);
+	box-shadow: inset 0 1px 2px rgba(27, 24, 21, 0.04);
+}
+input[type="search"]::placeholder { color: var(--ink-4); }
+input[type="search"]:focus {
+	background: var(--paper-hi);
+	border-color: var(--ink-4);
+	box-shadow: none;
+}
+
+/* ── 栏头的角花与菱形：新设计里栏头只留题签与一条渐隐线 ─── */
+.rail-label .tick { display: none; }
+.rail-label { font-family: var(--serif); font-size: 14px; letter-spacing: 0.06em; }
+
+/* ── 台口的三个动作：它们是次要操作，不该和页签抢视线 ───── */
+.stage-actions .btn {
+	border-color: transparent;
+	color: var(--ink-3);
+	font-size: 12px;
+}
+.stage-actions .btn:hover { color: var(--ink); background: var(--hover); }
+
+/* ── 案头页脚：一行小字，退到最后 ───────────────────────── */
+.bench-foot { border-top: 1px solid var(--rule-soft); }
+.bench-foot-note { font-size: 10.5px; color: var(--ink-4); letter-spacing: 0.02em; }
+
+/* 空列表不要「远山」底纹：新设计里留白就是留白 */
+.assembly-list,
+.material-list,
+.pool-list,
+.record-list { background-image: none; }
+
+/* 装配清单空着时，那句话与「立一章」要居中对齐成一组 */
+.bench-pane > .assembly-list:has(> .bench-empty:only-child) {
+	justify-content: center;
+	gap: 14px;
+}
+
+/* 空态不要远山底纹：留白就是留白 */
+.bench-empty { background-image: none; }
+
+/* ══════════════════════════════════════════════════════════════
+   改版 v2 · 深色与移动端的收口
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── 深色：纸面要比底色亮一档，卡片再亮一档 ───────────────
+   原来的 #1c1916 与底 #14120f 只差 4 个灰阶，稿纸浮不起来。 */
+:root[data-theme="dark"] {
+	--paper-hi: #211d19;
+	--paper-lo: #0e0c0a;
+	--sheet-edge: rgba(237, 227, 210, 0.10);
+	--elev-1: 0 1px 2px rgba(0, 0, 0, 0.45), 0 14px 40px -24px rgba(0, 0, 0, 0.95);
+}
+
+/* ── 移动端底栏：选中的那一项不再是一块米色药丸 ───────────
+   药丸太抢眼，四个字里只有一个像是「按钮」，其余像失活的。 */
+@media (max-width: 640px) {
+	.mobile-nav-item.is-on {
+		background: transparent;
+		color: var(--cinnabar-ink);
+	}
+	.mobile-nav-item.is-on .mobile-nav-label { font-weight: 700; }
+	.mobile-nav-item {
+		position: relative;
+	}
+	.mobile-nav-item.is-on::before {
+		content: "";
+		position: absolute;
+		top: 2px;
+		width: 16px;
+		height: 2px;
+		border-radius: 2px;
+		background: var(--cinnabar);
+	}
+	.mobile-nav-label { font-family: var(--serif); letter-spacing: 0.08em; }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   改版 v2 · 细部收口（卡片头、空态、设置、移动顶栏）
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── 素材卡的头：标题吃掉剩余宽度，类别贴右上 ─────────────
+   原来是行内排，标题一长就把「人物」挤到下一行右侧，像掉出来的。 */
+.card.mat .mat-head {
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+}
+.card.mat .mat-head h4 {
+	flex: 1 1 auto;
+	min-width: 0;
+	margin: 0;
+}
+.card.mat .mat-head .kind {
+	flex: 0 0 auto;
+	margin-top: 1px;
+}
+
+/* ── 空态：说明与按钮不要各飘各的 ───────────────────────── */
+.bench-empty + .btn,
+.bench-empty + .bench-hint {
+	margin-top: 14px;
+}
+.bench-pane .bench-empty {
+	padding: 20px 18px;
+	border: 1px dashed var(--rule);
+	border-radius: var(--r-2);
+	color: var(--ink-3);
+	font-family: var(--song, var(--serif));
+	font-size: 13.5px;
+	line-height: 1.9;
+}
+
+/* ── 设置弹层：标题走宋体，页签走朱砂下划线 ─────────────── */
+.settings-dialog .settings-head h3 {
+	font-family: var(--serif);
+	font-size: var(--fs-2xl);
+	font-weight: 600;
+	letter-spacing: 0.03em;
+}
+.settings-dialog .settings-head p {
+	font-size: 12.5px;
+	color: var(--ink-3);
+}
+.settings-dialog .settings-nav .settings-tab {
+	font-family: var(--serif);
+	font-size: 14px;
+	letter-spacing: 0.04em;
+}
+.settings-dialog .settings-nav .settings-tab.is-on {
+	color: var(--cinnabar-ink);
+	background: transparent;
+	box-shadow: inset 0 -2px 0 var(--cinnabar);
+}
+.settings-dialog .defaults-caption span {
+	font-family: var(--serif);
+	font-size: 15px;
+	font-weight: 600;
+}
+.settings-dialog .settings-detail h4 {
+	font-family: var(--serif);
+	font-size: 17px;
+	font-weight: 600;
+}
+.settings-dialog .providers-rail-title {
+	font-family: var(--serif);
+	font-size: 15px;
+	font-weight: 600;
+	letter-spacing: 0.04em;
+}
+.settings-dialog .model-card {
+	background: var(--paper-hi);
+	border: 1px solid var(--sheet-edge);
+	border-radius: var(--r-2);
+	box-shadow: var(--elev-1);
+}
+.settings-dialog .settings-eyebrow {
+	font-size: var(--fs-label);
+	letter-spacing: var(--track-label);
+	text-transform: uppercase;
+	color: var(--ink-4);
+}
+
+/* ── 移动顶栏：搜/设 收一点，别和「⋯」拉成三个孤岛 ─────── */
+@media (max-width: 640px) {
+	#open-palette,
+	#open-settings,
+	#mobile-tools {
+		width: 40px;
+		min-width: 40px;
+		height: 40px;
+	}
+	#open-palette::before { font-size: 15px; }
+	#open-settings::before { font-size: 14px; }
+	#mobile-tools { font-size: 17px; letter-spacing: 1px; }
+	.beam-controls { gap: 2px; }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   改版 v2 · 案头、设置细部
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── 案头的素材卡走单列 ───────────────────────────────────
+   三栏中间那格只有 600 多，两列会把卡片压成窄条、右半格空着；
+   这里的卡都是要读的整段文字，一列反而松快。 */
+#view-home .mat-grid { grid-template-columns: minmax(0, 1fr); }
+
+/* ── 页脚那行开源声明：留着，但别抢视线 ─────────────────── */
+.bench-foot,
+.bench-foot-note {
+	font-size: 10.5px;
+	color: var(--ink-4);
+	opacity: 0.75;
+}
+.bench-foot { padding-top: 6px; }
+
+/* ── 设置：数据条、供应商列表、空态 ─────────────────────── */
+.settings-dialog .storage-summary {
+	background: var(--paper-lo);
+	border: 0;
+	border-left: 2px solid var(--cinnabar);
+	border-radius: 0 var(--r-2) var(--r-2) 0;
+	color: var(--ink-2);
+	font-size: 12.5px;
+	line-height: 1.8;
+	padding: 9px 14px;
+}
+.settings-dialog .provider-row {
+	border-bottom: 1px solid var(--rule-soft);
+}
+.settings-dialog .provider-row:last-child { border-bottom: 0; }
+.settings-dialog .provider-row.is-on {
+	background: var(--paper-lo);
+	box-shadow: inset 3px 0 0 var(--cinnabar);
+}
+.settings-dialog .settings-detail .empty-hint {
+	color: var(--ink-4);
+	font-family: var(--song, var(--serif));
+	font-size: 13px;
+}
+.settings-dialog .add-row {
+	border-style: dashed;
+	border-color: var(--rule);
+	color: var(--ink-3);
+}
+
+/* ── 深色：再亮一档，让稿纸与卡片分开 ───────────────────── */
+:root[data-theme="dark"] {
+	--paper-hi: #241f1a;
+	--paper-sunk: #090807;
+	--rule: rgba(237, 227, 210, 0.14);
+	--rule-soft: rgba(237, 227, 210, 0.08);
+}
+:root[data-theme="dark"] .ms-page,
+:root[data-theme="dark"] .front-matter {
+	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 18px 50px -26px rgba(0, 0, 0, 0.95);
+}
+
+/* ══════════════════════════════════════════════════════════════
+   改版 v2 · 移动端细部
+   ══════════════════════════════════════════════════════════════ */
+@media (max-width: 640px) {
+	/* 空态里的按钮靠左，别在正中拉成一块黑砖 */
+	.bench-pane > .btn,
+	.bench-empty + .btn {
+		align-self: flex-start;
+		margin-left: 0;
+		width: auto;
+	}
+	.bench-pane { align-items: stretch; }
+
+	/* 执笔者那栏的选章控件退成次要控件 */
+	.bench-talk .write-actions {
+		background: transparent;
+		border: 0;
+	}
+	.bench-talk .write-actions .chapter-select {
+		background: var(--paper-lo);
+		border: 1px solid transparent;
+		color: var(--ink-2);
+		font-size: 13.5px;
+	}
+	.bench-talk .write-actions .chapter-select:focus {
+		border-color: var(--cinnabar);
+		background: var(--paper-hi);
+	}
+
+	/* 顶栏三个动作靠近些 */
+	.beam-controls { gap: 0; }
+	#open-palette, #open-settings, #mobile-tools { margin-left: -2px; }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   改版 v2 · 第二轮（右案、素材台、生文台、设置、深色）
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── 右案：页签改朱砂下划线，检索退成凹陷条 ─────────────── */
+.bible-head { padding: 10px 14px 8px; }
+.bible-search {
+	height: 30px;
+	background: var(--paper-lo);
+	border: 1px solid transparent;
+	border-radius: var(--r-pill, 999px);
+	font-size: 12.5px;
+}
+.bible-search:focus { background: var(--paper-hi); border-color: var(--cinnabar); }
+.bible-tabs { gap: 18px; padding: 0 14px; }
+.bible-tab {
+	font-family: var(--serif);
+	font-size: 13.5px;
+	letter-spacing: 0.06em;
+	color: var(--ink-3);
+	background: transparent;
+	border: 0;
+	border-bottom: 2px solid transparent;
+	padding: 8px 0 7px;
+}
+.bible-tab.is-on {
+	color: var(--cinnabar-ink);
+	background: transparent;
+	border-bottom-color: var(--cinnabar);
+}
+.bible { padding: 12px 14px 20px; }
+
+/* ── 章目：选中项左侧一道朱砂，底色淡染 ─────────────────── */
+.chapter-item {
+	position: relative;
+	border-radius: 0;
+	padding-left: 14px;
+}
+.chapter-item.is-on {
+	background: var(--paper-lo);
+	box-shadow: inset 2px 0 0 var(--cinnabar);
+}
+.chapter-item.is-on .ct { color: var(--ink); font-weight: 600; }
+.chapter-item .ord { font-variant-numeric: tabular-nums; color: var(--ink-4); }
+.chapter-item.is-on .ord { color: var(--cinnabar-ink); }
+
+/* ── 素材台：那块「还没有原料」的提示不要当成第二段空态 ─── */
+#view-materials .bench-hint,
+.bench-hint {
+	font-size: 11.5px;
+	line-height: 1.7;
+	color: var(--ink-4);
+	padding: 2px 2px 0;
+	background: none;
+	border: 0;
+}
+#view-materials #material-source-list:empty { display: none; }
+
+/* ── 顶栏：桌面端把两个模型下拉退成安静的胶囊 ───────────── */
+@media (min-width: 641px) {
+	#model-select,
+	#thinking-select {
+		height: 26px;
+		padding: 0 8px;
+		background: var(--paper-lo);
+		border: 1px solid transparent;
+		border-radius: 999px;
+		font-size: 11.5px;
+		color: var(--ink-2);
+	}
+	#model-select:hover,
+	#thinking-select:hover { border-color: var(--rule); background: var(--paper-hi); }
+	.beam-tools { gap: 6px; }
+}
+
+/* ── 生文台：移动端执笔者那栏矮一点，别把装配挤到看不见 ─── */
+@media (max-width: 640px) {
+	.bench-talk,
+	#view-writing .bench-talk {
+		height: min(48dvh, 470px);
+		min-height: 320px;
+	}
+	.bench-talk .stream { padding: 14px 14px 6px; }
+}
+
+/* ── 设置：把表单的密度压下来 ───────────────────────────── */
+.settings-dialog .settings-head { padding: 18px 22px 14px; }
+.settings-dialog .settings-nav { padding: 0 22px; gap: 22px; }
+.settings-dialog .settings-defaults { padding: 14px 22px; }
+.settings-dialog .defaults-fields select { height: 34px; }
+.settings-dialog .provider-row { min-height: 38px; }
+.settings-dialog .model-card { padding: 12px 14px; }
+.settings-dialog .settings-detail { padding: 16px 22px 28px; }
+.settings-dialog .model-zone-head { margin-bottom: 10px; }
+
+/* ── 深色：把 B 方案里的古金用在刻度与序号上 ─────────────── */
+:root[data-theme="dark"] .chapter-item .ord,
+:root[data-theme="dark"] .rail-label,
+:root[data-theme="dark"] .pane-count,
+:root[data-theme="dark"] .ms-rule {
+	color: var(--amber);
+}
+:root[data-theme="dark"] .chapter-item.is-on {
+	background: rgba(237, 227, 210, 0.05);
+}
+:root[data-theme="dark"] .bible-search,
+:root[data-theme="dark"] #model-select,
+:root[data-theme="dark"] #thinking-select {
+	background: var(--paper-lo);
+}
+
+/* ══════════════════════════════════════════════════════════════
+   改版 v2 · 执笔者栏自适应高度
+   ══════════════════════════════════════════════════════════════ */
+
+/* 空态按钮一律靠左（桌面也一视同仁） */
+.bench-pane > .btn,
+.bench-empty + .btn { align-self: flex-start; }
+
+@media (max-width: 640px) {
+	/* 对话栏不再钉死 56dvh：没话的时候它只有一句话那么高，
+	   装配就上来了；话多了到 56dvh 封顶，内部自己滚。 */
+	.bench-talk,
+	#view-writing .bench-talk {
+		height: auto;
+		max-height: min(56dvh, 560px);
+		min-height: 0;
+	}
+	.bench-talk .stream {
+		flex: 1 1 auto;
+		min-height: 0;
+		overflow-y: auto;
+	}
+	.bench-talk .composer { flex: 0 0 auto; }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   改版 v2 · 第三轮（设置收声、主操作上色）
+   ══════════════════════════════════════════════════════════════ */
+
+/* 数据条：一句话的注脚，不该长成警报条 */
+.settings-dialog .storage-summary {
+	background: var(--paper-lo);
+	border: 0;
+	border-radius: 0;
+	color: var(--ink-3);
+	font-size: 11.5px;
+	line-height: 1.7;
+	padding: 7px 22px;
+}
+.settings-dialog .storage-summary strong,
+.settings-dialog .storage-summary b { color: var(--ink-2); font-weight: 600; }
+
+/* 「添加自定义供应商」是动作，不是被选中的一行 */
+.settings-dialog .add-row,
+.settings-dialog .add-row.is-on,
+.settings-dialog .add-row:hover {
+	background: transparent;
+	box-shadow: none;
+}
+.settings-dialog .add-row {
+	border: 1px dashed var(--rule);
+	border-radius: var(--r-2);
+	margin: 8px 10px;
+	color: var(--ink-3);
+	font-size: 12.5px;
+}
+.settings-dialog .add-row:hover { color: var(--cinnabar-ink); border-color: var(--cinnabar); }
+
+/* 默认模型那块的零碎提示退成灰字 */
+.settings-dialog .default-cost,
+.settings-dialog .default-hint {
+	color: var(--ink-4);
+	font-size: 11.5px;
+}
+.settings-dialog .model-zone,
+.settings-dialog .model-list { min-height: 0; }
+.settings-dialog .empty-hint { padding: 18px 0; text-align: left; }
+
+/* 供应商行：状态点用朱砂/苔绿，别都是同一个灰点 */
+.settings-dialog .provider-row .dot,
+.settings-dialog .provider-row::before { border-color: currentColor; }
+
+/* 呈上：全应用唯一的朱砂实心按钮 */
+.composer-side .btn-ink {
+	background: var(--cinnabar);
+	border-color: var(--cinnabar);
+	color: #fffdf8;
+	font-family: var(--serif);
+	letter-spacing: 0.12em;
+}
+.composer-side .btn-ink:hover { background: var(--cinnabar-lt); border-color: var(--cinnabar-lt); }
+:root[data-theme="dark"] .composer-side .btn-ink { color: #1a1512; }
+
+/* ══════════════════════════════════════════════════════════════
+   改版 v2 · 第四轮（覆盖旧规则：卡片头不换行、空态按钮靠左）
+   ══════════════════════════════════════════════════════════════ */
+
+/* 旧样式里 .mat-head h4 是 flex:1 1 100%，标题一长就把类别挤到下一行；
+   这里强制不换行：标题吃掉剩余宽度，类别钉在右上。 */
+.card.mat .mat-head {
+	display: flex;
+	flex-wrap: nowrap;
+	align-items: flex-start;
+	justify-content: flex-start;
+	gap: 10px;
+}
+.card.mat .mat-head h4 {
+	flex: 1 1 auto;
+	min-width: 0;
+	margin: 0;
+}
+.card.mat .mat-head .kind,
+.card.mat .mat-head .ok {
+	flex: 0 0 auto;
+	margin: 1px 0 0;
+}
+.card.mat .mat-head .ok { margin-left: 0; }
+
+/* 装配/可装里的空态按钮：靠左，别居中 */
+#assembly-list > .btn,
+#pool-list > .btn,
+.assembly-list > .btn,
+.pool-list > .btn,
+.bench-pane .bench-empty + .btn {
+	align-self: flex-start;
+	justify-self: start;
+	margin-left: 0;
+	margin-right: auto;
+	width: max-content;
+	max-width: 100%;
+}
+
+/* 空态虚线框在深色里别太扎眼 */
+:root[data-theme="dark"] .bench-pane .bench-empty {
+	border-color: rgba(237, 227, 210, 0.14);
+	color: var(--ink-3);
+}
+
+/* 原料列表里那句空态与上方拖放区说的是同一件事，去掉重复的一遍 */
+#material-source-list .bench-empty { display: none; }
+
+/* 「添加自定义供应商」：一条安静的虚线动作行，不要红条 */
+.settings-dialog .add-row::before,
+.settings-dialog .add-row .dot { display: none; }
+.settings-dialog .add-row,
+.settings-dialog .add-row .name {
+	color: var(--ink-3);
+	background: transparent;
+	box-shadow: none;
+	border-left-width: 1px;
+}
+.settings-dialog .add-row:hover,
+.settings-dialog .add-row:hover .name { color: var(--cinnabar-ink); border-color: var(--cinnabar); }
+
+/* 原料区的空态与上方拖放区重复，只留拖放区那一句 */
+#material-source-list .novel-empty { display: none; }
+
+/* 设定官栏里也有一份「还没有原料」的空态，与上面的说明重复 */
+#library-material-sources .novel-empty { display: none; }
+#library-material-sources:empty { display: none; }
+
+/* 深色下主操作改朱砂：奶白实心按钮在夜底上太刺眼 */
+:root[data-theme="dark"] .btn-ink {
+	background: var(--cinnabar);
+	border-color: var(--cinnabar);
+	color: #14120f;
+}
+:root[data-theme="dark"] .btn-ink:hover {
+	background: var(--cinnabar-lt);
+	border-color: var(--cinnabar-lt);
+}
+
+/* 移动端输入区：左右留白收窄，呈上贴着输入框右下 */
+@media (max-width: 640px) {
+	.composer { padding: 10px 12px calc(12px + var(--safe-b)); gap: 8px; }
+	.composer textarea { font-size: 16px; min-height: 58px; padding: 10px 12px; }
+	.composer-side { gap: 6px; }
+	.composer-side .btn { padding: 6px 13px; }
+}
+
+/* 呈上别被拉伸成一整列高：它是按钮，不是色块 */
+.composer-side { align-items: flex-end; }
+.composer-side .btn {
+	align-self: flex-end;
+	flex: 0 0 auto;
+	width: auto;
+	height: auto;
+	min-height: 40px;
+}
+
+/* 空态里的「立一章」是补救动作，别用全页唯一的墨黑实心砖 */
+#assembly-list > .btn.btn-ink {
+	background: transparent;
+	color: var(--cinnabar-ink);
+	border-color: var(--cinnabar);
+	box-shadow: none;
+}
+#assembly-list > .btn.btn-ink:hover {
+	background: var(--cinnabar);
+	color: #fffdf8;
+}
+
+/* 供应商行首的状态点：旧样式是一根竖线，像引号，改成圆点 */
+.settings-dialog .provider-row .dot {
+	display: inline-block;
+	width: 6px;
+	height: 6px;
+	min-width: 6px;
+	border: 0;
+	border-radius: 50%;
+	background: var(--ink-4);
+	box-shadow: none;
+}
+.settings-dialog .provider-row .dot.on { background: var(--moss, #55684a); }
+.settings-dialog .add-row .dot { display: none; }
+
+/* 行首那根竖线是旧样式的装饰，和状态点重复，去掉 */
+.settings-dialog .provider-row::before { display: none; }
+
+/* 设置弹层按内容收高：模型配置为空时不该留半屏空白 */
+.settings-dialog.sheet-wide {
+	height: auto;
+	max-height: min(760px, 88vh);
+}
+
+/* ══════════════════════════════════════════════════════════════
+   图标系统：24×24 线性图标，走 mask，颜色永远跟着 currentColor
+   ══════════════════════════════════════════════════════════════ */
+:root { --i-search: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='6.4'/%3E%3Cpath d='M15.8 15.8 20.4 20.4'/%3E%3C/svg%3E"); }
+:root { --i-settings: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 7h16M4 12h16M4 17h16'/%3E%3Ccircle cx='9' cy='7' r='2.1' fill='white'/%3E%3Ccircle cx='15' cy='12' r='2.1' fill='white'/%3E%3Ccircle cx='8' cy='17' r='2.1' fill='white'/%3E%3C/svg%3E"); }
+:root { --i-more: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='black'%3E%3Ccircle cx='5.5' cy='12' r='1.7'/%3E%3Ccircle cx='12' cy='12' r='1.7'/%3E%3Ccircle cx='18.5' cy='12' r='1.7'/%3E%3C/svg%3E"); }
+:root { --i-plus: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 5v14M5 12h14'/%3E%3C/svg%3E"); }
+:root { --i-export: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 4v11'/%3E%3Cpath d='m7.6 10.6 4.4 4.4 4.4-4.4'/%3E%3Cpath d='M5 19.5h14'/%3E%3C/svg%3E"); }
+:root { --i-backup: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 7.5h16v12H4z'/%3E%3Cpath d='M4 7.5 6.5 4h11L20 7.5'/%3E%3Cpath d='M9.5 12.5h5'/%3E%3C/svg%3E"); }
+:root { --i-edit: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4.5 19.5l4.2-1 9.4-9.4-3.2-3.2-9.4 9.4z'/%3E%3Cpath d='M13.4 6.4l3.2 3.2'/%3E%3C/svg%3E"); }
+:root { --i-trash: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 7h14'/%3E%3Cpath d='M9.5 7V4.8h5V7'/%3E%3Cpath d='M6.8 7l.9 12.2h8.6L17.2 7'/%3E%3C/svg%3E"); }
+:root { --i-open: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 6l6 6-6 6'/%3E%3C/svg%3E"); }
+:root { --i-home: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 11l8-6.4 8 6.4'/%3E%3Cpath d='M6.4 10v9.4h11.2V10'/%3E%3C/svg%3E"); }
+:root { --i-book: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='5.6' y='3.6' width='12.8' height='16.8' rx='2.2'/%3E%3Cpath d='M9 8.4h6M9 12h6M9 15.6h3.6'/%3E%3C/svg%3E"); }
+:root { --i-layers: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 4l8 4-8 4-8-4z'/%3E%3Cpath d='M4 12l8 4 8-4'/%3E%3Cpath d='M4 16l8 4 8-4'/%3E%3C/svg%3E"); }
+:root { --i-pen: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4.5 19.5h4.2L19 9.2l-4.2-4.2L4.5 15.3z'/%3E%3Cpath d='M13.6 6.2 17.8 10.4'/%3E%3Cpath d='M4.5 19.5l3.4-.8'/%3E%3C/svg%3E"); }
+:root { --i-close: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6.4 6.4l11.2 11.2M17.6 6.4 6.4 17.6'/%3E%3C/svg%3E"); }
+:root { --i-chapter: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 4.8h9.4A3.6 3.6 0 0 1 18 8.4v10.8H8.6A3.6 3.6 0 0 1 5 15.6z'/%3E%3Cpath d='M8.6 9h6M8.6 12.4h4.4'/%3E%3C/svg%3E"); }
+
+
+/* ══════════════════════════════════════════════════════════════
+   改版 v2 · 图标接位
+   汉字当图标（搜 / 设 / ⋯）在小屏上既不像字也不像图；
+   卡片上的「改」「删」并排成一串小字，读起来像注脚。
+   这里统一换成 24×24 线性图标，走 mask，颜色跟着文字走。
+   ══════════════════════════════════════════════════════════════ */
+
+@media (max-width: 640px) {
+	/* ── 顶栏右侧三颗：检索 / 设置 / 更多 ───────────────── */
+	#open-palette::before,
+	#open-settings::before,
+	#mobile-tools::before {
+		content: "";
+		display: block;
+		background: currentColor;
+		-webkit-mask: var(--i) center / contain no-repeat;
+		mask: var(--i) center / contain no-repeat;
+	}
+	#open-palette::before { width: 18px; height: 18px; --i: var(--i-search); }
+	#open-settings::before { width: 18px; height: 18px; --i: var(--i-settings); }
+	#mobile-tools { font-size: 0; }
+	#mobile-tools::before { width: 20px; height: 20px; --i: var(--i-more); }
+
+	/* ── 底栏：每项头上一个图标，选中的朱砂短横挪到 ::after ── */
+	.mobile-nav-item::before {
+		content: "";
+		display: block;
+		width: 20px;
+		height: 20px;
+		margin: 0 auto 3px;
+		background: currentColor;
+		opacity: 0.62;
+		-webkit-mask: var(--i) center / contain no-repeat;
+		mask: var(--i) center / contain no-repeat;
+	}
+	.mobile-nav-item[data-mobile-view="home"] { --i: var(--i-home); }
+	.mobile-nav-item[data-mobile-view="manuscript"] { --i: var(--i-book); }
+	.mobile-nav-item[data-mobile-view="materials"] { --i: var(--i-layers); }
+	.mobile-nav-item[data-mobile-view="writing"] { --i: var(--i-pen); }
+
+	/* 旧的选中态是 ::before 上的一根短横，会和图标抢同一个盒子 */
+	.mobile-nav-item.is-on::before {
+		position: static;
+		width: 20px;
+		height: 20px;
+		border-radius: 0;
+		background: currentColor;
+		opacity: 1;
+	}
+	.mobile-nav-item.is-on::after {
+		content: "";
+		position: absolute;
+		top: 2px;
+		left: 50%;
+		width: 16px;
+		height: 2px;
+		margin-left: -8px;
+		border-radius: 2px;
+		background: var(--cinnabar);
+	}
+}
+
+/* ── 文稿页三颗动作：图标 + 文字，动作条才读得下去 ─────── */
+#stage-actions .act::before {
+	content: "";
+	display: inline-block;
+	width: 13px;
+	height: 13px;
+	margin-right: 6px;
+	vertical-align: -2px;
+	background: currentColor;
+	-webkit-mask: var(--i) center / contain no-repeat;
+	mask: var(--i) center / contain no-repeat;
+}
+#stage-actions .act-new::before { --i: var(--i-plus); }
+#stage-actions .act-export::before { --i: var(--i-export); }
+#stage-actions .act-backup::before { --i: var(--i-backup); }
+
+/* ── 卡片动作：改 / 删 只留图标，名字交给 title ─────────── */
+.mat-actions .act-edit,
+.mat-actions .act-del {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 26px;
+	min-width: 26px;
+	height: 26px;
+	padding: 0;
+	font-size: 0;
+	line-height: 1;
+}
+.mat-actions .act-edit::before,
+.mat-actions .act-del::before {
+	content: "";
+	width: 14px;
+	height: 14px;
+	background: currentColor;
+	-webkit-mask: var(--i) center / contain no-repeat;
+	mask: var(--i) center / contain no-repeat;
+}
+.mat-actions .act-edit::before { --i: var(--i-edit); }
+.mat-actions .act-del::before { --i: var(--i-trash); }
+
+/* 二次确认那一下必须能读出「再点一次确认删除」，文字得回来 */
+.mat-actions .act-del.is-danger {
+	width: auto;
+	min-width: 0;
+	padding: 0 10px;
+	font-size: 11px;
+}
+.mat-actions .act-del.is-danger::before { display: none; }
+
+
+/* ══════════════════════════════════════════════════════════════
+   改版 v2 · 图标接位 · 二（面板头、动作条、禁用态）
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── 面板头：记录 / 另起一席 ──────────────────────────────
+   这两颗原本是两段裸字，和标题同一行，读起来像副标题而不像按钮。 */
+.pane-tools .act::before {
+	content: "";
+	display: inline-block;
+	width: 12px;
+	height: 12px;
+	margin-right: 5px;
+	vertical-align: -1.5px;
+	background: currentColor;
+	-webkit-mask: var(--i) center / contain no-repeat;
+	mask: var(--i) center / contain no-repeat;
+}
+.pane-tools .act-log::before { --i: var(--i-chapter); }
+.pane-tools .act-newchat::before { --i: var(--i-plus); }
+/* 二次确认时那句话才是主角，图标让位 */
+.pane-tools .act-newchat.is-danger::before { display: none; }
+
+/* ── 生文台顶上的「让设定官补料」：给它一颗加号，别像孤零零一行字 ── */
+#stage-actions .act-supply::before { --i: var(--i-plus); }
+
+/* ── 手机上的动作条：裸字点不动，加一圈细边才像按钮 ─────── */
+@media (max-width: 640px) {
+	.stage-actions .btn {
+		border: 1px solid var(--rule);
+		border-radius: 9px;
+		padding: 0 12px;
+		color: var(--ink-2);
+	}
+	.stage-actions .btn:hover,
+	.stage-actions .btn:active { background: var(--paper-lo); }
+}
+
+/* ── 主操作禁用时别半透明的红，看着像坏了 ───────────────── */
+.composer-side .btn-ink:disabled,
+.composer-side .btn-ink:disabled,
+.composer-side .btn-ink[disabled] {
+	background: var(--paper-lo);
+	border-color: var(--rule);
+	color: var(--ink-4);
+	opacity: 1;
+}
+
+/* ── 没写字时的「呈上」：旧规则把它压到 55% 透明度 ─────────
+   半透明的朱砂看着像掉色，不如直接退回纸色，等落笔再亮起来。 */
+.composer:not(.is-typing) button[type="submit"] {
+	opacity: 1;
+	background: var(--paper-lo);
+	border-color: var(--rule);
+	color: var(--ink-4);
+}
+
+/* ── 章目序号改阿拉伯数字：楷体的「一」在 13px 上像一根破折号 ── */
+.chapter-item .ord {
+	width: 2em;
+	font-family: var(--serif);
+	font-size: 11.5px;
+	letter-spacing: 0.04em;
+	color: var(--ink-4);
+	font-variant-numeric: tabular-nums;
+}
+.chapter-item.is-on .ord { color: var(--cinnabar); }
+
+/* 行首那枚书口墨点：与序号挤在一起像多了一个标点，去掉 */
+.chapter-item::after { display: none; }
+
+/* ── 关闭按钮收成一颗叉：弹层右上角写「完成」太像正文 ───── */
+#settings-close,
+[data-mobile-tools-close] {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 32px;
+	min-width: 32px;
+	height: 32px;
+	padding: 0;
+	font-size: 0;
+	border-radius: 50%;
+	color: var(--ink-3);
+}
+#settings-close::before,
+[data-mobile-tools-close]::before {
+	content: "";
+	width: 14px;
+	height: 14px;
+	background: currentColor;
+	-webkit-mask: var(--i-close) center / contain no-repeat;
+	mask: var(--i-close) center / contain no-repeat;
+}
+#settings-close:hover,
+[data-mobile-tools-close]:hover { background: var(--hover); color: var(--ink); }
+
+/* ── 案头页脚那行开源声明：留给 README，屏上不必常驻 ───── */
+.bench-foot { display: none; }
+
+/* ── 图标按钮的左右内边距必须清零 ─────────────────────────
+   .btn 默认 0 12px，26px 的方盒减去内边距只剩 2px，
+   伪元素被 flex 压成 0 宽 —— 图标就整颗消失了。 */
+.mat-actions .btn.act-edit,
+.mat-actions .btn.act-del {
+	padding: 0;
+	width: 30px;
+	min-width: 30px;
+}
+.mat-actions .act-edit::before,
+.mat-actions .act-del::before {
+	width: 15px;
+	height: 15px;
+	flex: none;
+}
+
+/* ── 图标动作推到行尾：文字动作在左，图标动作在右，两组才不打架 ── */
+.mat-actions .act-edit { margin-left: auto; }
+
+/* ── 深色下禁用态的呈上：深底必须配浅字 ─────────────────── */
+:root[data-theme="dark"] .composer:not(.is-typing) button[type="submit"] {
+	color: var(--ink-3);
+	background: var(--paper-lo);
+	border-color: var(--rule);
+}
+
+/* ── 深色下卡片正文抬一档：13.5px 的灰字在夜里读不动 ───── */
+:root[data-theme="dark"] .card.mat .mat-body { color: var(--ink-2); }
+:root[data-theme="dark"] .card.mat .usage { color: var(--ink-3); }
+
+/* ── 改版 v2 · 总目序号与移动对话区 ──────────────────────────────── */
+/* 「一」在 13px 上就是一根横杠，和破折号分不开：总目改用两位数字。 */
+.toc { counter-reset: toc; }
+.toc-item { padding-left: 40px; }
+.toc-item::before {
+	content: counter(toc, decimal-leading-zero);
+	font-family: var(--serif);
+	font-size: 12px;
+	letter-spacing: 0.02em;
+	font-variant-numeric: tabular-nums;
+	color: var(--ink-4);
+	top: 18px;
+	left: 2px;
+}
+.toc-item h3 { font-family: var(--serif); font-size: 17px; letter-spacing: 0.02em; }
+.front-head h2 { font-family: var(--serif); font-size: 28px; letter-spacing: 0.14em; }
+
+/* 窄屏：对话区给个下限，别让呈上框悬在页面中间。 */
+@media (max-width: 860px) {
+	.bench-talk .stream { min-height: 24dvh; }
+}
+
+/* ── 改版 v2 · 呈上收进纸卡（窄屏） ──────────────────────────── */
+:root { --i-send: url("data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%2024%2024'%20fill%3D'none'%20stroke%3D'black'%20stroke-width%3D'1.7'%20stroke-linecap%3D'round'%20stroke-linejoin%3D'round'%3E%3Cpath%20d%3D'M12%2019V5M6%2011l6-6%206%206'%2F%3E%3C%2Fsvg%3E"); }
+
+@media (max-width: 860px) {
+	.composer {
+		position: relative;
+		display: block;
+		padding: 0;
+		border: 0;
+		background: none;
+		box-shadow: none;
+	}
+	.composer textarea {
+		width: 100%;
+		min-height: 96px;
+		padding: 14px 14px 56px;
+	}
+	.composer-side {
+		position: absolute;
+		right: 8px;
+		bottom: 8px;
+		display: flex;
+		flex-direction: row-reverse;
+		align-items: center;
+		gap: 8px;
+		padding: 0;
+		margin: 0;
+	}
+	.composer-side .btn {
+		width: 38px;
+		min-width: 38px;
+		height: 38px;
+		min-height: 38px;
+		padding: 0;
+		border-radius: 50%;
+		font-size: 0;
+		line-height: 0;
+	}
+	.composer-side .btn::before {
+		content: "";
+		width: 17px;
+		height: 17px;
+		flex: none;
+		background: currentColor;
+		-webkit-mask: var(--i-send) center / contain no-repeat;
+		mask: var(--i-send) center / contain no-repeat;
+	}
+	/* 止笔是有话要说的动作，不能只剩一个圈 */
+	.composer-side .btn[data-abort] {
+		width: auto;
+		min-width: 0;
+		height: 34px;
+		min-height: 34px;
+		padding: 0 12px;
+		border-radius: 17px;
+		font-size: 12px;
+		line-height: 1;
+	}
+	.composer-side .btn[data-abort]::before { display: none; }
+	.composer-side .btn[data-abort].hidden { display: none; }
+}
+
+/* ── 改版 v2 · 呈上位置微调 ────────────────────────────── */
+@media (max-width: 860px) {
+	.composer-side { right: 14px; bottom: 22px; }
+	.composer-side .btn[type="submit"] {
+		border: 1px solid var(--rule);
+		background: var(--paper-lo);
+		color: var(--ink-3);
+		box-shadow: none;
+	}
+	.composer.is-typing .composer-side .btn[type="submit"] {
+		background: var(--cinnabar);
+		border-color: var(--cinnabar);
+		color: #fff;
+	}
+}
+
+/* ── 改版 v2 · 呈上图标居中 ──────────────────────────────── */
+@media (max-width: 860px) {
+	.composer-side { right: 16px; bottom: 20px; }
+	.composer-side .btn {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+	}
+	.composer-side .btn::before { display: block; }
+}
+
+/* ── 改版 v2 · 呈上避让圆角 ────────────────────────────── */
+@media (max-width: 860px) {
+	.composer-side { right: 18px; bottom: 28px; }
+	.composer textarea { resize: none; }
+}
+
+/* ── 改版 v2 · 窄屏对话栏不再截高 ──────────────────────────────── */
+/* 死高会把呈上框挤出栏外，被下一栏的粘性栏头压住；窄屏交给内容自己定高。 */
+@media (max-width: 860px) {
+	.bench-talk {
+		height: auto;
+		max-height: none;
+		min-height: 0;
+	}
+	.bench-talk .stream { flex: 0 0 auto; min-height: 22dvh; }
+}
+
+/* ── 改版 v2 · 窄屏对话栏解封 ──────────────────────────────── */
+@media (max-width: 860px) {
+	#view-materials .bench-talk,
+	#view-writing .bench-talk,
+	.bench-talk {
+		height: auto;
+		max-height: none;
+		min-height: 0;
+	}
+}
+
+/* ── 改版 v2 · 上传按钮图标 + 空态居中 ────────────────────────── */
+:root { --i-upload: url("data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%2024%2024'%20fill%3D'none'%20stroke%3D'black'%20stroke-width%3D'1.7'%20stroke-linecap%3D'round'%20stroke-linejoin%3D'round'%3E%3Cpath%20d%3D'M12%2015V4M8%208l4-4%204%204M4%2015v3a2%202%200%200%200%202%202h12a2%202%200%200%200%202-2v-3'%2F%3E%3C%2Fsvg%3E"); }
+.pane-tools .act-upload::before { --i: var(--i-upload); }
+.pane-tools .act-novel::before { --i: var(--i-book); }
+
+/* 空栏里只有一句招呼话时，把它摆到栏心 —— 否则底下空出一大块纸。 */
+.bench-talk .stream:has(> .msg:only-child) { justify-content: center; }
+
+/* ── 改版 v2 · 补全 act-new 的图标变量 ──────────────────────── */
+.pane-tools .act-new::before { --i: var(--i-plus); }
+
+/* ══ 改版 v2 · 弹层与稿纸收口 ══════════════════════════════════════ */
+
+/* ── 弹层共用：纸、圆角、影，题名走宋体 ─────────────────── */
+.sheet {
+	border-radius: 12px;
+	background: var(--paper-hi);
+	border: 1px solid var(--sheet-edge);
+	box-shadow: var(--elev-2);
+}
+.sheet h3 {
+	font-family: var(--serif);
+	font-size: 21px;
+	font-weight: 600;
+	letter-spacing: 0.1em;
+}
+.sheet .form-head { padding: 24px 30px 16px; border-bottom: 1px solid var(--rule-soft); }
+.sheet .form-head h3 { margin: 0; }
+.sheet .form-hint { margin: 8px 0 0; font-size: 12px; line-height: 1.8; color: var(--ink-3); }
+.sheet .form-body { padding: 22px 30px 18px; }
+.sheet .form-foot { padding: 14px 30px 18px; border-top: 1px solid var(--rule-soft); background: transparent; }
+.sheet .field-label { font-size: 11px; letter-spacing: 0.1em; color: var(--ink-4); }
+.sheet .dialog-actions { gap: 10px; }
+.sheet .dialog-actions .btn { font-size: 13px; }
+
+/* 短表单不再撑满一屏：立一章、导出、分卷只有几个字段 */
+.sheet-form { height: fit-content; max-height: min(840px, 92vh); }
+
+/* 回收站 / 存照没有 .sheet-form，栏头与列表留白自己补齐 */
+.sheet-wide > .form-head { padding: 24px 30px 16px; border-bottom: 1px solid var(--rule-soft); }
+.sheet-wide > .form-foot { padding: 14px 30px 18px; border-top: 1px solid var(--rule-soft); margin-top: auto; }
+.sheet-wide > .snap-list { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 30px; }
+.snap-row { padding: 12px 0; }
+.snap-when { font-size: 12.5px; }
+.snap-why { font-size: 12px; color: var(--ink-3); }
+.snap-size { font-size: 11px; color: var(--ink-4); font-variant-numeric: tabular-nums; }
+.snap-list .novel-empty,
+.snap-list .bench-empty { padding: 64px 0; text-align: center; }
+
+/* ── 命令面板 ───────────────────────────────────────────── */
+.palette {
+	border-radius: 12px;
+	background: var(--paper-hi);
+	border-color: var(--sheet-edge);
+	box-shadow: var(--elev-2);
+}
+.palette-head { padding: 14px 18px; border-bottom: 1px solid var(--rule-soft); }
+.palette-head input { font-size: 16.5px; }
+.palette-results { padding: 8px; }
+.palette-row { padding: 10px 12px; border-radius: 8px; }
+.palette-group {
+	border-radius: 4px;
+	font-size: 10px;
+	letter-spacing: 0.08em;
+	color: var(--ink-4);
+}
+.palette-label { font-family: var(--serif); font-size: 14px; }
+.palette-hint { font-size: 11.5px; color: var(--ink-4); }
+.palette-empty { font-family: var(--serif); font-size: 13px; padding: 36px 16px; }
+
+/* ── 移动端工具菜单 ─────────────────────────────────────── */
+.mobile-tools-card { border-radius: 14px; border-color: var(--sheet-edge); box-shadow: var(--elev-2); }
+.mobile-tools-head h3 { font-family: var(--serif); font-size: 19px; letter-spacing: 0.08em; }
+.mobile-tool { background: var(--paper-lo); border-color: var(--rule-soft); }
+.mobile-tool strong { font-family: var(--serif); font-size: 15px; font-weight: 600; }
+
+/* ── 章节页：版心收窄，纸边看得见 ───────────────────────── */
+#view-manuscript { --ms-pad-x: clamp(20px, 3.4vw, 54px); --ms-measure: 44em; }
+.ms-page {
+	border-color: var(--rule);
+	box-shadow: 0 1px 2px rgba(27, 24, 21, 0.06), 0 26px 50px -34px rgba(27, 24, 21, 0.55);
+}
+:root[data-theme="dark"] .ms-page {
+	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 26px 50px -30px rgba(0, 0, 0, 0.9);
+}
+#view-manuscript .actions-center {
+	padding: 8px var(--ms-pad-x) 12px;
+	border-bottom: 1px solid var(--rule-soft);
+}
+.ms-title { font-family: var(--serif); font-size: 29px; letter-spacing: 0.08em; }
+.ms-kicker { font-size: 11px; letter-spacing: 0.28em; color: var(--ink-4); }
+
+/* ── 列表弹层：高度跟内容走 ──────────────────────────── */
+.sheet-wide:not(.sheet-form) { height: fit-content; max-height: min(760px, 88vh); min-height: 320px; }
+.sheet-wide:not(.sheet-form) > .snap-list { max-height: min(520px, 62vh); }
+.snap-list .novel-empty,
+.snap-list .bench-empty,
+.snap-list > .history-empty { display: block; width: 100%; text-align: center; }
+
+/* ══ 改版 v2 · 控件、右案与稿台条 ════════════════════════════════════════ */
+
+/* ── 弹层里的控件：纸色凹陷、八分圆角、宋体 ─────────────── */
+.sheet input:not([type="checkbox"]):not([type="radio"]),
+.sheet select,
+.sheet textarea {
+	background: var(--paper-lo);
+	border: 1px solid var(--rule);
+	border-radius: 8px;
+	padding: 9px 12px;
+	font-family: var(--serif);
+	font-size: 14.5px;
+	line-height: 1.6;
+}
+.sheet textarea { line-height: 1.85; }
+.sheet input:not([type="checkbox"]):not([type="radio"]):focus,
+.sheet select:focus,
+.sheet textarea:focus {
+	border-color: var(--cinnabar-edge);
+	box-shadow: 0 0 0 3px var(--cinnabar-faint);
+}
+.sheet select { max-width: none; }
+.sheet input[type="checkbox"],
+.sheet input[type="radio"] { accent-color: var(--cinnabar); }
+.sheet .checkline { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+
+/* 两列行：标签与控件都从同一基线起步 */
+.sheet-form .form-row { grid-template-columns: 180px minmax(0, 1fr); align-items: start; }
+.sheet-form .form-row > .field { margin-bottom: 16px; }
+
+/* ── 右案：大纲与待办也长成纸卡 ─────────────────────────── */
+.bible .card {
+	background: var(--paper-hi);
+	border: 1px solid var(--sheet-edge);
+	border-radius: var(--r-2);
+	box-shadow: var(--elev-1);
+	padding: 14px 15px 13px;
+	margin-bottom: 10px;
+}
+.bible .card h4 {
+	margin: 0 0 6px;
+	font-family: var(--serif);
+	font-size: 15.5px;
+	font-weight: 600;
+	line-height: 1.5;
+}
+.bible .card .tagline {
+	margin: 0;
+	font-size: 12px;
+	line-height: 1.75;
+	color: var(--ink-3);
+}
+.bible .card .tagline + .tagline { margin-top: 4px; color: var(--ink-4); }
+.bible .note {
+	display: flex;
+	gap: 10px;
+	padding: 12px 13px;
+	margin-bottom: 8px;
+	background: var(--paper-hi);
+	border: 1px solid var(--sheet-edge);
+	border-radius: var(--r-2);
+}
+.bible .note-mark { width: 3px; flex: none; border-radius: 2px; background: var(--ink-4); }
+.bible .note.high .note-mark { background: var(--cinnabar); }
+.bible .note.medium .note-mark { background: var(--amber); }
+.bible .note-where { font-size: 10.5px; letter-spacing: 0.08em; color: var(--ink-4); }
+.bible .note-text { margin-top: 4px; font-family: var(--serif); font-size: 13.5px; line-height: 1.75; color: var(--ink-2); }
+.bible .bible-empty {
+	padding: 48px 0;
+	text-align: center;
+	font-family: var(--serif);
+	font-size: 13px;
+	color: var(--ink-4);
+}
+
+/* ── 稿台操作条：版本数做成一枚小计数 ───────────────────── */
+#view-manuscript .actions-center .btn .num {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 17px;
+	height: 17px;
+	margin-left: 6px;
+	padding: 0 4px;
+	border-radius: 9px;
+	background: var(--ink-wash);
+	color: var(--ink-3);
+	font-family: var(--sans);
+	font-size: 10.5px;
+	font-weight: 600;
+	line-height: 1;
+	vertical-align: 1px;
+}
+
+/* ══ 改版 v2 · 素材卡动作行 ══════════════════════════════════════════ */
+
+.mat-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.mat-actions .btn { font-size: 11.5px; }
+.mat-actions .act-promote::before { --i: var(--i-upload); }
+.mat-actions .btn.act-edit,
+.mat-actions .btn.act-del {
+	width: 28px;
+	min-width: 28px;
+	height: 28px;
+	padding: 0;
+}
+.mat-actions .btn.act-edit::before,
+.mat-actions .btn.act-del::before { width: 14px; height: 14px; flex: none; }
+.mat-actions .btn.act-del.is-danger { width: auto; min-width: 0; padding: 0 10px; }
+
+/* ══ 改版 v2 · 呈上按钮归位 ═══════════════════════════════════════════ */
+
+/* 输入卡给呈上留出一行，按钮不再骑在卡片下沿 */
+.composer textarea {
+	min-height: 132px;
+	padding-bottom: 50px;
+}
+.composer-side {
+	right: 14px;
+	bottom: 12px;
+}
+@media (max-width: 640px) {
+	.composer textarea { min-height: 108px; padding-bottom: 46px; }
+}
+
+/* ══ 改版 v2 · 呈上按钮归位 · 二 ═══════════════════════════════════════ */
+
+/* 呈上落在输入卡里，而不是飘在卡片右边 */
+.composer {
+	flex-direction: column;
+	align-items: stretch;
+}
+.composer > textarea { width: 100%; }
+.composer-side {
+	position: absolute;
+	right: 40px;
+	bottom: 28px;
+}
+@media (max-width: 640px) {
+	.composer-side { right: 26px; bottom: 22px; }
+}
+
+/* ══ 改版 v2 · 移动端素材台顺序 ═════════════════════════════════════════ */
+
+/* 手机上先看原料与素材库，设定官落在最后 */
+@media (max-width: 860px) {
+	#view-materials .bench { display: flex; flex-direction: column; }
+	#view-materials .bench-talk { order: 9; }
+}
+
+/* ══ 改版 v2 · 移动端素材单列与底栏留白 ═══════════════════════════════════════ */
+
+/* 手机上一栏到底，卡片不再挤成两列窄条 */
+@media (max-width: 640px) {
+	.mat-grid { grid-template-columns: minmax(0, 1fr); }
+	.mat-grid > .card.mat + .card.mat { margin-top: 0; }
+	/* 底部导航是 fixed 的，滚动区要自己让出一条 */
+	#view-materials,
+	#view-writing,
+	#view-manuscript { padding-bottom: calc(78px + var(--safe-b)); }
+	#view-materials .bench,
+	#view-writing .bench { padding-bottom: 8px; }
+}
+
+/* ══ 改版 v2 · 命令面板行与弹层主操作 ═══════════════════════════════════════ */
+
+/* 命令面板：一行读完，提示靠右 */
+.palette-row { align-items: center; padding: 9px 12px; }
+.palette-main {
+	flex: 1;
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 14px;
+}
+.palette-hint { margin-top: 0; max-width: 60%; }
+.palette-group { margin-top: 0; align-self: center; }
+
+/* 弹层主操作与全局一致：朱砂 */
+.sheet .btn-ink {
+	background: var(--cinnabar);
+	border-color: var(--cinnabar);
+	color: #fff;
+}
+.sheet .btn-ink:hover { background: var(--cinnabar-lt); border-color: var(--cinnabar-lt); }
+:root[data-theme="dark"] .sheet .btn-ink { color: #14120f; }
+
+/* ══ 改版 v2 · 单选与版本行去粉 ═════════════════════════════════════════ */
+
+/* 选中的胶囊不要染成浅粉：纸色底 + 朱砂边就够 */
+.seg label:has(input:checked) {
+	background: var(--paper-lo);
+	border-color: var(--cinnabar);
+}
+/* 当前稿：一道朱砂书脊，而不是整块粉底 */
+.history-row.is-current {
+	background: var(--paper-lo);
+	border-color: var(--rule);
+	box-shadow: inset 3px 0 0 var(--cinnabar);
+}
+.history-row > .btn { display: block; margin: 8px 0 0 auto; }
+.history-version { font-family: var(--serif); font-size: 13px; letter-spacing: 0.04em; }
+
+/* 开关圆钮在纸底上要立得住 */
+.web-enable input[type="checkbox"]::after { background: #fff; }
