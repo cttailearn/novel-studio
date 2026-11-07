@@ -869,6 +869,20 @@ function modelField(labelText, control, hint) {
 	return wrap;
 }
 
+/**
+ * 内置供应商的接入点由应用维护，界面上只露中转的站点地址。
+ *
+ * 真正的请求地址带着 `/v1` 这一截协议版本，照原样贴出来容易被当成
+ * 「往自定义供应商里填的地址」；这里统一显示站点根地址。
+ */
+function siteAddressOf(baseUrl) {
+	try {
+		return `${new URL(baseUrl).origin}/`;
+	} catch {
+		return baseUrl;
+	}
+}
+
 function renderBuiltinDetail(box, provider, status) {
 	box.append(el("h4", "", provider.label));
 	box.append(
@@ -883,7 +897,7 @@ function renderBuiltinDetail(box, provider, status) {
 						` · 接入点：${status?.baseUrl ?? "未配置"}`
 					: `内置供应商（当前 ${status?.modelCount ?? 0} 个模型）：接入点由应用维护，模型参数可以自行修改。` +
 						`环境变量：${(status?.envVars ?? []).join("、") || "无"}` +
-						(status?.baseUrl ? ` · 接入点：${status.baseUrl}` : ""),
+						(status?.baseUrl ? ` · 接入点：${siteAddressOf(status.baseUrl)}` : ""),
 		),
 	);
 
