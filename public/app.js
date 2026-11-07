@@ -165,9 +165,9 @@ const state = {
 	pendingRestore: null,
 	/** 导出对话框此刻针对哪一章。 */
 	exportChapterId: null,
-	/** 专注模式与排版偏好。 */
+	/** 专注模式与排版偏好。版心那三档的真身是下面的 TYPE_DEFAULTS，这里只是占位。 */
 	focusMode: false,
-	typography: { size: 17, line: 2.05, measure: 54 },
+	typography: { size: 17, line: 2.05, measure: 66 },
 	/**
 	 * 正文缓存：chapterId → { content, revision, updatedAt, materialIds, title, summary, history? }
 	 *
@@ -1125,14 +1125,19 @@ function dismissBootSkeleton() {
 // ═══════════════════════════════════════════════════ 排版与专注
 
 const TYPE_KEY = "novel-studio/typography";
-const TYPE_DEFAULTS = { size: 17, line: 2.05, measure: 54 };
-/* 版心三档：窄 45em / 中 54em / 宽 66em（17px 字号下约 765 / 918 / 1122 像素）。
-   早先那套是 30/36/44，整体偏窄；存下来的旧值在读取时按 1.5 倍迁到新档，不让老偏好把人锁在窄版心里。 */
-const TYPE_MEASURES = [45, 54, 66];
-const TYPE_MEASURES_LEGACY = { 30: 45, 36: 54, 44: 66 };
+const TYPE_DEFAULTS = { size: 17, line: 2.05, measure: 66 };
+/* 版心三档：窄 48em / 中 66em / 宽 84em（按稿台基础字号 14.5px 算约 696 / 957 / 1218 像素）。
+   这套数字换过两回：最早 30/36/44，先按 1.5 倍抬到 45/54/66，作者还嫌窄，
+   又在「实际看到的那一档」上再抬一半定成现在这组 —— 他原先落定的 44em（638px）
+   正对上新的中间档（66em ≈ 957px），一进来就宽了一半。
+   存下来的旧值按档位（窄/中/宽）迁到新档，不让老偏好把人锁在窄版心里。 */
+const TYPE_MEASURES = [48, 66, 84];
+const TYPE_MEASURES_LEGACY = { 30: 48, 36: 66, 44: 84, 45: 48, 54: 66, 66: 84, 68: 48, 81: 66, 99: 84 };
 
 /** 只落在浏览器里：这是阅读偏好，不该跟着作品走，也不该污染服务端的工程文件。 */
 function loadTypography() {
+	// 先从 TYPE_DEFAULTS 起手：state 里那份占位值写死过，改档位时容易漏掉它。
+	state.typography = { ...TYPE_DEFAULTS };
 	try {
 		const saved = JSON.parse(readStored(TYPE_KEY, "null"));
 		if (saved && typeof saved === "object") {
@@ -7099,6 +7104,23 @@ document.addEventListener("keydown", (event) => {
 		if (!state.project || state.mode !== "workspace") return;
 		event.preventDefault();
 		jumpChapter(event.key === "ArrowUp" ? -1 : 1);
+		return;
+	}
+	// 上下键滚稿：读长文时手不用离开键盘。翻章已经占了 Alt+↑/↓，这里只管平移；
+	// 弹层（对话框、记录抽屉）开着时不抢 —— 那时方向键该归那层自己使。
+	if (!typing && !mod && !event.altKey && !event.shiftKey && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+		if (state.mode !== "workspace" || state.view !== "manuscript") return;
+		if (state.recordsPane || document.querySelector("dialog[open]")) return;
+		// 焦点落在旁边那些能自己滚的栏里时也让开：章目、右案、素材台各有各的滚法。
+		const target = event.target instanceof Element ? event.target : null;
+		const neighbour = target?.closest(".bible, #chapter-list, .bench-pane, .records-layer");
+		if (neighbour && neighbour.scrollHeight > neighbour.clientHeight + 8) return;
+		const view = $("view-manuscript");
+		// 一屏放得下的短章不动它：按了没反应比滚半像素强。
+		if (!view || view.scrollHeight <= view.clientHeight + 8) return;
+		event.preventDefault();
+		const step = Math.max(96, Math.round(view.clientHeight * 0.42));
+		view.scrollBy({ top: event.key === "ArrowDown" ? step : -step, behavior: "smooth" });
 		return;
 	}
 	if (event.key === "?" && !typing && !document.querySelector("dialog[open]")) {

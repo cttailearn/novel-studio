@@ -50,7 +50,7 @@
 	/* 稿台排版偏好。JS 会按「排版」里的选择改写这三个变量。 */
 	--ms-font-size: 17px;
 	--ms-line-height: 2.05;
-	--ms-measure: 54em;
+	--ms-measure: 66em;
 
 	--noise: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='260' height='260'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='260' height='260' filter='url(%23n)' opacity='0.4'/%3E%3C/svg%3E");
 	/* 纸纤维的叠色方式：亮纸上 multiply 才像纸，暗纸上要换成 lighten */
@@ -701,7 +701,7 @@ body::before {
    于是编辑框窄成一条。给它一个确定宽度，再由 max-width 收口。 */
 .ms-page {
 	width: 100%;
-	max-width: var(--ms-measure, 54em);
+	max-width: var(--ms-measure, 66em);
 	margin: 0 auto;
 	/* 天头留白在稿纸上，不在滚动容器上 —— 容器留了就垫高了吸顶的操作条。 */
 	padding-top: var(--ms-pad-t);
@@ -5749,8 +5749,11 @@ input[type="search"]:focus {
 .mobile-tool { background: var(--paper-lo); border-color: var(--rule-soft); }
 .mobile-tool strong { font-family: var(--serif); font-size: 15px; font-weight: 600; }
 
-/* ── 章节页：版心收窄，纸边看得见 ───────────────────────── */
-#view-manuscript { --ms-pad-x: clamp(20px, 3.4vw, 54px); --ms-measure: 44em; }
+/* ── 章节页：纸边看得见 ─────────────────────────────────── */
+/* 这里只放宽左右留白。版心宽度归「排版 → 版心」那三档管（JS 写在 :root 上的
+   --ms-measure），早先这里多写了一句 --ms-measure: 44em，把它整个压住了 ——
+   于是无论选哪档，稿纸都是 44em 宽，档位形同虚设。 */
+#view-manuscript { --ms-pad-x: clamp(20px, 3.4vw, 54px); }
 .ms-page {
 	border-color: var(--rule);
 	box-shadow: 0 1px 2px rgba(27, 24, 21, 0.06), 0 26px 50px -34px rgba(27, 24, 21, 0.55);
