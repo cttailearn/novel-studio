@@ -2169,6 +2169,14 @@ body.is-splitting * {
 /* 原料库：资料与整本小说共用一个列表；章节名收在 details 里，避免两千章把素材栏撑爆。 */
 .novel-source-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
 .novel-source-list:empty { display: none; }
+/* 原料攒到十几份就会把下面的「素材库」一路顶到视口外，整栏得滚很久才找得到。
+   给列表自己一个滚动区：高度按视口算，收着几份时不占地方，多了就在框里滚。
+   overscroll-behavior 免得滚到头以后把整栏一起带走。 */
+.novel-source-list:not(.is-compact) {
+	max-height: clamp(220px, 42vh, 520px);
+	overflow-y: auto;
+	overscroll-behavior: contain;
+}
 .novel-source-list.is-compact {
 	margin: 0;
 	padding: 8px 20px;
