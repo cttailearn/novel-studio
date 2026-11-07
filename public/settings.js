@@ -885,21 +885,20 @@ function siteAddressOf(baseUrl) {
 
 function renderBuiltinDetail(box, provider, status) {
 	box.append(el("h4", "", provider.label));
-	box.append(
-		el(
-			"p",
-			"sub",
-			status?.error
-				? `注册失败：${status.error}`
-				: provider.modelsSource === "upstream"
-					? `上游实时清单（${status?.modelCount ?? 0} 个）：模型参数可以自行修改` +
-						(provider.modelsFetchedAt ? ` · ${new Date(provider.modelsFetchedAt).toLocaleString("zh-CN")} 拉取` : "") +
-						` · 接入点：${status?.baseUrl ?? "未配置"}`
-					: `内置供应商（当前 ${status?.modelCount ?? 0} 个模型）：接入点由应用维护，模型参数可以自行修改。` +
-						`环境变量：${(status?.envVars ?? []).join("、") || "无"}` +
-						(status?.baseUrl ? ` · 接入点：${siteAddressOf(status.baseUrl)}` : ""),
-		),
-	);
+
+	// 内置供应商只露一句有用的：有接入点的显示站点地址，没有的显示环境变量名。
+	// 早先那段「内置供应商（当前 N 个模型）：接入点由应用维护……」全是交代给
+	// 维护者的话，作者看一眼地址就够了，模型数量下面卡片里也有。
+	const subline = status?.error
+		? `注册失败：${status.error}`
+		: provider.modelsSource === "upstream"
+			? `上游实时清单（${status?.modelCount ?? 0} 个）：模型参数可以自行修改` +
+				(provider.modelsFetchedAt ? ` · ${new Date(provider.modelsFetchedAt).toLocaleString("zh-CN")} 拉取` : "") +
+				` · 接入点：${status?.baseUrl ?? "未配置"}`
+			: status?.baseUrl
+				? siteAddressOf(status.baseUrl)
+				: `环境变量：${(status?.envVars ?? []).join("、") || "无"}`;
+	if (subline) box.append(el("p", "sub", subline));
 
 	if (status?.error) box.append(el("div", "notice err", status.error));
 
