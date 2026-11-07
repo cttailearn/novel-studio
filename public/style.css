@@ -793,7 +793,8 @@ body::before {
 
 .front-matter {
 	width: 100%;
-	max-width: 44em;
+	/* 总目也是一张纸，跟着「排版 → 版心」走：换档时它和正文一样宽。 */
+	max-width: var(--ms-measure, 66em);
 	margin: 0 auto;
 	/* 与 .ms-page 同理：天头在纸上，滚动容器上不留 top padding。 */
 	padding-top: var(--ms-pad-t);
