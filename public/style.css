@@ -1787,6 +1787,10 @@ select { max-width: 230px; cursor: pointer; }
 .bench-pane + .bench-pane { border-left: 1px solid var(--rule); }
 /* 左栏自己滚：上传区、素材库、装配清单都可能很长 */
 .bench-pane:not(.bench-talk) { overflow-y: auto; padding: 0 20px 44px; }
+/* 既然整栏自己滚，就别再让 flex 压子项。素材攒多以后 .material-list 的
+   min-height:auto 会撑住，而原料列表因为 overflow:auto 的最小高度是 0，
+   会被一路压成 0 高 —— 上传过的资料和小说原料就看不见了。 */
+.bench-pane:not(.bench-talk) > * { flex-shrink: 0; }
 
 /* ── 分栏提手：料 / 文两栏可拖宽窄 ─────────────────────────── */
 
