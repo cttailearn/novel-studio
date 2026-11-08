@@ -12,6 +12,12 @@
 // 执笔者也没有改素材的工具，所以这里不需要靠提示词去防串岗。
 
 import { bindSettings, levelText, THINKING_LEVELS } from "./settings.js";
+import { bindAccount } from "./account.js";
+import { ensureAuth } from "./auth-gate.js";
+
+// 账号没落定之前不初始化写作台：云端模式下这里会先亮登录门，
+// 纯本地模式下 ensureAuth() 立即返回，网络请求一个都不会发。
+await ensureAuth();
 
 const $ = (id) => document.getElementById(id);
 
@@ -7671,6 +7677,7 @@ enhanceMobileSheets();
 
 bindMessageActions();
 bindSettings();
+bindAccount();
 loadTypography();
 // 提手要先于 bootstrap：起手失败时工作台也该能拖，不该等接口回来才装配。
 initBenchSplits();

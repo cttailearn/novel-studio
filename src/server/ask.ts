@@ -32,6 +32,8 @@ type Emitter = (event: AskQuestionEvent | AskQuestionClosedEvent) => void;
 interface PendingQuestion {
 	id: string;
 	sessionId: string;
+	/** 云端多账号模式下归属的用户；单机模式为空串。 */
+	owner: string;
 	question: string;
 	options: string[];
 	settle: (answer: string, reason: QuestionClosedReason) => void;
@@ -42,7 +44,8 @@ interface PendingQuestion {
  * 全局待答表。
  *
  * 按 id 就能找到，不必先知道是哪个会话 —— 回答走的是独立的一条 HTTP 请求，
- * 那条请求手里只有 id。
+ * 那条请求手里只有 id。云端模式下 id 是随机 UUID，但仍在记录里带 owner，
+ * 回答时二次校验，避免有人拿别人的问题 id 乱答。
  */
 const pendingQuestions = new Map<string, PendingQuestion>();
 
@@ -56,9 +59,12 @@ export class AskChannel implements AskBroker {
 	private emitter: Emitter | null = null;
 	/** 这个通道属于哪个会话。 */
 	readonly sessionId: string;
+	/** 这个通道属于哪个用户；空串表示单机模式，不做归属校验。 */
+	readonly owner: string;
 
-	constructor(sessionId: string) {
+	constructor(sessionId: string, owner = "") {
 		this.sessionId = sessionId;
+		this.owner = owner;
 	}
 
 	/**
@@ -90,7 +96,7 @@ export class AskChannel implements AskBroker {
 			const timer = setTimeout(() => settle("", "timeout"), ASK_TIMEOUT_MS);
 			// 别让这个定时器把进程钉住 —— 它只是兜底，不是主角。
 			timer.unref?.();
-			pendingQuestions.set(id, { id, sessionId: this.sessionId, question: request.question, options, settle, timer });
+			pendingQuestions.set(id, { id, sessionId: this.sessionId, owner: this.owner, question: request.question, options, settle, timer });
 
 			// 这一轮被中止时，答案永远等不到了 —— 立刻放开，别把会话吊死。
 			if (signal) {
@@ -113,6 +119,7 @@ export class AskChannel implements AskBroker {
 	answer(id: string, answer: string): boolean {
 		const item = pendingQuestions.get(id);
 		if (!item) return false;
+		if (this.owner && item.owner !== this.owner) return false;
 		item.settle(answer, "answered");
 		return true;
 	}
@@ -124,7 +131,9 @@ export class AskChannel implements AskBroker {
 	 */
 	close(reason: QuestionClosedReason = "aborted"): void {
 		for (const item of [...pendingQuestions.values()]) {
-			if (item.sessionId === this.sessionId) item.settle("", reason);
+			if (item.sessionId !== this.sessionId) continue;
+			if (this.owner && item.owner !== this.owner) continue;
+			item.settle("", reason);
 		}
 	}
 
@@ -139,6 +148,15 @@ export class AskChannel implements AskBroker {
 export function answerQuestion(id: string, answer: string): boolean {
 	const item = pendingQuestions.get(id);
 	if (!item) return false;
+	item.settle(answer, "answered");
+	return true;
+}
+
+/** 云端模式：只允许问题所属用户回答，防止跨账号按 id 猜答。 */
+export function answerQuestionFor(owner: string, id: string, answer: string): boolean {
+	const item = pendingQuestions.get(id);
+	if (!item) return false;
+	if (item.owner !== owner) return false;
 	item.settle(answer, "answered");
 	return true;
 }

@@ -27,7 +27,7 @@
 | [测试](#测试) | [四种写法](#四种写法) | [模型配置](#模型配置) |
 | [项目结构](#项目结构) | [生成记录](#生成记录) | [安全](#安全) |
 | [License](#license) | [智能体也会提问](#智能体也会提问) | [HTTP API](#http-api) |
-| [Contributing](#contributing) | | [当前限制](#当前限制) |
+| [Contributing](#contributing) | [云端账号版](#云端账号版可选) | [当前限制](#当前限制) |
 
 ## 为什么是素材
 
@@ -81,7 +81,7 @@ pnpm dev        # http://127.0.0.1:8787
 | `pnpm dev` | 启动并监听文件变化 |
 | `pnpm start` | 启动，不监听 |
 | `pnpm typecheck` | 只跑 `tsc --noEmit` |
-| `pnpm test` | `typecheck` + 十三个测试套件（含 Tauri 静态契约），全部离线，不需要 API Key |
+| `pnpm test` | `typecheck` + 十五个测试套件（含账号契约、云端端到端与 Tauri 静态契约），全部离线，不需要 API Key |
 | `pnpm build:browser` | 生成浏览器端产物 `public/browser/**`（多用户部署必做） |
 | `pnpm build:web` | 生成 Tauri 用的完整前端 `dist/web/**` |
 | `pnpm dev:tauri` | 启动 Tauri 桌面窗口（开发模式） |
@@ -108,14 +108,44 @@ STORAGE=idb HOST=0.0.0.0 PORT=8787 node --experimental-strip-types src/server/ma
 
 **代价要说清楚**：数据在浏览器里，意味着换机器、换浏览器、清站点数据就真的没了。
 所以有了「备份与恢复」：导出 `.novel` 包（可加口令 AES-GCM 加密），在另一台机器上导入。
-没有云同步，也不打算做 —— 那等于把数据又搬回服务器。
+这两种本地形态本身不做跨设备同步；要「登录同一个账号、在哪台设备上都接着写」，用下面的云端账号版。
 
 细节见 [`docs/deployment.md`](docs/deployment.md) 与 [`docs/multi-user-browser-local-plan.md`](docs/multi-user-browser-local-plan.md)。
 
+## 云端账号版（可选）
+
+前面两种形态都不需要账号。如果想让**几个人共用一个服务器、各自登录各自的稿子**，可以切到 `STORAGE=users`：
+数据按用户在服务端隔开（`data/users/<用户 id>/`），账号、会话、配额与审计记录存在 `data/cloud.db`（SQLite）。
+
+```bash
+pnpm build:browser
+STORAGE=users HOST=0.0.0.0 DATA_DIR=./data \
+ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD='换成强口令' \
+node --experimental-strip-types src/server/main.ts
+```
+
+或者用仓库自带的 Compose 起（同样要先 `pnpm build:browser`，浏览器产物不进版本库）：
+
+```bash
+cp .env.example .env    # 填 ADMIN_EMAIL / ADMIN_PASSWORD
+docker compose up -d --build
+```
+
+几个要点：
+
+- **必须放在 HTTPS 后面**：口令是明文表单提交的，而且浏览器只在安全上下文里提供 `crypto.subtle`；
+- 默认每人 1 GB 配额：`DEFAULT_QUOTA_MB` 改默认值，管理页可以改单人配额；
+- 注册可以关（`REGISTRATION=closed`），也可以用 `MAX_USERS` 限制总人数，第一个管理员既可以由环境变量播种，也可以让它自动成为第一个注册的人；
+- Web 同源打开会先出登录 / 注册页（本地模式除外）；Tauri 在账户面板「连接云端账号」里填服务器地址；Android 能连 http 的自建地址，但有明文传输风险，正式用请配证书；
+- 备份必须把 `cloud.db` 和 `users/` 一起备，缺一份都恢复不完整。
+
+TLS、nginx/Caddy、systemd、Docker、备份与配额、限流、三端接入的完整步骤见 [`docs/deployment.md`](docs/deployment.md)。
+
 ## Tauri 桌面与移动端
 
-同一份前端也可以装进 Tauri 2 壳：桌面和手机都不启动 Node 服务，业务层继续在前端跑，
-只把「原生能力」交给 Rust —— 流式 LLM 代理、SQLite、系统密钥串、文件对话框。
+同一份前端也可以装进 Tauri 2 壳：桌面和手机都不启动 Node 服务，只把「原生能力」交给 Rust
+——流式 LLM 代理、SQLite、系统密钥串、文件对话框。默认仍是本机模式（业务层在前端跑）；
+在账户面板里「连接云端账号」后，业务请求改走远端 `STORAGE=users` 服务端，三端共享同一份数据。
 
 ```bash
 pnpm build:web      # 生成 dist/web（含 public/browser 模块）

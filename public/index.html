@@ -192,6 +192,8 @@
 		<link rel="stylesheet" href="/style.css" />
 		<!-- 设置页的模型配置区（卡片、档位 chip、批量面板）样式单独成文件，排在 style.css 之后以覆盖它。 -->
 		<link rel="stylesheet" href="/settings.css" />
+		<!-- 账户面板与全屏登录门；排在 settings.css 之后，沿用同一套纸色令牌。 -->
+		<link rel="stylesheet" href="/account.css" />
 	</head>
 	<body>
 		<!-- 首屏骨架：开机要先问过 bootstrap 与 library 两份数据才画得出界面，
@@ -246,6 +248,7 @@
 					<button id="theme-toggle" class="btn btn-quiet theme-toggle icon-btn" title="切换昼夜" aria-label="切换昼夜">
 						<span class="theme-glyph" aria-hidden="true"></span>
 					</button>
+					<button id="account-btn" class="btn btn-quiet hidden" title="账户与云端" aria-haspopup="dialog">账户</button>
 					<button id="open-settings" class="btn btn-quiet" title="模型与供应商">设置</button>
 					<button id="mobile-tools" class="btn btn-quiet icon-btn only-phone" title="更多工具" aria-label="更多工具" aria-haspopup="dialog" aria-controls="mobile-tools-dialog">⋯</button>
 				</div>

@@ -1,0 +1,34 @@
+# 一键起云端账号版：cp .env.example .env 填好再 docker compose up -d --build
+# 浏览器访问 http://<服务器IP>:8787 。正式对外请套 TLS（见 docs/deployment.md），
+# 否则浏览器会因为没有安全上下文而用不了 crypto.subtle。
+services:
+  server:
+    build: .
+    image: novel-studio:latest
+    container_name: novel-studio
+    env_file: .env
+    environment:
+      # 容器里这几项必须固定，否则照抄 .env.example（fs + 127.0.0.1 + ./data）
+      # 会导致端口映射进不来、数据写进容器内部而不是挂载卷。
+      # environment 的优先级高于 env_file，所以这里以容器为准。
+      HOST: "0.0.0.0"
+      STORAGE: "users"
+      DATA_DIR: "/data"
+    ports:
+      - "8787:8787"
+    volumes:
+      # cloud.db 与 users/ 都在这里，备份整个目录即可
+      - ./data:/data
+    restart: unless-stopped
+    healthcheck:
+      # 只探活：能连上并拿到 HTTP 响应就算健康，不要求必须是 200。
+      # （/api/auth/config 是登录页用来判断注册开关的接口）
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8787/api/auth/config').then(() => process.exit(0)).catch(() => process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

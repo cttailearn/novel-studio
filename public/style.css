@@ -103,6 +103,7 @@
 	--r-1: 3px;
 	--r-2: 6px;
 	--r-3: 10px;
+	--r-pill: 999px;
 	--fs-xs: 12px;
 	--fs-sm: 13px;
 	--fs-md: 14.5px;
@@ -4676,7 +4677,7 @@ input[type="search"] {
 	font-size: 13px;
 	font-family: var(--sans);
 	color: var(--ink);
-	box-shadow: inset 0 1px 2px rgba(27, 24, 21, 0.04);
+	box-shadow: inset 0 1px 2px var(--rule-soft);
 }
 input[type="search"]::placeholder { color: var(--ink-4); }
 input[type="search"]:focus {
@@ -4910,7 +4911,7 @@ input[type="search"]:focus {
 }
 :root[data-theme="dark"] .ms-page,
 :root[data-theme="dark"] .front-matter {
-	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 18px 50px -26px rgba(0, 0, 0, 0.95);
+	box-shadow: var(--elev-1);
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -5050,7 +5051,7 @@ input[type="search"]:focus {
 	color: var(--amber);
 }
 :root[data-theme="dark"] .chapter-item.is-on {
-	background: rgba(237, 227, 210, 0.05);
+	background: var(--rule-soft);
 }
 :root[data-theme="dark"] .bible-search,
 :root[data-theme="dark"] #model-select,
@@ -5134,12 +5135,12 @@ input[type="search"]:focus {
 .composer-side .btn-ink {
 	background: var(--cinnabar);
 	border-color: var(--cinnabar);
-	color: #fffdf8;
+	color: var(--on-cinnabar);
 	font-family: var(--serif);
 	letter-spacing: 0.12em;
 }
 .composer-side .btn-ink:hover { background: var(--cinnabar-lt); border-color: var(--cinnabar-lt); }
-:root[data-theme="dark"] .composer-side .btn-ink { color: #1a1512; }
+:root[data-theme="dark"] .composer-side .btn-ink { color: var(--paper-hi); }
 
 /* ══════════════════════════════════════════════════════════════
    改版 v2 · 第四轮（覆盖旧规则：卡片头不换行、空态按钮靠左）
@@ -5182,7 +5183,7 @@ input[type="search"]:focus {
 
 /* 空态虚线框在深色里别太扎眼 */
 :root[data-theme="dark"] .bench-pane .bench-empty {
-	border-color: rgba(237, 227, 210, 0.14);
+	border-color: var(--rule);
 	color: var(--ink-3);
 }
 
@@ -5213,7 +5214,7 @@ input[type="search"]:focus {
 :root[data-theme="dark"] .btn-ink {
 	background: var(--cinnabar);
 	border-color: var(--cinnabar);
-	color: #14120f;
+	color: var(--paper-hi);
 }
 :root[data-theme="dark"] .btn-ink:hover {
 	background: var(--cinnabar-lt);
@@ -5247,7 +5248,7 @@ input[type="search"]:focus {
 }
 #assembly-list > .btn.btn-ink:hover {
 	background: var(--cinnabar);
-	color: #fffdf8;
+	color: var(--on-cinnabar);
 }
 
 /* 供应商行首的状态点：旧样式是一根竖线，像引号，改成圆点 */
@@ -5261,7 +5262,7 @@ input[type="search"]:focus {
 	background: var(--ink-4);
 	box-shadow: none;
 }
-.settings-dialog .provider-row .dot.on { background: var(--moss, #55684a); }
+.settings-dialog .provider-row .dot.on { background: var(--moss); }
 .settings-dialog .add-row .dot { display: none; }
 
 /* 行首那根竖线是旧样式的装饰，和状态点重复，去掉 */
@@ -5631,7 +5632,7 @@ input[type="search"]:focus {
 	.composer.is-typing .composer-side .btn[type="submit"] {
 		background: var(--cinnabar);
 		border-color: var(--cinnabar);
-		color: #fff;
+		color: var(--on-cinnabar);
 	}
 }
 
@@ -5757,10 +5758,10 @@ input[type="search"]:focus {
 #view-manuscript { --ms-pad-x: clamp(20px, 3.4vw, 54px); }
 .ms-page {
 	border-color: var(--rule);
-	box-shadow: 0 1px 2px rgba(27, 24, 21, 0.06), 0 26px 50px -34px rgba(27, 24, 21, 0.55);
+	box-shadow: var(--elev-1);
 }
 :root[data-theme="dark"] .ms-page {
-	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 26px 50px -30px rgba(0, 0, 0, 0.9);
+	box-shadow: var(--elev-2);
 }
 #view-manuscript .actions-center {
 	padding: 8px var(--ms-pad-x) 12px;
@@ -5958,10 +5959,10 @@ input[type="search"]:focus {
 .sheet .btn-ink {
 	background: var(--cinnabar);
 	border-color: var(--cinnabar);
-	color: #fff;
+	color: var(--on-cinnabar);
 }
 .sheet .btn-ink:hover { background: var(--cinnabar-lt); border-color: var(--cinnabar-lt); }
-:root[data-theme="dark"] .sheet .btn-ink { color: #14120f; }
+:root[data-theme="dark"] .sheet .btn-ink { color: var(--paper-hi); }
 
 /* ══ 改版 v2 · 单选与版本行去粉 ═════════════════════════════════════════ */
 
@@ -5980,4 +5981,4 @@ input[type="search"]:focus {
 .history-version { font-family: var(--serif); font-size: 13px; letter-spacing: 0.04em; }
 
 /* 开关圆钮在纸底上要立得住 */
-.web-enable input[type="checkbox"]::after { background: #fff; }
+.web-enable input[type="checkbox"]::after { background: var(--paper-hi); }

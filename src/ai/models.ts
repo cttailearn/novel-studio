@@ -203,7 +203,13 @@ export const BUILTIN_PROVIDERS: readonly BuiltinProviderSpec[] = [
 	{ id: "opencode-go", label: "OpenCode Go", builtinId: "opencode-go", envVars: ["OPENCODE_API_KEY"], group: builtinGroup("opencode-go"), create: opencodeGoProvider },
 ];
 
-interface ModelRuntime {
+/**
+ * 一套「设置 + 密钥 + 已注册模型」的运行时。
+ *
+ * 单机模式用下面的模块级单例；云端账号模式为每个用户各建一套，
+ * 这样用户的 API Key、供应商开关、自定义模型不会互相串。
+ */
+export interface ModelRuntime {
 	models: MutableModels;
 	settings: SettingsStore;
 	credentials: FileCredentialStore;
@@ -215,7 +221,7 @@ let runtime: ModelRuntime | undefined;
 
 /** 首次启动时调用。设置变更后调用 rebuildModels()。 */
 export function initModelRuntime(settings: SettingsStore, credentials: FileCredentialStore): ModelRuntime {
-	runtime = build(settings, credentials);
+	runtime = createModelRuntime(settings, credentials);
 	return runtime;
 }
 
@@ -224,7 +230,8 @@ function getRuntime(): ModelRuntime {
 	return runtime;
 }
 
-function build(settings: SettingsStore, credentials: FileCredentialStore): ModelRuntime {
+/** 按设置与密钥建一套运行时；不碰模块级单例，供多用户模式使用。 */
+export function createModelRuntime(settings: SettingsStore, credentials: FileCredentialStore): ModelRuntime {
 	const models = createModels({ credentials });
 	const failures = new Map<string, string>();
 
@@ -311,9 +318,14 @@ type ModelConfigLike = Pick<ModelConfig, "id" | "name" | "contextWindow" | "maxT
 /** 设置改动后重建注册表。会话持有的 Model 对象需要重建。 */
 export function rebuildModels(): void {
 	if (!runtime) return;
+	runtime = rebuildModelRuntime(runtime);
+}
+
+/** 重建任意一套运行时（多用户模式下每个工作区各用各的）。 */
+export function rebuildModelRuntime(current: ModelRuntime): ModelRuntime {
 	const failures = new Map<string, string>();
-	const models = createModels({ credentials: runtime.credentials });
-	for (const config of runtime.settings.get().providers) {
+	const models = createModels({ credentials: current.credentials });
+	for (const config of current.settings.get().providers) {
 		if (!config.enabled) continue;
 		try {
 			models.setProvider(config.kind === "builtin" ? builtinProviderOf(config) : buildCustomProvider(config));
@@ -321,7 +333,7 @@ export function rebuildModels(): void {
 			failures.set(config.id, error instanceof Error ? error.message : String(error));
 		}
 	}
-	runtime = { ...runtime, models, failures };
+	return { ...current, models, failures };
 }
 
 export function getModels(): MutableModels {
@@ -367,7 +379,12 @@ function summarize(model: Model<Api>, settings: Settings): ModelSummary {
 
 /** 已配置鉴权的厂商所有对话模型。 */
 export async function listAvailableModels(): Promise<ModelSummary[]> {
-	const { models, settings } = getRuntime();
+	return listAvailableModelsFor(getRuntime());
+}
+
+/** 同上，但显式指定运行时（多用户模式用）。 */
+export async function listAvailableModelsFor(rt: ModelRuntime): Promise<ModelSummary[]> {
+	const { models, settings } = rt;
 	const available = await models.getAvailable();
 	const current = settings.get();
 	return available
@@ -376,13 +393,26 @@ export async function listAvailableModels(): Promise<ModelSummary[]> {
 }
 
 export async function listProviderStatus(): Promise<ProviderStatus[]> {
-	const { models, settings, credentials, failures } = getRuntime();
+	return listProviderStatusFor(getRuntime());
+}
+
+/**
+ * 同上，但显式指定运行时与环境变量。
+ *
+ * 云端账号模式必须传 `{}`：服务端自己设的 OPENAI_API_KEY 等只属于部署者，
+ * 不应让任意用户白用，状态里也不能暗示"你已经配置过了"。
+ */
+export async function listProviderStatusFor(
+	rt: ModelRuntime,
+	env: Record<string, string | undefined> = process.env,
+): Promise<ProviderStatus[]> {
+	const { models, settings, credentials, failures } = rt;
 	const out: ProviderStatus[] = [];
 
 	for (const config of settings.get().providers) {
 		const spec = config.kind === "builtin" ? BUILTIN_PROVIDERS.find((item) => item.builtinId === config.builtinId) : undefined;
 		const stored = credentials.hasKey(config.id);
-		const fromEnv = spec?.envVars.some((name) => Boolean(process.env[name])) ?? false;
+		const fromEnv = spec?.envVars.some((name) => Boolean(env[name])) ?? false;
 		const registered = models.getProvider(config.id) !== undefined;
 
 		out.push({
@@ -411,10 +441,15 @@ export async function listProviderStatus(): Promise<ProviderStatus[]> {
  * - "modelId" 或 "modelId@provider"：在已配置的厂商中搜索
  */
 export async function resolveModel(reference: string): Promise<Model<Api>> {
+	return resolveModelFor(getRuntime(), reference);
+}
+
+/** 同上，但显式指定运行时（多用户模式用）。 */
+export async function resolveModelFor(rt: ModelRuntime, reference: string): Promise<Model<Api>> {
 	const ref = reference.trim();
 	if (!ref) throw new ModelResolutionError("未指定模型");
 
-	const { models } = getRuntime();
+	const { models } = rt;
 	// 只按第一个斜杠切分：模型 id 本身可以含斜杠（OpenRouter 的 "vendor/model"），
 	// 早先的 ref.split("/") 会把三段的 id 拆成 provider=vendor、id=model 并静默失配，
 	// 最后落到模糊匹配，命中一个"看起来差不多"的模型。

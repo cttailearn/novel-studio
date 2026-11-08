@@ -286,6 +286,20 @@ export interface ApiRouterDeps {
 	novelStore?: NovelSourceStorePort;
 	/** 作者自建的素材种类表。 */
 	kindStore: KindsStorePort;
+	/**
+	 * 素材种类变更后刷新「哪些 kind 有效」的登记表。
+	 *
+	 * 单机模式不传，退回模块级的 registerCustomKinds(kindStore.list())；
+	 * 云端模式由工作区传入，把「所有活跃用户的自定义种类并集」登记进去。
+	 */
+	refreshKinds?: () => void;
+	/**
+	 * 当前用户可见的自定义 kind 集合。
+	 *
+	 * 云端模式必须传：种类目录是全局一份的话，A 用户能在界面上看到
+	 * B 用户自建的分类名。内置种类不受此限制。
+	 */
+	allowedKinds?: () => ReadonlySet<string>;
 	/** 应用设置。 */
 	settingsStore: SettingsStorePort;
 	/** 厂商密钥。 */
@@ -944,12 +958,24 @@ function kindsView(ctx: RouterContext) {
 	for (const project of ctx.deps.store.list()) {
 		for (const material of project.materials) bump(material.kind);
 	}
-	const catalog = kindOptions().map((option) => ({ ...option, count: counts.get(option.kind) ?? 0 }));
+	const allowed = ctx.deps.allowedKinds?.();
+	const catalog = kindOptions()
+		.filter((option) => option.builtin || !allowed || allowed.has(option.kind))
+		.map((option) => ({ ...option, count: counts.get(option.kind) ?? 0 }));
 	const known = new Set(catalog.map((option) => option.kind));
 	for (const [kind, count] of counts) {
-		if (!known.has(kind)) catalog.push({ kind, label: kind, builtin: false, count });
+		if (known.has(kind)) continue;
+		// 云端模式下，别人自建的 kind 即使本账号的库里有同名料，也不该出现在目录里。
+		if (allowed && !allowed.has(kind)) continue;
+		catalog.push({ kind, label: kind, builtin: false, count });
 	}
 	return catalog;
+}
+
+/** 刷新 kind 注册表：单机模式落到模块级表，云端模式交给工作区聚合。 */
+function refreshKindsOf(ctx: RouterContext): void {
+	if (ctx.deps.refreshKinds) ctx.deps.refreshKinds();
+	else registerCustomKinds(ctx.deps.kindStore.list());
 }
 
 /** 素材库视图：条目 + 取用情况 + 种类表。 */
@@ -2154,7 +2180,7 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 		const result = kindStore.add(String(body.label ?? ""));
 		if (!result.ok) return json(sink, result.status, { error: result.error });
 		// 登记进全局：素材校验、界面分组、智能体的工具 schema 都问这张表。
-		registerCustomKinds(kindStore.list());
+		refreshKindsOf(ctx);
 		return json(sink, 201, { kind: result.value.id, label: result.value.label, kinds: kindsView(ctx) });
 	}
 
@@ -2188,14 +2214,14 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 					}
 				});
 			}
-			registerCustomKinds(kindStore.list());
+			refreshKindsOf(ctx);
 			return json(sink, 200, { kinds: kindsView(ctx), moved });
 		}
 
 		const body = await readJsonBody<{ label?: string }>(req, 200_000);
 		const renamed = kindStore.rename(kindId, String(body.label ?? ""));
 		if (!renamed.ok) return json(sink, renamed.status, { error: renamed.error });
-		registerCustomKinds(kindStore.list());
+		refreshKindsOf(ctx);
 		return json(sink, 200, { kind: renamed.value.id, label: renamed.value.label, kinds: kindsView(ctx) });
 	}
 

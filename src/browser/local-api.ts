@@ -79,6 +79,20 @@ function browserConfig(): AppConfig {
 			...RELAY_DEFAULTS_FOR_BROWSER,
 			allowedOrigin: origin,
 		},
+		// 浏览器本地模式不跑账号系统；这些值只为满足 AppConfig 的形状。
+		auth: {
+			registration: "closed",
+			defaultQuotaBytes: 0,
+			maxUsers: 0,
+			sessionDays: 30,
+			cookieSecure: "never",
+			trustProxy: false,
+			adminEmail: "",
+			adminPassword: "",
+			firstUserAdmin: false,
+			minPasswordLength: 8,
+			appName: "墨耕",
+		},
 	};
 }
 

@@ -1734,12 +1734,14 @@ try {
 			appSource.includes("noteReconnected"),
 	);
 	// 服务进程是"在线"本身：一次半路断线的写错误不该把它带走。
+	// 请求/响应的接线搬到了 app.ts，两处合起来看这一层防护是否还在。
 	const mainSource = readFileSync(path.join(root, "src", "server", "main.ts"), "utf8");
+	const serverAppSource = readFileSync(path.join(root, "src", "server", "app.ts"), "utf8");
 	check(
 		"服务端兜住未捕获异常与断线写错误",
 		mainSource.includes('process.on("uncaughtException"') &&
 			mainSource.includes('process.on("unhandledRejection"') &&
-			mainSource.includes('res.on("error"'),
+			(mainSource.includes('res.on("error"') || serverAppSource.includes('res.on("error"')),
 	);
 	// 立一章：章节是装料的落点，没有章就看不了也装不了料。
 	check("左卷有立章入口", indexHtml.includes('id="add-chapter"'));
@@ -1822,9 +1824,16 @@ try {
 	check("尊重减少动态效果", styleSource.includes("prefers-reduced-motion"));
 
 	// 令牌块之外不能再有硬编码颜色：漏一处，暗色下那一处就还是亮色的。
-	const lightTokens = styleSource.match(/^:root \{([\s\S]*?)^\}/m)?.[1] ?? "";
-	const darkTokens = styleSource.match(/^:root\[data-theme="dark"\] \{([\s\S]*?)^\}/m)?.[1] ?? "";
-	const outside = styleSource.split(lightTokens).join("").split(darkTokens).join("");
+	// 主题块不止一处（后续改版会再开一块只覆盖少数令牌），必须全局收集；
+	// 注释里的色号只是说明文字，不算样式声明。
+	const styleNoComments = styleSource.replace(/\/\*[\s\S]*?\*\//g, "");
+	const tokenBlocks = (pattern: RegExp) => [...styleNoComments.matchAll(pattern)].map((m) => m[0]);
+	const lightBlocks = tokenBlocks(/^:root \{[\s\S]*?^\}/gm);
+	const darkBlocks = tokenBlocks(/^:root\[data-theme="dark"\] \{[\s\S]*?^\}/gm);
+	let outside = styleNoComments;
+	for (const block of [...lightBlocks, ...darkBlocks].sort((a, b) => b.length - a.length)) {
+		outside = outside.split(block).join("");
+	}
 	const hardcoded = outside.match(/#[0-9a-fA-F]{3,8}\b|rgba?\(/g) ?? [];
 	check("令牌块之外没有硬编码颜色", hardcoded.length === 0, hardcoded.slice(0, 4).join(" "));
 	// 引用的令牌都要有定义，否则会解析失败。
@@ -1835,8 +1844,10 @@ try {
 		.filter((name) => !declared.has(name));
 	check("引用的令牌都有定义", undefinedTokens.length === 0, undefinedTokens.join(" "));
 	// 两套主题要覆盖同一组「会变色的」令牌
-	const lightNames = new Set([...lightTokens.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1]!));
-	const darkNames = new Set([...darkTokens.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1]!));
+	const nameSet = (blocks: string[]) =>
+		new Set(blocks.flatMap((block) => [...block.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1]!)));
+	const lightNames = nameSet(lightBlocks);
+	const darkNames = nameSet(darkBlocks);
 	const themeInvariant = new Set([
 		"--serif", "--kai", "--sans", "--mono", "--song", "--noise", "--wash",
 		// 排版三件套（字号/行距/版心）是全局设置，不随昼夜变化，故不要求在暗色块里重复。
@@ -1845,8 +1856,13 @@ try {
 		"--safe-t", "--safe-b", "--safe-l", "--safe-r", "--tap",
 		// 排版阶梯（间距/圆角/字号）与墨晕曲线是尺度，不是颜色：换昼夜不该改版心与节奏。
 		"--sp-1", "--sp-2", "--sp-3", "--sp-4", "--sp-5", "--sp-6",
-		"--r-1", "--r-2", "--r-3",
+		"--r-1", "--r-2", "--r-3", "--r-pill",
 		"--fs-xs", "--fs-sm", "--fs-md", "--fs-lg", "--fs-xl",
+		// 版式阶梯与图标尺寸同样是尺度，不随昼夜变化；暗色块只覆盖颜色。
+		"--fs-2xl", "--fs-3xl", "--fs-title", "--fs-item", "--fs-body", "--fs-label", "--lh-body", "--track-label",
+		"--i-search", "--i-settings", "--i-more", "--i-plus", "--i-export", "--i-backup", "--i-edit",
+		"--i-trash", "--i-open", "--i-home", "--i-book", "--i-layers", "--i-pen", "--i-close",
+		"--i-chapter", "--i", "--i-send", "--i-upload",
 		"--brush", "--tap-lg",
 	]);
 	const uncovered = [...lightNames].filter((n) => !darkNames.has(n) && !themeInvariant.has(n));

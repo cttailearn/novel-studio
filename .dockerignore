@@ -1,0 +1,26 @@
+# docker build 的上下文里不需要的东西，给镜像瘦身、也避免把本机数据带进去。
+node_modules
+data
+dist
+coverage
+
+.git
+.gitignore
+.github
+.vscode
+.idea
+
+# 桌面/安卓构建产物：体积大，服务端用不到
+src-tauri/target
+src-tauri/gen
+src-tauri/icons
+
+# 运行时产生的本地数据、日志、临时目录
+*.log
+*.tgz
+*.tmp
+.dsh-tmp
+
+# 密钥不进镜像：容器用 docker compose 的 env_file 或 -e 注入
+.env
+.env.*

@@ -2,6 +2,33 @@
 
 本项目的版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.3.0] - 2026-11-08
+
+云端账号版：服务端可以部署到服务器，Web / Tauri 桌面 / Android 三端登录同一账号读写同一份数据。
+
+### 新增
+
+- `STORAGE=users` 多租户模式：账号、会话、审计与配额存 `data/cloud.db`（`node:sqlite`），
+  每个用户的作品、素材、设定、记录隔离在 `data/users/<用户 id>/`，同一账号换设备登录即同步。
+- 登录 / 注册 / 改密 / 昵称 / 设备会话管理；注册可关（`REGISTRATION=closed`），
+  首个管理员可由 `ADMIN_EMAIL` / `ADMIN_PASSWORD` 播种，或由第一个注册用户担任。
+- 云端容量管理：默认每人 1 GB，管理员可逐个改配额 / 停用 / 重置口令 / 删除账号；
+  超配额写入返回 `507`，删除动作始终放行；服务端按用户目录统计用量并给管理页出总览与审计。
+- Web 同源 Cookie 与原生 Bearer 双认证；Tauri/手机外壳跨源直连的 CORS 预检与来源白名单。
+- Web 端登录门与账户中心（配额进度、设备会话、改密、管理员用户/审计页签）；
+  Tauri 本地模式提供「连接云端账号」，连接后业务请求走云端。
+- `Dockerfile` / `docker-compose.yml` / `.env.example` 与部署文档的云端章节。
+
+### 保留
+
+- `STORAGE=fs` 单机版与 `STORAGE=idb` 纯浏览器版行为不变，不做云同步；三种模式共存。
+
+### 测试
+
+- 新增 `pnpm test:auth`（账号模块 92 项）与 `pnpm test:e2e`（真实 HTTP 管线 40 项）。
+- 主题令牌检查改为全局收集所有 `:root` / `:root[data-theme="dark"]` 块，样式表补齐
+  `--r-pill` 并把散落的色号收敛到令牌；`pnpm test` 全绿。
+
 ## [0.2.1] - 2026-11-06
 
 Android 版可以在应用内下载并安装更新了；桌面端与网页版的更新方式不变。
