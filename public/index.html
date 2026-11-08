@@ -782,7 +782,6 @@
 				<p id="provider-form-hint" class="form-hint"></p>
 				<label>API Key<input name="apiKey" type="password" placeholder="留空则稍后在详情里补" /></label>
 				<label class="checkline"><input name="noAuth" type="checkbox" />该服务不需要鉴权（本地 / 自建）</label>
-				<p class="form-hint">Key 只存本机 data/credentials.json，优先于环境变量。</p>
 				<p id="provider-form-error" class="form-error"></p>
 				<div class="dialog-actions">
 					<button type="button" id="provider-form-cancel" class="btn btn-quiet">作罢</button>
@@ -806,10 +805,9 @@
 				<span id="settings-save-status" class="settings-save-status" role="status" aria-live="polite"></span>
 			</div>
 			<div id="settings-models-panel" role="tabpanel" aria-labelledby="settings-tab-models">
-			<!-- 数据存在哪、占多少、怎么备份：多用户部署下最容易被误解的一件事，放在设置第一屏。 -->
 			<div id="storage-summary" class="storage-summary" hidden></div>
 			<div class="settings-defaults">
-				<div class="defaults-caption"><span>默认创作模型</span><small>新对话使用；已有对话可在顶栏另选</small></div>
+				<div class="defaults-caption"><span>默认创作模型</span></div>
 				<div class="defaults-fields">
 					<label><span>模型</span><select id="settings-default-model" aria-label="默认创作模型"></select></label>
 					<label><span>思考</span><select id="settings-default-thinking" aria-label="默认思考档位"></select></label>
@@ -916,14 +914,13 @@
 
 		<!--
 			备份与恢复。
-			多用户模式下所有数据都在这个浏览器里，服务端一份不留 —— 好处是不用信任服务器，
-			代价是换机器、换浏览器、清一次站点数据就真的没了。所以这个出口必须看得见。
+			本地模式（浏览器 / Tauri / fs 单机）用于换设备、清数据前的逃生出口；
+			云端账号模式下数据已经在服务器，这里仍保留定期加密备份的出口。
 		-->
 		<dialog id="backup-dialog" class="sheet sheet-form export-dialog">
 			<form id="backup-form">
 				<header class="form-head">
 					<h3>备份与恢复</h3>
-					<p class="form-hint">作品、素材、设置都只存在这个浏览器里；服务端不留副本，所以换设备之前请先导出一份。</p>
 				</header>
 				<div class="form-body">
 					<div class="field">

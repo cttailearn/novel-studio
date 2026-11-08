@@ -243,34 +243,20 @@ function renderReadySummary() {
 }
 
 /**
- * 数据与密钥存哪、占多少、怎么带走。
- * 多用户部署（STORAGE=idb）下服务端不保存任何作品和密钥，这件事只写在部署文档里没人看得见，
- * 所以直接摆在设置第一屏：模式不同文案也不同，别让单机自用的人误以为数据在云端。
+ * 浏览器形态下显示本地占用与备份入口；其它形态没有可展示的本地存储统计。
  */
 function renderStorageSummary() {
 	const box = $("storage-summary");
 	const subtitle = $("settings-subtitle");
-	const browserMode = isBrowserStorage();
-	const tauriShell = isTauriShell();
-	if (subtitle) {
-		subtitle.textContent = tauriShell
-			? "模型、供应商与联网资料 · 数据与密钥只存在这台设备上"
-			: browserMode
-				? "模型、供应商与联网资料 · 数据与密钥只存在你的浏览器里"
-				: "模型、供应商与联网资料 · 所有密钥仅保存在本机";
-	}
+	if (subtitle) subtitle.textContent = "模型、供应商与联网资料";
 	if (!box) return;
+	if (storageMode() !== "browser") {
+		box.hidden = true;
+		box.replaceChildren();
+		return;
+	}
 	box.hidden = false;
 	box.replaceChildren();
-	box.append(el("span", "storage-title", tauriShell
-		? "数据与密钥保存在本机应用数据目录"
-		: browserMode ? "数据与密钥只在这台设备的浏览器里" : "数据与密钥保存在本机 data/ 目录"));
-	box.append(el("span", "storage-detail", tauriShell
-		? "不会上传到服务器；卸载应用或清除应用数据后会丢，建议定期导出备份。"
-		: browserMode
-			? "服务器不保存作品和密钥；换设备或清理浏览器数据后会丢，建议定期导出备份。"
-			: "不会上传到服务器。"));
-	if (!browserMode) return;
 
 	const usage = el("span", "storage-usage", "正在统计占用…");
 	const actions = el("span", "storage-actions");
@@ -285,7 +271,7 @@ function renderStorageSummary() {
 	actions.append(backup);
 
 	const storage = navigator.storage;
-	if (!tauriShell && typeof storage?.persist === "function") {
+	if (typeof storage?.persist === "function") {
 		const pin = el("button", "btn btn-quiet btn-sm", "固化存储");
 		pin.type = "button";
 		pin.title = "请浏览器尽量别因为空间紧张清掉本站数据";
@@ -303,10 +289,6 @@ function renderStorageSummary() {
 		actions.append(pin);
 	}
 
-	if (tauriShell) {
-		box.append(actions);
-		return;
-	}
 	box.append(usage, actions);
 	void refreshStorageUsage(usage);
 }
@@ -801,34 +783,32 @@ function hintLine(short, full) {
 	return node;
 }
 
-/**
- * 这个部署形态下密钥存在哪。
- *
- * 同一份界面既跑在「服务端 + data/credentials.json」的单机模式，也跑在
- * 「数据全在浏览器」的多用户模式，提示文案不能写死 —— 否则用户会以为
- * 密钥被传到服务器上了（恰恰相反）。
- */
+/** 浏览器本地形态标记：数据只在这台设备上，才显示本地占用与备份入口。 */
 function isBrowserStorage() {
 	return window.__DSH_LOCAL_MODE__ === true || window.__NOVEL_LOCAL_MODE__ === true;
+}
+
+/**
+ * 是否在使用云端账号形态：Web 由服务端注入 __NOVEL_MULTIUSER__，
+ * Tauri 连远端时 boot.js 会挂 __NOVEL_CLOUD__。
+ * 本地标记优先，因为那种情况下界面不该按云端处理。
+ */
+function isCloudStorage() {
+	if (window.__NOVEL_MULTIUSER__ === true) return true;
+	const cloud = window.__NOVEL_CLOUD__;
+	return Boolean(cloud && typeof cloud.base === "string" && cloud.base);
+}
+
+function storageMode() {
+	if (isBrowserStorage()) return "browser";
+	if (isCloudStorage()) return "cloud";
+	if (isTauriShell()) return "tauri";
+	return "server";
 }
 
 /** Android/桌面壳里也复用了 IndexedDB 接口，但数据实际落在应用自己的 SQLite 里。 */
 function isTauriShell() {
 	return Boolean(window.__TAURI__ || window.__TAURI_INTERNALS__);
-}
-
-function keyStorageShort() {
-	if (isTauriShell()) return "仅存本机应用数据";
-	return isBrowserStorage() ? "仅存这台设备的浏览器里" : "仅存本机";
-}
-
-function keyStorageFull() {
-	if (isTauriShell()) {
-		return "仅保存在本机应用数据目录（SQLite），不会上传到服务器；卸载应用或清除应用数据后需要重新填写。";
-	}
-	return isBrowserStorage()
-		? "仅保存在这台设备的浏览器里（IndexedDB），不会上传到服务器；换设备或清理浏览器数据后需要重新填写。"
-		: "仅保存在本机 data/credentials.json，不会上传到服务器。";
 }
 
 /**
@@ -883,22 +863,45 @@ function siteAddressOf(baseUrl) {
 	}
 }
 
+/** 中转入口：cttai 中转显示成「查看cttai中转」，其它接入点保留原地址。 */
+function relayLink(baseUrl) {
+	const href = siteAddressOf(baseUrl);
+	let label = href;
+	try {
+		if (new URL(baseUrl).hostname.includes("cttai")) label = "查看cttai中转";
+	} catch {
+		// 地址不合法就照原样显示。
+	}
+	const link = document.createElement("a");
+	link.href = href;
+	link.target = "_blank";
+	link.rel = "noopener noreferrer";
+	link.textContent = label;
+	return link;
+}
+
 function renderBuiltinDetail(box, provider, status) {
 	box.append(el("h4", "", provider.label));
 
-	// 内置供应商只露一句有用的：有接入点的显示站点地址，没有的显示环境变量名。
-	// 早先那段「内置供应商（当前 N 个模型）：接入点由应用维护……」全是交代给
-	// 维护者的话，作者看一眼地址就够了，模型数量下面卡片里也有。
-	const subline = status?.error
-		? `注册失败：${status.error}`
-		: provider.modelsSource === "upstream"
-			? `上游实时清单（${status?.modelCount ?? 0} 个）：模型参数可以自行修改` +
-				(provider.modelsFetchedAt ? ` · ${new Date(provider.modelsFetchedAt).toLocaleString("zh-CN")} 拉取` : "") +
-				` · 接入点：${status?.baseUrl ?? "未配置"}`
-			: status?.baseUrl
-				? siteAddressOf(status.baseUrl)
-				: `环境变量：${(status?.envVars ?? []).join("、") || "无"}`;
-	if (subline) box.append(el("p", "sub", subline));
+	// 内置供应商只露一句有用的：有接入点的显示中转入口，没有的显示环境变量名。
+	const sub = el("p", "sub");
+	if (status?.error) {
+		sub.append(document.createTextNode(`注册失败：${status.error}`));
+	} else if (provider.modelsSource === "upstream") {
+		sub.append(
+			document.createTextNode(
+				`上游实时清单（${status?.modelCount ?? 0} 个）：模型参数可以自行修改` +
+					(provider.modelsFetchedAt ? ` · ${new Date(provider.modelsFetchedAt).toLocaleString("zh-CN")} 拉取` : "") +
+					" · 接入点：",
+			),
+		);
+		sub.append(status?.baseUrl ? relayLink(status.baseUrl) : document.createTextNode("未配置"));
+	} else if (status?.baseUrl) {
+		sub.append(relayLink(status.baseUrl));
+	} else {
+		sub.append(document.createTextNode(`环境变量：${(status?.envVars ?? []).join("、") || "无"}`));
+	}
+	if (sub.childNodes.length) box.append(sub);
 
 	if (status?.error) box.append(el("div", "notice err", status.error));
 
@@ -906,7 +909,7 @@ function renderBuiltinDetail(box, provider, status) {
 	keyInput.type = "password";
 	keyInput.autocomplete = "off";
 	keyInput.placeholder =
-		status?.authSource === "app" ? `已保存 ${status.maskedKey}，留空则不修改` : "粘贴 API Key，覆盖环境变量";
+		status?.authSource === "app" ? `已保存 ${status.maskedKey}，留空则不修改` : "粘贴 API Key";
 	const reveal = document.createElement("button");
 	reveal.type = "button";
 	reveal.className = "btn btn-quiet btn-sm";
@@ -926,7 +929,7 @@ function renderBuiltinDetail(box, provider, status) {
 		field(
 			"API Key",
 			keyRow,
-			status?.authSource === "env" ? `当前来自环境变量 ${status.envVars[0]}` : keyStorageFull(),
+			status?.authSource === "env" ? `当前来自环境变量 ${status.envVars[0]}` : "",
 		),
 	);
 
@@ -1054,8 +1057,8 @@ function renderCustomDetail(box, provider, status) {
 			"API Key",
 			keyRow,
 			hintLine(
-				`${keyStorageShort()}；勾选下方开关后可留空`,
-				`${keyStorageFull()}勾选「该服务不需要鉴权」后，此字段可留空。`,
+				"勾选下方开关后可留空",
+				"勾选「该服务不需要鉴权」后，此字段可留空。",
 			),
 		),
 	);

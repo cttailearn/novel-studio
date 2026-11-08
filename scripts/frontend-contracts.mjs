@@ -120,8 +120,13 @@ assert.match(html, /id="settings-about-panel"[^>]*role="tabpanel"[^>]*aria-label
 assert.match(settings, /from "\.\/update\.js"/);
 assert.match(settings, /\["models", "web", "about"\]/);
 assert.match(settings, /function isTauriShell\(\)/);
-assert.match(settings, /数据与密钥保存在本机应用数据目录/);
-assert.match(settings, /仅保存在本机应用数据目录（SQLite）/);
+assert.ok(!settings.includes("数据与密钥保存在本机应用数据目录"));
+assert.ok(!settings.includes("data/credentials.json"));
+assert.ok(!html.includes("provider-key-storage-hint"));
+assert.ok(!html.includes("覆盖环境变量"));
+assert.ok(!html.includes("新对话使用"));
+assert.match(settings, /function relayLink\(baseUrl\)/);
+assert.match(settings, /查看cttai中转/);
 assert.match(update, /const AUTO_CHECK_KEY = "mogeng\.update\.auto-check"/);
 assert.match(update, /invoke\("update_check"\)/);
 assert.match(update, /invoke\("update_install"\)/);
