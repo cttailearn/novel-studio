@@ -2,7 +2,7 @@
 
 > 本地优先的中文 AI 长篇小说创作台：设定官备料，执笔者成文 —— 写进正文的每个事实，都先落在素材里。
 
-![Node](https://img.shields.io/badge/Node-22.6%2B-3c873a) ![pnpm](https://img.shields.io/badge/pnpm-10-f69220) ![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178c6) ![License](https://img.shields.io/badge/License-MIT-2f6f4e) ![Local-first](https://img.shields.io/badge/Local--first-data%2F-6b6b6b)
+![Node](https://img.shields.io/badge/Node-22.13%2B-3c873a) ![pnpm](https://img.shields.io/badge/pnpm-10-f69220) ![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178c6) ![License](https://img.shields.io/badge/License-MIT-2f6f4e) ![Local-first](https://img.shields.io/badge/Local--first-data%2F-6b6b6b)
 
 单机运行，工程、正文、素材与记录都在本机 `data/`；只有生成时发给模型的那部分上下文会离开本机。
 
@@ -10,13 +10,14 @@
 
 ## 下载
 
-当前版本 **v0.2.1**（Android 支持应用内下载并安装更新）：
+当前版本 **v0.3.0**（云端账号版：服务端可以部署到服务器，Web / 桌面 / Android 三端登录同一账号读写同一份数据）：
 
-- [Windows x64 安装版](https://github.com/cttailearn/novel-studio/releases/download/v0.2.1/novel-studio-v0.2.1-windows-x64-setup.exe)：NSIS 安装包，支持应用内检查与安装更新；未做 Authenticode 签名，SmartScreen 可能提示。
-- [Android arm64 APK](https://github.com/cttailearn/novel-studio/releases/download/v0.2.1/novel-studio-v0.2.1-android-arm64.apk)：Android 7.0+；release 优化版，使用测试签名，需允许安装未知来源应用；可在应用内「设置 → 关于」直接下载安装。
-- [发布说明](https://github.com/cttailearn/novel-studio/releases/tag/v0.2.1) · [更新日志](CHANGELOG.zh.md)
+- [Windows x64 安装版](https://github.com/cttailearn/novel-studio/releases/download/v0.3.0/novel-studio-v0.3.0-windows-x64-setup.exe)：NSIS 安装包，支持应用内检查与安装更新；未做 Authenticode 签名，SmartScreen 可能提示。
+- [Android arm64 APK](https://github.com/cttailearn/novel-studio/releases/download/v0.3.0/novel-studio-v0.3.0-android-arm64.apk)：Android 7.0+；release 优化版，使用测试签名，需允许安装未知来源应用；可在应用内「设置 → 关于」直接下载安装。
+- [发布说明](https://github.com/cttailearn/novel-studio/releases/tag/v0.3.0) · [更新日志](CHANGELOG.zh.md)
 
-> 从这一版起，Windows 可在「设置 → 关于」手动检查更新，或开启启动时自动检查。Android 版可在应用内下载安装包，最后由系统安装器确认安装。
+> Windows 可在「设置 → 关于」手动检查更新，或开启启动时自动检查。Android 版可在应用内下载安装包，最后由系统安装器确认安装。
+> 想让同一账号在多台设备间同步作品，见 [云端账号版](#云端账号版可选)。
 
 ## 目录
 
@@ -65,7 +66,9 @@
 
 ## 快速开始
 
-需要 Node.js ≥ 22.6（用 `--experimental-strip-types` 直接跑 TS）与 pnpm 10。
+需要 Node.js ≥ 22.13（用 `--experimental-strip-types` 直接跑 TS）与 pnpm 10。
+
+> 为什么是 22.13 而不是 22.6：服务端用到 `node:sqlite`（云端账号版的 `data/cloud.db`），这个模块在 Node 22.13.0 才解除实验标志。更低版本的 Node 会在 `require` 时直接报 `Cannot find module 'node:sqlite'`。
 
 ```bash
 pnpm install
@@ -74,7 +77,7 @@ pnpm dev        # http://127.0.0.1:8787
 
 首次打开：右上角「设置」→ 选供应商 → 填 API Key → 选模型；回案头「＋ 另起一卷」即可开写。密钥只存本机 `data/credentials.json`，界面只显示脱敏值。
 
-可选环境变量：`PORT`（默认 8787）、`HOST`（默认 127.0.0.1）、`DATA_DIR`（默认 `./data`）、`DEFAULT_MODEL`、`DEFAULT_THINKING_LEVEL`。
+可选环境变量（完整列表见 [`.env.example`](.env.example) 与 [部署文档](docs/deployment.md)）：`PORT`（默认 8787）、`HOST`（默认 127.0.0.1；`STORAGE=users` 时默认 0.0.0.0）、`DATA_DIR`（默认 `./data`）、`STORAGE`（`fs` | `idb` | `users`）、`DEFAULT_MODEL`、`DEFAULT_THINKING_LEVEL`；云端账号版另有 `REGISTRATION`、`DEFAULT_QUOTA_MB`、`MAX_USERS`、`SESSION_DAYS`、`ADMIN_EMAIL`、`ADMIN_PASSWORD`、`TRUST_PROXY` 等。
 
 | 命令 | 作用 |
 |:--|:--|
@@ -110,7 +113,7 @@ STORAGE=idb HOST=0.0.0.0 PORT=8787 node --experimental-strip-types src/server/ma
 所以有了「备份与恢复」：导出 `.novel` 包（可加口令 AES-GCM 加密），在另一台机器上导入。
 这两种本地形态本身不做跨设备同步；要「登录同一个账号、在哪台设备上都接着写」，用下面的云端账号版。
 
-细节见 [`docs/deployment.md`](docs/deployment.md) 与 [`docs/multi-user-browser-local-plan.md`](docs/multi-user-browser-local-plan.md)。
+细节见 [`docs/deployment.md`](docs/deployment.md)、[`docs/multi-user-browser-local-plan.md`](docs/multi-user-browser-local-plan.md) 与 [`docs/cloud-saas-plan.md`](docs/cloud-saas-plan.md)。
 
 ## 云端账号版（可选）
 
@@ -320,7 +323,7 @@ Tauri 里的模型请求走 Rust `proxy_stream`：只允许 HTTPS（本机 HTTP 
 | 自定义供应商 | Base URL + 接口格式 + Key；格式支持 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages、Google Generative AI（Gemini） |
 | 本地服务 | 不需要鉴权的可勾选（如 Ollama） |
 
-「拉取模型」使用供应商的 Base URL 与已保存的 Key 请求真实模型列表；内置和自定义供应商都可以拉取。成功后会显示「上游实时清单」，且不会混入内置目录里的旧模型；可以点「恢复内置目录」退回初始清单。多用户模式下请求经中继转发，密钥仍只在浏览器中保存。拉取只证明接口通、鉴权过，不代表该网关原生支持生成；能力以实际调用为准。
+「拉取模型」使用供应商的 Base URL 与已保存的 Key 请求真实模型列表；内置和自定义供应商都可以拉取。成功后会显示「上游实时清单」，且不会混入内置目录里的旧模型；可以点「恢复内置目录」退回初始清单。多用户模式下请求经中继转发，浏览器版（`STORAGE=idb`）密钥仍只在浏览器中保存；云端账号版（`STORAGE=users`）的密钥随账号存在服务端的 `data/users/<用户 id>/credentials.json`。拉取只证明接口通、鉴权过，不代表该网关原生支持生成；能力以实际调用为准。
 
 <details>
 <summary><b>额外凭据</b></summary>
@@ -420,13 +423,13 @@ src/
   browser/     浏览器侧装配：local-api（把路由架在 IndexedDB 上）、模型门面、shim
 public/        原生 JS 单页应用（无构建步骤）+ boot.js + browser/ 构建产物
 scripts/       冒烟、配置、存储、服务、循环、IDB、打包、本地路由、中继、浏览器构建
-docs/          规模方案（scaling-plan.md）、多用户改造方案、部署指南
+docs/          规模方案（scaling-plan.md）、多用户改造方案、云端账号版方案（cloud-saas-plan.md）、部署指南
 data/          运行时数据（git 忽略）：工程、正文、密钥、记录
 ```
 
 ## 测试
 
-类型检查与十二组离线回归：`test:config`（供应商与设置）、`test:tools`（工具契约与素材逻辑）、`test:context`（对话配对与上下文预算）、`test:storage`（分层存储、失败恢复与回收站）、`test:server`（真进程 HTTP、互斥与幂等）、`test:loop`（用 `pi-ai` 的 `fauxProvider` 跑完整素材链与组装链）、`test:frontend`（前端静态契约，不能代替真实浏览器交互）、`test:idb`（IndexedDB 工程存储与其余五个存储）、`test:package`（`.novel` 包的导出导入与口令加密）、`test:local`（把真路由架在 IndexedDB 上跑，含"关掉重开数据还在"）、`test:relay`（中继的 SSRF、限流、不留痕）、`test:tauri`（Tauri 配置、Rust 命令、SQLite/密钥串/文件桥与 CSP 静态契约）。
+类型检查与十五组离线回归：`test:config`（供应商与设置）、`test:tools`（工具契约与素材逻辑）、`test:novel`（小说拆解）、`test:context`（对话配对与上下文预算）、`test:storage`（分层存储、失败恢复与回收站）、`test:server`（真进程 HTTP、互斥与幂等）、`test:auth`（账号模块：注册登录、会话、配额、管理员保护）、`test:e2e`（真实 HTTP 管线上的云端端到端）、`test:loop`（用 `pi-ai` 的 `fauxProvider` 跑完整素材链与组装链）、`test:frontend`（前端静态契约，不能代替真实浏览器交互）、`test:idb`（IndexedDB 工程存储与其余五个存储）、`test:package`（`.novel` 包的导出导入与口令加密）、`test:local`（把真路由架在 IndexedDB 上跑，含"关掉重开数据还在"）、`test:relay`（中继的 SSRF、限流、不留痕）、`test:tauri`（Tauri 配置、Rust 命令、SQLite/密钥串/文件桥与 CSP 静态契约）。
 
 另有两条不进 `pnpm test` 的：`test:browser`（浏览器产物契约，其中"真实浏览器冒烟"需要本机有能启动的 Chrome）与 `build:browser`（生成产物）。
 
@@ -449,7 +452,7 @@ data/          运行时数据（git 忽略）：工程、正文、密钥、记�
 - 自动存稿依赖服务可达；离线编辑不会自动落盘。
 - 版本保留 10 个，没有逐字 diff；恢复前会另存一版。
 - 导出只有 TXT / Markdown 与 `.novel` 备份包；没有 docx / epub。
-- 多用户模式下数据只在本浏览器里：清站点数据、换浏览器、无痕模式都会丢；没有云同步，只有 `.novel` 包搬迁。
+- 浏览器多用户模式（`STORAGE=idb`）下数据只在本浏览器里：清站点数据、换浏览器、无痕模式都会丢；没有云同步，只有 `.novel` 包搬迁。想跨设备同步请用[云端账号版](#云端账号版可选)。
 - 浏览器端产物（`public/browser/**`）需要 `pnpm build:browser` 生成，不是源码直接跑；本仓库里它是构建输出，不该手改。
 - 多用户模式的真实浏览器端到端尚未自动化（本机沙箱起不了 Chrome）；`pnpm test:local` 用真路由 + 假 IndexedDB 覆盖了同一批逻辑。
 - 不能删章、拖拽排序；卷也不能拖拽重排。

@@ -48,6 +48,13 @@ export interface RelayConfig {
 	maxResponseBytes?: number;
 	/** CORS 放行的来源。默认 "*"。 */
 	allowedOrigin?: string;
+	/**
+	 * 是否相信 `X-Forwarded-For`。默认 false。
+	 *
+	 * 只有当服务真在反向代理后面（且 TRUST_PROXY=1）时才该开：
+	 * 这个头是客户端自己写的，不开的话拿它当限流键就等于让客户端随手换桶。
+	 */
+	trustProxy?: boolean;
 	/** 审计行的去处。默认 console.log（只记元数据）。 */
 	audit?: (line: string) => void;
 }

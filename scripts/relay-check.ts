@@ -14,6 +14,7 @@
  *   4. 限流 —— 每分钟配额用完 429 带 Retry-After，并发满 503。
  *   5. 流式 —— 逐块回传，不在内存里攒。
  *   6. 不留痕 —— 审计行里没有 Key、没有请求体；data/ 目录一个字节没变。
+ *   7. 限流键 —— X-Forwarded-For 是客户端自己写的头，不该能拿来换限流桶。
  *
  * 跑法：node --experimental-strip-types scripts/relay-check.ts
  */
@@ -25,6 +26,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRelayHandler, isPrivateAddress } from "../src/server/llm-relay.ts";
 import type { RelayHandler, RelayRequest } from "../src/server/llm-relay.ts";
+import { clientIpOf, createRelayRoute } from "../src/server/relay-route.ts";
 
 let failed = 0;
 function check(label: string, ok: boolean, detail = ""): void {
@@ -591,6 +593,78 @@ console.log("\n七、不留痕");
 	check("data/ 目录一个字节没变", same, "变化前 " + before.length + " 项 / 变化后 " + after.length + " 项");
 	const probe = await readFile(path.join(tempDir, "probe.txt"), "utf8");
 	check("临时目录可写（证明不是被沙箱挡住了）", probe === "sentinel");
+}
+
+console.log("\n八、限流键不可伪造");
+{
+	// 单元层：clientIpOf 决定限流桶是谁。
+	const fakeReq = (headers: Record<string, string>, remoteAddress = "203.0.113.9"): IncomingMessage =>
+		({ headers, socket: { remoteAddress } }) as unknown as IncomingMessage;
+	check(
+		"不信任代理时无视 X-Forwarded-For",
+		clientIpOf(fakeReq({ "x-forwarded-for": "1.2.3.4" }), false) === "203.0.113.9",
+		clientIpOf(fakeReq({ "x-forwarded-for": "1.2.3.4" }), false),
+	);
+	check(
+		"信任代理时取 X-Forwarded-For 最左边一跳",
+		clientIpOf(fakeReq({ "x-forwarded-for": "1.2.3.4, 5.6.7.8" }), true) === "1.2.3.4",
+		clientIpOf(fakeReq({ "x-forwarded-for": "1.2.3.4, 5.6.7.8" }), true),
+	);
+	check("信任代理但没有该头时退回 socket 地址", clientIpOf(fakeReq({}), true) === "203.0.113.9");
+	check("不信任代理且没有该头时用 socket 地址", clientIpOf(fakeReq({}), false) === "203.0.113.9");
+}
+{
+	// 端到端：真路由 + 每分钟 2 次配额 + 每次换一个 X-Forwarded-For。
+	// 换桶就等于绕过限流，所以第 3 次必须是 429。
+	const route = createRelayRoute({
+		allowedHosts: [upstreamAllowed],
+		maxRequestBytes: 1024 * 1024,
+		requestsPerMinute: 2,
+		maxInflight: 8,
+		timeoutMs: 10_000,
+		audit: auditSink("xff"),
+	});
+	const routeServer = createServer((req: IncomingMessage, res: ServerResponse) => {
+		void route(req, res);
+	});
+	const routePort = await listen(routeServer);
+	const call = (xff: string): Promise<number> =>
+		new Promise((resolve, reject) => {
+			const data = JSON.stringify({
+				target: upstreamBase + "/echo",
+				apiKey: API_KEY,
+				body: { prompt: "x" },
+			});
+			const req = httpRequest(
+				{
+					host: "127.0.0.1",
+					port: routePort,
+					path: "/api/llm",
+					method: "POST",
+					headers: {
+						"content-type": "application/json",
+						"content-length": Buffer.byteLength(data),
+						"x-forwarded-for": xff,
+					},
+				},
+				(res) => {
+					res.resume();
+					res.on("end", () => resolve(res.statusCode ?? 0));
+				},
+			);
+			req.on("error", reject);
+			req.end(data);
+		});
+	const s1 = await call("1.1.1.1");
+	const s2 = await call("2.2.2.2");
+	const s3 = await call("3.3.3.3");
+	check(
+		"换 X-Forwarded-For 也换不掉限流桶",
+		s1 === 200 && s2 === 200 && s3 === 429,
+		`第一次=${s1} 第二次=${s2} 第三次=${s3}`,
+	);
+	routeServer.closeAllConnections?.();
+	await new Promise<void>((resolve) => routeServer.close(() => resolve()));
 }
 
 relayServer.closeAllConnections?.();

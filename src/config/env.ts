@@ -151,6 +151,9 @@ export function readRelayConfig(value: string | undefined = process.env.RELAY_AL
 		timeoutMs: num(process.env.RELAY_TIMEOUT_MS) ?? 180_000,
 		maxResponseBytes: num(process.env.RELAY_MAX_RESPONSE_BYTES) ?? 64 * 1024 * 1024,
 		allowedOrigin: readCorsOrigins()[0] ?? "*",
+		// 与认证侧同一个开关：只有真在反向代理后面才相信 X-Forwarded-For。
+		// 中继限流按这个键分桶，所以它必须是服务端自己认的地址，不能是客户端随手写的头。
+		trustProxy: bool(process.env.TRUST_PROXY),
 	};
 }
 

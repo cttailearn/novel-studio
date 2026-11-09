@@ -34,6 +34,7 @@ function notHas(rel: string, needle: string): void {
 // 1) Tauri 配置
 const conf = JSON.parse(read("src-tauri/tauri.conf.json")) as {
 	productName: string;
+	version: string;
 	identifier: string;
 	build: { frontendDist: string; beforeBuildCommand: string };
 	app: { security: { csp: string } };
@@ -56,6 +57,19 @@ assert.ok(csp.includes("connect-src 'self'"), "CSP connect-src 需放行应用�
 assert.ok(csp.includes("http://tauri.localhost"), "CSP connect-src 需放行 Android WebView 源");
 assert.ok(csp.includes("script-src 'self'"), "CSP script-src 需放行本地脚本");
 checks += 8;
+
+// 1b) 版本号必须处处一致：package.json / Cargo.toml / tauri.conf.json / 更新日志。
+//     漏改任何一处，安装包、更新清单与更新日志就会各说各话。
+const pkg = JSON.parse(read("package.json")) as { version: string };
+const cargoVersion = /^version\s*=\s*"([^"]+)"/m.exec(read("src-tauri/Cargo.toml"))?.[1];
+assert.ok(cargoVersion, "Cargo.toml 里应能读到 [package] 的 version");
+assert.equal(conf.version, pkg.version, "tauri.conf.json 与 package.json 的版本应一致");
+assert.equal(cargoVersion, pkg.version, "Cargo.toml 与 package.json 的版本应一致");
+assert.ok(
+	read("CHANGELOG.zh.md").includes(`## [${pkg.version}]`),
+	`CHANGELOG.zh.md 里应有 ${pkg.version} 的小节`,
+);
+checks += 4;
 
 // 2) Rust 命令与安全边界
 has("src-tauri/src/lib.rs", "llm::proxy_stream", "命令 proxy_stream");

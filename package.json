@@ -14,7 +14,7 @@
   },
   "license": "MIT",
   "engines": {
-    "node": ">=22.6"
+    "node": ">=22.13.0"
   },
   "scripts": {
     "dev": "node --experimental-strip-types --watch src/server/main.ts",

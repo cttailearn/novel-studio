@@ -79,6 +79,23 @@ export async function writeRelayOutcome(res: ServerResponse, outcome: RelayOutco
 }
 
 /**
+ * 取这次请求的来源地址，给限流分桶用。
+ *
+ * 默认只看 socket 的对端地址 —— 那是 TCP 层定下来的，客户端改不动。
+ * `X-Forwarded-For` 则是客户端自己就能写的头，只有在服务确实跑在反向代理后面、
+ * 并且运维显式设了 TRUST_PROXY=1 时才采信它（取最左边一跳，即离客户端最近的那台代理写的）。
+ *
+ * 不设这道门，限流就等于没有：每个请求换一个假 XFF 就能换一个桶。
+ */
+export function clientIpOf(req: IncomingMessage, trustProxy: boolean): string {
+	if (trustProxy) {
+		const forwarded = req.headers["x-forwarded-for"]?.toString().split(",", 1)[0]?.trim();
+		if (forwarded) return forwarded;
+	}
+	return req.socket.remoteAddress || "unknown";
+}
+
+/**
  * 造一个 `/api/llm` 的处理函数。
  *
  * clientKey 用来源 IP：限流按 IP 算，这是唯一拿得到的、客户端改不动的标识。
@@ -87,7 +104,7 @@ export function createRelayRoute(config: RelayConfig): (req: IncomingMessage, re
 	const handle = createRelayHandler(config);
 	return async function handleRelayRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
 		const requestHeaders = headerBag(req);
-		const clientKey = (req.headers["x-forwarded-for"]?.toString().split(",", 1)[0]?.trim()) || req.socket.remoteAddress || "unknown";
+		const clientKey = clientIpOf(req, config.trustProxy === true);
 		const method = (req.method ?? "POST").toUpperCase();
 
 		// 预检：没有请求体，也不该消耗额度。交给中继出政策即可。

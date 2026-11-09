@@ -2,7 +2,7 @@
 
 本项目的版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [0.3.0] - 2026-11-08
+## [0.3.0] - 2026-11-09
 
 云端账号版：服务端可以部署到服务器，Web / Tauri 桌面 / Android 三端登录同一账号读写同一份数据。
 
@@ -18,6 +18,25 @@
 - Web 端登录门与账户中心（配额进度、设备会话、改密、管理员用户/审计页签）；
   Tauri 本地模式提供「连接云端账号」，连接后业务请求走云端。
 - `Dockerfile` / `docker-compose.yml` / `.env.example` 与部署文档的云端章节。
+- `docs/cloud-saas-plan.md`：云端方案设计文档（取代旧的多用户本地方案结论）。
+
+### 改进
+
+- **稿纸版心宽一半**：正文区不再占满整屏，长行更好读；上下键可以直接滚稿。
+- **总目也跟着版心宽**：总目那张纸与正文版心对齐，不再单独拉宽。
+- **素材工作台的原料列表不再被压成 0 高**：列表自己滚动，不再把素材库顶出视口。
+- **设置页**：存储位置说明移除；中转地址改为可点击入口，直接跳到对应设置。
+- **内置供应商**：详情只留接入点、去掉说明文字；接入点显示成站点地址而不是裸文本。
+
+### 修复与加固
+
+- **中继限流键不再能被 `X-Forwarded-For` 伪造**：只有 `TRUST_PROXY=1`（服务确实在反向代理后面）
+  才采信这个客户端自己就能写的头，否则一律按 socket 对端地址分桶 —— 否则每请求换一个假头就换一个桶。
+- **Dockerfile 改为两段构建**：镜像内现场跑 `pnpm build:browser` 造出浏览器端产物，
+  干净检出也能构建出可用镜像（`public/browser/` 是构建产物，不在版本库里）。
+- **Node 版本下限从 22.6 提到 22.13**：`node:sqlite` 在 22.13.0 才解除实验标志，更低的版本服务起不来。
+- `scripts/android-patch.mjs` 额外写入 `INTERNET` 权限（连自建服务器必需）；明文流量只在清单缺少该属性时补 `android:usesCleartextTraffic="true"`（Tauri 模板里它是占位符，release 构建解析为 `false`，自建 http 场景需手动改或改用 https）。
+- 中继回归测试新增「限流键不可伪造」一节（4 项单元断言 + 1 项端到端）。
 
 ### 保留
 
@@ -28,6 +47,20 @@
 - 新增 `pnpm test:auth`（账号模块 92 项）与 `pnpm test:e2e`（真实 HTTP 管线 40 项）。
 - 主题令牌检查改为全局收集所有 `:root` / `:root[data-theme="dark"]` 块，样式表补齐
   `--r-pill` 并把散落的色号收敛到令牌；`pnpm test` 全绿。
+
+### 发布产物
+
+- Windows x64：`novel-studio-v0.3.0-windows-x64-setup.exe`（NSIS，更新密钥签名）
+- Android arm64：`novel-studio-v0.3.0-android-arm64.apk`（release 优化，测试签名）
+- 更新清单：`latest.json`；校验文件：`SHA256SUMS`
+
+### 已知限制
+
+- Windows 安装包由墨耕更新密钥签名，但没有 Authenticode 代码签名，SmartScreen 仍可能提示。
+- Android 使用测试签名，只适合直接安装体验，不适合上架应用商店。
+- 云端模式要求 Node.js ≥ 22.13；账号库在 `data/cloud.db`，备份要连同 `data/users/` 一起做。
+- Android release 包默认禁止明文 HTTP（`usesCleartextTraffic` 占位符解析为 `false`）：连自建服务器请用 https，或按 `scripts/android-patch.mjs` 的提示手动改清单。
+- 登录限流按 IP 与账号各算一份，计数存在内存里；多实例部署需要各自独立，或自行换成共享存储。
 
 ## [0.2.1] - 2026-11-06
 
@@ -168,3 +201,4 @@ Android 版可以在应用内下载并安装更新了；桌面端与网页版的
 [0.1.1]: https://github.com/cttailearn/novel-studio/releases/tag/v0.1.1
 [0.2.0]: https://github.com/cttailearn/novel-studio/releases/tag/v0.2.0
 [0.2.1]: https://github.com/cttailearn/novel-studio/releases/tag/v0.2.1
+[0.3.0]: https://github.com/cttailearn/novel-studio/releases/tag/v0.3.0

@@ -1,10 +1,16 @@
 # 墨耕 · 云端账号版服务端镜像
 #
-# 服务端直接跑 TypeScript（node --experimental-strip-types），浏览器产物 public/browser
-# 已经构建好并在版本库里，所以镜像里不需要 pnpm build，也不需要 devDependencies。
+# 两段构建：
+#   1) builder —— 装依赖、现场跑 `pnpm build:browser`，把浏览器端产物 public/browser 造出来；
+#   2) runtime —— 只带生产依赖与源码，外加 builder 造好的 public/browser。
+#
+# 为什么要有 builder 段：public/browser 是构建产物，仓库里并不保存（.gitignore 里排除了），
+# 干净检出直接 `COPY . .` 是拿不到它的 —— 所以必须在镜像里现场构建。
+#
 # 数据（cloud.db + users/）全部落在 /data 卷里，容器本身无状态，可随时重建。
 
-FROM node:24-bookworm-slim
+# ─────────────────────────────── 1) builder：造浏览器端产物
+FROM node:24-bookworm-slim AS builder
 
 WORKDIR /app
 
@@ -14,13 +20,33 @@ COPY package.json pnpm-lock.yaml ./
 RUN corepack enable && corepack prepare pnpm@10.33.0 --activate \
     || npm i -g pnpm@10.33.0
 
+# 浏览器构建只需要运行时依赖（pi-agent-core / pi-ai / partial-json），
+# 它用 Node 自带的 stripTypeScriptTypes 转译，不碰 tsc，也就不需要 devDependencies。
+RUN pnpm install --prod --frozen-lockfile --ignore-scripts
+
+COPY . .
+RUN pnpm build:browser
+
+# ─────────────────────────────── 2) runtime：真正跑起来的那一层
+FROM node:24-bookworm-slim
+
+WORKDIR /app
+
+COPY package.json pnpm-lock.yaml ./
+RUN corepack enable && corepack prepare pnpm@10.33.0 --activate \
+    || npm i -g pnpm@10.33.0
+
 # --prod：不装 devDependencies（typecheck/构建脚本只在开发机跑）
 # --frozen-lockfile：锁文件必须和 package.json 一致，避免镜像里悄悄升级
 # --ignore-scripts：不执行第三方 postinstall（本项目没有需要编译的原生依赖）
 RUN pnpm install --prod --frozen-lockfile --ignore-scripts
 
-# 源码与已构建的 public/browser
+# 源码与配置
 COPY . .
+
+# 浏览器端产物：只能来自 builder 段（.dockerignore 把 public/browser 排除在上下文外，
+# 所以本机的旧产物不会混进来，构建是确定的）。
+COPY --from=builder /app/public/browser ./public/browser
 
 ENV NODE_ENV=production \
     DATA_DIR=/data \

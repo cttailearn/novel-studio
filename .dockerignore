@@ -15,6 +15,9 @@ src-tauri/target
 src-tauri/gen
 src-tauri/icons
 
+# 浏览器端产物：由 Dockerfile 的 builder 段现场构建，本机这份不进上下文
+public/browser
+
 # 运行时产生的本地数据、日志、临时目录
 *.log
 *.tgz
