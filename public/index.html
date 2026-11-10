@@ -267,15 +267,17 @@
 			<!-- ── 左卷：写作台里只剩章目；选卷与素材库都在「案头」── -->
 			<aside class="rail" id="rail">
 				<section class="rail-block rail-grow">
-					<div class="rail-head">
-						<h2 class="rail-label"><i class="tick"></i>章目</h2>
-						<button id="close-rail" class="btn btn-quiet btn-sm only-phone rail-close icon-btn" title="收起章目" aria-label="收起章目">×</button>
+					<div class="rail-fixed">
+						<div class="rail-head">
+							<h2 class="rail-label"><i class="tick"></i>章目</h2>
+							<button id="close-rail" class="btn btn-quiet btn-sm only-phone rail-close icon-btn" title="收起章目" aria-label="收起章目">×</button>
+						</div>
+						<div class="rail-actions">
+							<button id="add-chapter" class="rail-add">＋ 立一章</button>
+							<button id="add-volume" class="rail-add rail-add-thin" title="分卷：给章目分层" aria-label="分卷">＋ 卷</button>
+						</div>
+						<input id="chapter-filter" class="rail-filter" type="search" placeholder="搜章目…" autocomplete="off" aria-label="搜章目" />
 					</div>
-					<div class="rail-actions">
-						<button id="add-chapter" class="rail-add">＋ 立一章</button>
-						<button id="add-volume" class="rail-add rail-add-thin" title="分卷：给章目分层" aria-label="分卷">＋ 卷</button>
-					</div>
-					<input id="chapter-filter" class="rail-filter" type="search" placeholder="搜章目…" autocomplete="off" aria-label="搜章目" />
 					<ol id="chapter-list" class="chapter-list"></ol>
 					<p id="chapter-empty" class="rail-note">尚无章目。点上面的「＋ 立一章」，或到「料」让设定官拟一份大纲。</p>
 				</section>
@@ -289,6 +291,8 @@
 						<button id="tab-materials" class="tab" data-view="materials" role="tab" aria-selected="false" aria-controls="view-materials" tabindex="-1"><b>料</b><span>素材工作台</span></button>
 						<button id="tab-writing" class="tab" data-view="writing" role="tab" aria-selected="false" aria-controls="view-writing" tabindex="-1"><b>文</b><span>生文工作台</span></button>
 					</div>
+					<!-- 手机上章目栏是抽屉，顶栏又只剩检索与⋯；这里给一个直接的入口 -->
+					<button id="stage-rail" class="btn btn-quiet btn-sm only-phone stage-rail-btn" title="章目" aria-label="打开章目" aria-controls="chapter-list" aria-expanded="false">章目</button>
 					<div class="stage-actions" id="stage-actions"></div>
 				</nav>
 
@@ -370,6 +374,11 @@
 				<!-- 素材工作台：上传原料 + 与设定官对议 + 素材库 -->
 				<section id="view-materials" class="view view-bench" role="tabpanel" aria-labelledby="tab-materials" aria-label="素材工作台">
 					<div class="bench">
+						<!-- 手机上两栏挤不下：用一枚分段开关一次只放一栏，各得整屏高度 -->
+						<div class="bench-switch" role="tablist" aria-label="素材工作台分栏">
+							<button type="button" class="bench-switch-btn is-on" data-pane="a" role="tab" aria-selected="true">原料</button>
+							<button type="button" class="bench-switch-btn" data-pane="b" role="tab" aria-selected="false">设定官</button>
+						</div>
 						<div class="bench-pane">
 							<header class="pane-head">
 								<h3>原料</h3>
@@ -437,6 +446,11 @@
 				<!-- 生文工作台：装配本章素材 + 与执笔者对议 + 装料成文 -->
 				<section id="view-writing" class="view view-bench" role="tabpanel" aria-labelledby="tab-writing" aria-label="生文工作台">
 					<div class="bench">
+						<!-- 手机上两栏挤不下：用一枚分段开关一次只放一栏，各得整屏高度 -->
+						<div class="bench-switch" role="tablist" aria-label="生文工作台分栏">
+							<button type="button" class="bench-switch-btn is-on" data-pane="a" role="tab" aria-selected="true">装配</button>
+							<button type="button" class="bench-switch-btn" data-pane="b" role="tab" aria-selected="false">执笔者</button>
+						</div>
 						<div class="bench-pane">
 							<header class="pane-head">
 								<h3>装配</h3>

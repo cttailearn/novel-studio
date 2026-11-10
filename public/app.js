@@ -1,4 +1,4 @@
-// 墨耕 · 前端。不使用框架，直接消费后端 NDJSON 事件流。
+﻿// 墨耕 · 前端。不使用框架，直接消费后端 NDJSON 事件流。
 //
 // 界面按「写小说」而非「聊天」来组织：
 //   左卷  选卷与章目
@@ -1857,6 +1857,31 @@ function runMobileTool(tool) {
 	else if (tool === "theme") $("theme-toggle")?.click();
 	else if (tool === "settings") $("open-settings")?.click();
 }
+
+// 台口的「章目」按钮：手机上章目栏是抽屉，入口就在这里。
+$("stage-rail")?.addEventListener("click", () => {
+	$("toggle-rail")?.click();
+	const open = document.querySelector(".desk")?.classList.contains("is-rail-open") ?? false;
+	$("stage-rail").setAttribute("aria-expanded", open ? "true" : "false");
+});
+
+// 工作台分段开关（只在手机上可见）：一次只让一栏占满屏。
+document.querySelectorAll(".bench-switch").forEach((bar) => {
+	bar.addEventListener("click", (event) => {
+		const btn = event.target.closest("[data-pane]");
+		if (!btn) return;
+		const bench = bar.closest(".bench");
+		if (!bench) return;
+		const second = btn.dataset.pane === "b";
+		bench.classList.toggle("is-pane-b", second);
+		bar.querySelectorAll("[data-pane]").forEach((item) => {
+			const on = item === btn;
+			item.classList.toggle("is-on", on);
+			item.setAttribute("aria-selected", on ? "true" : "false");
+		});
+	});
+});
+
 
 /** 案头：只画卷宗与通用素材库，顶栏换成案头的口径。 */
 function renderHomeView() {
