@@ -1,7 +1,8 @@
 /* ══════════════════════════════════════════════════════════════
-   账户与登录：全屏登录门 + 顶栏账户面板
-   这两个界面都不属于 settings.css，单独成文件，排在 style.css 之后。
-   颜色、间距与圆角全部复用 style.css 的 :root 令牌。
+   账户与登录 · v3
+   登录门是一张立在纸上的「门帖」：窄卡、朱印、被框住的表单。
+   账户对话框是一张「名帖」：身份在上，账目在下，危险操作最轻。
+   颜色、字号、间距、圆角全部走 style.css 的令牌，不写色值。
    ══════════════════════════════════════════════════════════════ */
 
 /* ── 全屏登录门 ───────────────────────────────────────────── */
@@ -16,201 +17,311 @@ html.auth-locked #boot-skeleton { visibility: hidden; }
 	position: fixed;
 	inset: 0;
 	z-index: 400;
-	display: grid;
-	place-items: center;
-	padding: clamp(18px, 5vw, 56px);
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: flex-start;
+	padding: clamp(20px, 5vw, 56px);
+	background: var(--paper);
 	background:
-		radial-gradient(ellipse 80% 60% at 50% -18%, rgba(178, 58, 42, 0.08), transparent 62%),
-		radial-gradient(ellipse 60% 44% at 100% 100%, rgba(85, 104, 74, 0.07), transparent 70%),
+		radial-gradient(ellipse 76% 52% at 50% -12%, var(--cinnabar-wash), transparent 64%),
+		radial-gradient(ellipse 54% 40% at 100% 108%, color-mix(in srgb, var(--moss) 6%, transparent), transparent 72%),
 		var(--paper);
 	overflow-y: auto;
+	overscroll-behavior: contain;
 }
 
-.auth-gate::before {
-	content: "";
-	position: absolute;
-	inset: 0;
-	background-image: var(--noise);
-	background-size: 260px 260px;
-	opacity: var(--fiber-alpha);
-	mix-blend-mode: var(--fiber-blend);
-	pointer-events: none;
-}
-
+/* 门帖：一张窄纸，四角不圆得太软；外层投影走全局弹层那一档。 */
 .auth-card {
 	position: relative;
-	width: min(430px, 100%);
-	padding: 34px 36px 26px;
-	background:
-		linear-gradient(180deg, var(--paper-hi), var(--paper));
-	border: 1px solid var(--sheet-edge);
-	border-radius: 12px;
+	width: min(420px, 100%);
+	flex: none;
+	margin-block: auto;
+	padding: var(--sp-6, 32px) var(--sp-6, 32px) var(--sp-5, 24px);
+	background: var(--paper-hi);
+	border: 1px solid var(--rule);
+	border-radius: 16px;
 	box-shadow: var(--elev-2);
 }
 
-.auth-brand { display: flex; align-items: center; gap: 14px; }
+/* 顶端一道朱砂书签，像门帖上压的一枚小印。 */
+.auth-card::before {
+	content: "";
+	position: absolute;
+	top: -1px;
+	left: 50%;
+	width: 40px;
+	height: 3px;
+	transform: translateX(-50%);
+	border-radius: 0 0 2px 2px;
+	background: var(--cinnabar);
+}
 
+/* 内圈一道极细的裱纸线；不碰内容，只把「帖」的边界再收一层。 */
+.auth-card::after {
+	content: "";
+	position: absolute;
+	inset: var(--sp-2, 8px);
+	border: 1px solid var(--rule-soft);
+	border-radius: 12px;
+	pointer-events: none;
+}
+
+.auth-brand {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: var(--sp-4, 16px);
+	text-align: center;
+}
+
+/* 朱文印：亮色是朱底白字，暗色反过来，让字始终站在有对比的一侧。 */
 .auth-logo {
 	display: grid;
 	place-items: center;
-	width: 48px;
-	height: 48px;
+	width: 56px;
+	height: 56px;
 	flex: none;
-	border-radius: 4px;
+	border-radius: 12px;
 	background: var(--cinnabar);
-	color: var(--on-cinnabar);
+	color: var(--paper-hi);
 	font-family: var(--kai);
-	font-size: 27px;
+	font-size: var(--fs-3xl, 28px);
 	line-height: 1;
-	box-shadow: inset 0 0 0 1px rgba(248, 242, 230, 0.22), 0 8px 18px -10px var(--seal-drop);
+	letter-spacing: 0;
+	box-shadow: inset 0 0 0 1px var(--rule);
+	box-shadow:
+		inset 0 0 0 1px color-mix(in srgb, var(--paper-hi) 26%, transparent),
+		0 8px 20px -12px color-mix(in srgb, var(--seal) 55%, transparent);
+}
+
+:root[data-theme="dark"] .auth-logo {
+	background: var(--paper-hi);
+	color: var(--cinnabar-ink);
+	box-shadow:
+		inset 0 0 0 2px var(--cinnabar),
+		0 8px 20px -12px color-mix(in srgb, var(--seal) 55%, transparent);
 }
 
 .auth-brand-text { min-width: 0; }
+
 .auth-title {
 	margin: 0;
 	font-family: var(--serif);
-	font-size: 24px;
+	font-size: var(--fs-3xl, 28px);
 	font-weight: 600;
-	letter-spacing: 0.14em;
-	line-height: 1.25;
+	line-height: 1.2;
+	letter-spacing: 0.16em;
+	text-indent: 0.16em;
+	color: var(--ink);
 }
+
 .auth-tagline {
-	margin: 3px 0 0;
-	font-size: 10.5px;
+	margin: var(--sp-1, 4px) 0 0;
+	font-family: var(--sans);
+	font-size: var(--fs-label, 11px);
+	line-height: var(--lh-ui, 1.55);
 	letter-spacing: 0.26em;
-	color: var(--ink-4);
+	text-indent: 0.26em;
+	color: var(--ink-3);
 }
 
 .auth-lead {
-	margin: 20px 0 18px;
-	font-size: 12.5px;
-	line-height: 1.85;
-	color: var(--ink-3);
+	max-width: 26em;
+	margin: var(--sp-4, 16px) auto 0;
+	font-family: var(--serif);
+	font-size: var(--fs-body, 15px);
+	line-height: var(--lh-read, 1.9);
+	color: var(--ink-2);
+	text-align: center;
 }
 
 .auth-server {
-	margin: -8px 0 16px;
+	display: block;
+	width: fit-content;
+	max-width: 100%;
+	margin: var(--sp-3, 12px) auto 0;
+	padding: var(--sp-1, 4px) var(--sp-3, 12px);
+	border-radius: var(--r-pill, 999px);
+	background: var(--paper-lo);
+	color: var(--ink-3);
 	font-family: var(--mono);
-	font-size: 10.5px;
-	color: var(--ink-4);
+	font-size: var(--fs-xs, 12px);
+	line-height: var(--lh-ui, 1.55);
 	overflow-wrap: anywhere;
 }
 
+/* 错误不铺满整块红底：左边一道朱砂，剩下靠字色与淡红洗。 */
 .auth-alert {
-	margin: 0 0 15px;
-	padding: 9px 12px;
-	border: 1px solid var(--cinnabar-edge);
+	margin: var(--sp-4, 16px) 0 0;
+	padding: var(--sp-3, 12px) var(--sp-4, 16px);
 	border-left: 3px solid var(--cinnabar);
-	border-radius: 5px;
+	border-radius: 0 8px 8px 0;
 	background: var(--cinnabar-wash);
 	color: var(--cinnabar-ink);
-	font-size: 12.5px;
-	line-height: 1.7;
+	font-family: var(--sans);
+	font-size: var(--fs-md, 14px);
+	line-height: var(--lh-ui, 1.55);
 	overflow-wrap: anywhere;
 }
 
-.auth-form { margin: 0; }
+/* 表单被一张细框收住：纸面比卡面低半档，读起来像「帖中格」。 */
+.auth-form {
+	margin: var(--sp-4, 16px) 0 0;
+	padding: var(--sp-4, 16px);
+	border: 1px solid var(--rule);
+	border-radius: 12px;
+	background: var(--paper);
+}
 
 .auth-field {
 	display: block;
-	margin: 0 0 14px;
+	margin: 0 0 var(--sp-4, 16px);
 }
+
 .auth-field-label {
 	display: block;
-	margin-bottom: 5px;
-	font-size: 10.5px;
-	letter-spacing: 0.1em;
+	margin-bottom: var(--sp-2, 8px);
+	font-family: var(--sans);
+	font-size: var(--fs-label, 11px);
+	line-height: var(--lh-ui, 1.55);
+	letter-spacing: 0.14em;
 	color: var(--ink-3);
 }
+
 .auth-field-hint {
 	display: block;
-	margin-top: 5px;
-	font-size: 10.5px;
+	margin-top: var(--sp-1, 4px);
+	font-family: var(--sans);
+	font-size: var(--fs-xs, 12px);
+	line-height: var(--lh-ui, 1.55);
 	color: var(--ink-3);
 }
 
 .auth-input {
 	display: block;
 	width: 100%;
-	height: 44px;
+	height: var(--tap-lg, 48px);
 	margin: 0;
-	padding: 9px 12px;
+	padding: var(--sp-2, 8px) var(--sp-3, 12px);
 	border: 1px solid var(--rule);
 	border-radius: 8px;
-	background: var(--paper-lo);
+	background: var(--paper-sunk);
 	color: var(--ink);
 	font-family: var(--serif);
-	font-size: 14.5px;
+	font-size: var(--fs-item, 16.5px);
 	line-height: 1.5;
-	transition: border-color var(--brush), box-shadow var(--brush);
+	caret-color: var(--cinnabar);
 }
-.auth-input::placeholder { color: var(--ink-4); }
+
+.auth-input::placeholder { color: var(--ink-3); opacity: 1; }
+
+.auth-input:hover { border-color: var(--rule-strong); }
+
 .auth-input:focus {
 	outline: none;
-	border-color: var(--cinnabar-edge);
-	box-shadow: 0 0 0 3px var(--cinnabar-faint);
+	border-color: var(--cinnabar);
+	box-shadow: 0 0 0 3px var(--cinnabar-wash);
+}
+
+.auth-input:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.auth-input.is-error { border-color: var(--cinnabar); }
+
+/* 浏览器自动填充的蓝黄底会撕破纸色，用内阴影压回纸面。 */
+.auth-input:-webkit-autofill,
+.auth-input:-webkit-autofill:hover,
+.auth-input:-webkit-autofill:focus {
+	-webkit-box-shadow: 0 0 0 100px var(--paper-sunk) inset;
+	-webkit-text-fill-color: var(--ink);
+	caret-color: var(--cinnabar);
 }
 
 .auth-submit {
 	display: block;
 	width: 100%;
-	margin-top: 4px;
-	min-height: 44px;
-	font-size: 14px;
-	letter-spacing: 0.12em;
+	min-height: var(--tap-lg, 48px);
+	margin-top: var(--sp-2, 8px);
+	border-radius: 8px;
+	font-family: var(--sans);
+	font-size: var(--fs-md, 14px);
+	letter-spacing: 0.18em;
 }
 
 .auth-switch-row {
-	margin-top: 12px;
+	margin-top: var(--sp-3, 12px);
 	text-align: center;
 }
+
 .auth-switch {
-	padding: 4px 6px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-height: var(--tap, 44px);
+	padding: 0 var(--sp-3, 12px);
 	border: 0;
 	background: none;
 	color: var(--cinnabar-ink);
-	font-family: var(--serif);
-	font-size: 12px;
+	font-family: var(--sans);
+	font-size: var(--fs-sm, 13px);
 	letter-spacing: 0.04em;
 	cursor: pointer;
 }
+
 .auth-switch:hover { text-decoration: underline; text-underline-offset: 3px; }
 .auth-switch:disabled { opacity: 0.55; cursor: default; }
 
 .auth-note {
-	margin: 10px 0 0;
+	margin: var(--sp-2, 8px) 0 0;
 	text-align: center;
-	font-size: 11px;
-	line-height: 1.7;
+	font-family: var(--sans);
+	font-size: var(--fs-sm, 13px);
+	line-height: var(--lh-ui, 1.55);
 	color: var(--ink-3);
 }
 
-.auth-retry { text-align: center; }
+/* 断网 / 未授权是另一种「帖」：同一张纸，换一句说明与一个动作。 */
+.auth-retry {
+	margin: var(--sp-4, 16px) 0 0;
+	padding: var(--sp-5, 24px);
+	border: 1px solid var(--rule);
+	border-top: 2px solid var(--cinnabar);
+	border-radius: 12px;
+	background: var(--paper);
+	text-align: center;
+}
+
 .auth-retry-text {
-	margin: 0 0 14px;
-	font-size: 12px;
-	line-height: 1.8;
-	color: var(--ink-3);
+	margin: 0 0 var(--sp-4, 16px);
+	font-family: var(--serif);
+	font-size: var(--fs-body, 15px);
+	line-height: var(--lh-read, 1.9);
+	color: var(--ink-2);
 	overflow-wrap: anywhere;
 }
+
+.auth-retry .auth-submit { margin-top: 0; }
 
 .auth-local {
 	display: block;
 	width: 100%;
-	margin-top: 10px;
+	min-height: var(--tap, 44px);
+	margin-top: var(--sp-3, 12px);
+	border-radius: 8px;
 }
 
 .auth-foot {
-	margin: 18px 0 0;
-	padding-top: 14px;
+	margin: var(--sp-5, 24px) 0 0;
+	padding-top: var(--sp-4, 16px);
 	border-top: 1px solid var(--rule-soft);
 	text-align: center;
-	font-size: 10.5px;
-	line-height: 1.8;
-	color: var(--ink-4);
+	font-family: var(--sans);
+	font-size: var(--fs-xs, 12px);
+	line-height: var(--lh-ui, 1.55);
+	color: var(--ink-3);
 }
 
-/* ── 账户面板 ─────────────────────────────────────────────── */
+/* ── 账户面板：一张名帖 ───────────────────────────────────── */
 
 .account-sheet {
 	display: none;
@@ -218,153 +329,229 @@ html.auth-locked #boot-skeleton { visibility: hidden; }
 	max-height: min(880px, 90vh);
 	padding: 0;
 	overflow: hidden;
+	background: var(--paper);
+	border: 1px solid var(--rule);
+	border-radius: 16px;
+	box-shadow: var(--elev-2);
+	color: var(--ink);
+	font-family: var(--sans);
 }
+
 .account-sheet[open] { display: flex; flex-direction: column; }
 .account-sheet.is-admin { width: min(980px, 96vw); }
+
+/* 顶端一小段朱砂，与登录门同一枚记号。 */
+.account-sheet::before {
+	content: "";
+	display: block;
+	align-self: center;
+	width: 48px;
+	height: 3px;
+	flex: none;
+	border-radius: 0 0 2px 2px;
+	background: var(--cinnabar);
+}
 
 .account-head {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
-	gap: 16px;
+	gap: var(--sp-4, 16px);
 	flex: none;
-	padding: 22px 26px 17px;
-	border-bottom: 1px solid var(--rule-soft);
+	padding: var(--sp-5, 24px) var(--sp-6, 32px);
+	border-bottom: 1px solid var(--rule);
+	background: linear-gradient(180deg, var(--paper-hi) 0%, var(--paper) 100%);
 }
+
 .account-id {
 	display: flex;
 	align-items: center;
-	gap: 14px;
+	gap: var(--sp-4, 16px);
 	min-width: 0;
 }
+
+/* 名帖上的小印：不填实，留一道朱砂框与一圈纸白。 */
 .account-avatar {
 	display: grid;
 	place-items: center;
-	width: 46px;
-	height: 46px;
+	width: 52px;
+	height: 52px;
 	flex: none;
-	border-radius: 50%;
-	background: var(--ink);
-	color: var(--paper-hi);
+	border: 1px solid var(--cinnabar);
+	border-radius: 8px;
+	background: var(--cinnabar-wash);
+	color: var(--cinnabar-ink);
 	font-family: var(--kai);
-	font-size: 22px;
+	font-size: var(--fs-2xl, 22px);
 	line-height: 1;
-	box-shadow: inset 0 0 0 1px rgba(255, 253, 247, 0.16);
+	box-shadow: inset 0 0 0 3px var(--paper-hi);
 }
+
 .account-id-text { min-width: 0; }
-.account-title {
+
+.account-head .account-title {
 	margin: 0;
 	font-family: var(--serif);
-	font-size: 20px;
+	font-size: var(--fs-2xl, 22px);
 	font-weight: 600;
-	letter-spacing: 0.08em;
 	line-height: 1.3;
+	letter-spacing: 0.06em;
+	color: var(--ink);
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+
 .account-sub {
-	margin: 3px 0 0;
-	font-size: 11.5px;
-	line-height: 1.6;
+	margin: var(--sp-1, 4px) 0 0;
+	font-family: var(--sans);
+	font-size: var(--fs-xs, 12px);
+	line-height: var(--lh-ui, 1.55);
 	color: var(--ink-3);
 	overflow-wrap: anywhere;
 }
-.account-close { flex: none; }
+
+.account-close {
+	flex: none;
+	min-height: var(--tap, 44px);
+	padding-inline: var(--sp-3, 12px);
+	font-family: var(--sans);
+	font-size: var(--fs-sm, 13px);
+	/* 关闭不是危险动作：显式中性边，避免落进任何朱砂危险态。 */
+	border-color: var(--rule);
+}
+
+.account-close:hover:not(:disabled) { border-color: var(--rule); }
 
 .account-tabs {
 	display: flex;
-	gap: 24px;
+	gap: var(--sp-5, 24px);
 	flex: none;
-	padding: 0 26px;
+	min-height: 48px;
+	padding: 0 var(--sp-6, 32px);
 	border-bottom: 1px solid var(--rule-soft);
+	background: var(--paper);
 	overflow-x: auto;
 	scrollbar-width: none;
 }
+
 .account-tabs::-webkit-scrollbar { display: none; }
+
 .account-tab {
+	display: inline-flex;
+	align-items: center;
 	flex: none;
-	padding: 12px 0 10px;
+	min-height: 48px;
+	padding: 0;
 	border: 0;
 	border-bottom: 2px solid transparent;
+	margin-bottom: -1px;
 	background: none;
 	color: var(--ink-3);
-	font-family: var(--serif);
-	font-size: 12.5px;
-	letter-spacing: 0.06em;
+	font-family: var(--sans);
+	font-size: var(--fs-sm, 13px);
+	letter-spacing: 0.08em;
 	cursor: pointer;
 }
+
 .account-tab:hover { color: var(--ink); }
+
 .account-tab.is-on {
 	color: var(--ink);
 	border-bottom-color: var(--cinnabar);
+	font-weight: 600;
 }
 
 .account-body {
 	flex: 1;
 	min-height: 0;
-	padding: 22px 26px 30px;
+	padding: var(--sp-5, 24px) var(--sp-6, 32px) var(--sp-6, 32px);
+	background: var(--paper);
 	overflow-y: auto;
+	overscroll-behavior: contain;
 }
 
 /* ── 提示条与一次性密码 ───────────────────────────────────── */
 
+.account-flash-host:empty { display: none; }
+
 .account-flash {
 	display: flex;
 	align-items: flex-start;
-	gap: 9px;
-	margin: 0 0 15px;
-	padding: 9px 11px;
-	border: 1px solid var(--rule);
-	border-radius: 7px;
-	font-size: 12px;
-	line-height: 1.7;
+	gap: var(--sp-2, 8px);
+	margin: 0 0 var(--sp-4, 16px);
+	padding: var(--sp-3, 12px) var(--sp-3, 12px);
+	border: 0;
+	border-left: 3px solid var(--rule-strong);
+	border-radius: 0 8px 8px 0;
+	background: var(--paper-lo);
+	color: var(--ink-2);
+	font-family: var(--sans);
+	font-size: var(--fs-md, 14px);
+	line-height: var(--lh-ui, 1.55);
 }
+
 .account-flash.is-error {
-	border-color: var(--cinnabar-edge);
+	border-left-color: var(--cinnabar);
 	background: var(--cinnabar-wash);
 	color: var(--cinnabar-ink);
 }
+
 .account-flash.is-ok {
-	border-color: var(--moss-edge);
-	background: var(--moss-wash);
-	color: var(--moss);
+	border-left-color: var(--moss);
+	background: var(--paper-lo);
+	background: color-mix(in srgb, var(--moss) 8%, transparent);
+	color: var(--ink-2);
 }
+
+.account-flash.is-ok .account-flash-mark { color: var(--moss); }
+
+/* 圆形标记只描边，不填色：小字号在任何纸面上都读得清。 */
 .account-flash-mark {
-	flex: none;
-	width: 17px;
-	height: 17px;
 	display: grid;
 	place-items: center;
+	flex: none;
+	width: 18px;
+	height: 18px;
 	margin-top: 1px;
+	border: 1px solid currentColor;
 	border-radius: 50%;
-	background: currentColor;
-	color: var(--paper-hi);
-	font-size: 10px;
+	background: transparent;
+	color: inherit;
+	font-family: var(--sans);
+	font-size: var(--fs-label, 11px);
 	font-weight: 700;
 	line-height: 1;
 }
+
 .account-flash-text {
 	flex: 1;
 	min-width: 0;
 	margin: 0;
 	overflow-wrap: anywhere;
 }
+
 .account-flash-close,
 .account-notice-close {
+	display: grid;
+	place-items: center;
 	flex: none;
-	width: 22px;
-	height: 22px;
+	width: var(--tap, 44px);
+	height: var(--tap, 44px);
+	margin: calc(-1 * var(--sp-2, 8px)) calc(-1 * var(--sp-2, 8px)) calc(-1 * var(--sp-2, 8px)) 0;
 	padding: 0;
 	border: 0;
 	border-radius: 50%;
 	background: transparent;
 	color: currentColor;
-	font-size: 15px;
+	font-family: var(--sans);
+	font-size: var(--fs-title, 19px);
 	line-height: 1;
 	cursor: pointer;
 	opacity: 0.7;
+	transition: opacity 160ms ease;
 }
+
 .account-flash-close:hover,
 .account-notice-close:hover { opacity: 1; background: var(--hover); }
 
@@ -372,42 +559,59 @@ html.auth-locked #boot-skeleton { visibility: hidden; }
 	display: flex;
 	align-items: flex-start;
 	justify-content: space-between;
-	gap: 14px;
-	margin: 0 0 16px;
-	padding: 13px 14px;
-	border: 1px solid var(--amber);
+	gap: var(--sp-3, 12px);
+	margin: 0 0 var(--sp-4, 16px);
+	padding: var(--sp-4, 16px);
+	border: 1px solid var(--rule);
+	border-left: 3px solid var(--amber);
 	border-radius: 8px;
 	background: var(--paper-lo);
 }
+
 .account-notice-main { min-width: 0; }
+
 .account-notice-title {
 	display: block;
 	font-family: var(--serif);
-	font-size: 13.5px;
+	font-size: var(--fs-item, 16.5px);
 	font-weight: 600;
+	line-height: 1.35;
 	color: var(--ink);
 	overflow-wrap: anywhere;
 }
+
 .account-notice-hint {
-	margin: 5px 0 0;
-	font-size: 11px;
-	line-height: 1.7;
+	margin: var(--sp-1, 4px) 0 0;
+	font-family: var(--sans);
+	font-size: var(--fs-xs, 12px);
+	line-height: var(--lh-ui, 1.55);
 	color: var(--ink-3);
 }
+
 .account-copy-row {
 	display: flex;
 	align-items: center;
-	gap: 7px;
-	margin-top: 9px;
+	gap: var(--sp-2, 8px);
+	margin-top: var(--sp-3, 12px);
 }
-.sheet .account-copy-value {
+
+.account-copy-row .btn { min-height: var(--tap, 44px); }
+
+/* 一次性密码是读一次就抄走的字，等宽、字距略开、行高收紧。 */
+.sheet.account-sheet input.account-copy-value {
 	flex: 1;
 	width: auto;
 	min-width: 0;
+	min-height: var(--tap, 44px);
 	margin: 0;
-	padding: 6px 8px;
+	padding: var(--sp-2, 8px) var(--sp-3, 12px);
+	border: 1px solid var(--rule);
+	border-radius: 8px;
+	background: var(--paper-hi);
+	color: var(--ink);
 	font-family: var(--mono);
-	font-size: 12px;
+	font-size: var(--fs-xs, 12px);
+	line-height: var(--lh-ui, 1.55);
 	letter-spacing: 0.04em;
 }
 
@@ -415,180 +619,316 @@ html.auth-locked #boot-skeleton { visibility: hidden; }
 
 .account-page { display: block; }
 
+/* 不再一张卡片套一张卡片：分节只用发丝线，纸是同一张纸。 */
 .account-section {
-	margin: 0 0 14px;
-	padding: 17px 18px 15px;
-	border: 1px solid var(--rule-soft);
-	border-radius: 10px;
-	background: var(--paper);
+	margin: 0;
+	padding: var(--sp-5, 24px) 0;
+	border-top: 1px solid var(--rule-soft);
 }
-.account-section:last-child { margin-bottom: 0; }
+
+.account-page > .account-section:first-child {
+	padding-top: 0;
+	border-top: 0;
+}
+.account-page > .account-section:last-child { padding-bottom: 0; }
+
 .account-section-head {
 	display: flex;
 	align-items: flex-start;
 	justify-content: space-between;
-	gap: 12px;
-	margin-bottom: 13px;
+	gap: var(--sp-3, 12px);
+	margin-bottom: var(--sp-3, 12px);
 }
+
 .account-section-copy { min-width: 0; }
+
 .account-section-title {
 	margin: 0;
 	font-family: var(--serif);
-	font-size: 15.5px;
+	font-size: var(--fs-title, 19px);
 	font-weight: 600;
-	letter-spacing: 0.05em;
-	line-height: 1.5;
+	line-height: 1.35;
+	letter-spacing: 0.04em;
+	color: var(--ink);
 }
+
 .account-section-hint {
-	margin: 3px 0 0;
-	font-size: 11px;
-	line-height: 1.7;
+	margin: var(--sp-1, 4px) 0 0;
+	font-family: var(--sans);
+	font-size: var(--fs-md, 14px);
+	line-height: var(--lh-ui, 1.55);
 	color: var(--ink-3);
 }
+
 .account-section-actions {
 	display: flex;
+	align-items: center;
 	flex-wrap: wrap;
-	gap: 7px;
 	justify-content: flex-end;
+	gap: var(--sp-2, 8px);
 	flex: none;
 }
+
+.account-section-actions .btn { min-height: var(--tap, 44px); }
 
 .account-quota-top {
 	display: flex;
 	align-items: baseline;
-	gap: 7px;
 	flex-wrap: wrap;
+	gap: var(--sp-2, 8px);
 }
+
 .account-quota-used {
-	font-family: var(--serif);
-	font-size: 24px;
+	font-family: var(--mono);
+	font-size: var(--fs-3xl, 28px);
 	font-weight: 600;
-	letter-spacing: 0.02em;
 	line-height: 1.2;
+	letter-spacing: 0;
 	font-variant-numeric: tabular-nums;
+	color: var(--ink);
 }
+
 .account-quota-total {
-	font-size: 11.5px;
+	font-family: var(--mono);
+	font-size: var(--fs-xs, 12px);
+	line-height: var(--lh-ui, 1.55);
 	color: var(--ink-3);
 	font-variant-numeric: tabular-nums;
 }
+
+/* 细条不是仪表盘：4px 高，贴着纸面，只在过量时才转朱砂。 */
 .account-bar {
-	height: 8px;
-	margin: 10px 0 7px;
-	border-radius: 999px;
+	height: 4px;
+	margin: var(--sp-3, 12px) 0 var(--sp-2, 8px);
+	border-radius: var(--r-pill, 999px);
 	background: var(--paper-sunk);
-	box-shadow: inset 0 1px 2px rgba(27, 24, 21, 0.08);
+	box-shadow: inset 0 0 0 1px var(--rule-soft);
 	overflow: hidden;
 }
+
 .account-bar-fill {
 	display: block;
 	height: 100%;
 	border-radius: inherit;
-	background: linear-gradient(90deg, var(--moss), #7d9367);
-	transition: width var(--brush);
+	background: var(--moss);
 }
-.account-bar-fill.is-warn { background: linear-gradient(90deg, var(--amber), #d2a34c); }
+
+.account-bar-fill.is-warn { background: var(--amber); }
 .account-bar-fill.is-over { background: var(--cinnabar); }
+
 .account-quota-note {
-	margin: 0 0 14px;
-	font-size: 11px;
-	line-height: 1.7;
+	margin: 0 0 var(--sp-4, 16px);
+	font-family: var(--sans);
+	font-size: var(--fs-xs, 12px);
+	line-height: var(--lh-ui, 1.55);
 	color: var(--ink-3);
 }
+
+/* 三栏账目，不用色块：一行一项，数在右。 */
 .account-breakdown {
 	display: grid;
 	grid-template-columns: repeat(3, minmax(0, 1fr));
-	gap: 7px;
+	gap: var(--sp-1, 4px) var(--sp-5, 24px);
+	padding-top: var(--sp-2, 8px);
+	border-top: 1px solid var(--rule-soft);
 }
+
 .account-breakdown-item {
 	display: flex;
 	align-items: baseline;
 	justify-content: space-between;
-	gap: 8px;
-	padding: 7px 9px;
-	border-radius: 6px;
-	background: var(--paper-lo);
+	gap: var(--sp-2, 8px);
+	padding: var(--sp-1, 4px) 0;
+	border-radius: 0;
+	background: none;
 }
-.account-breakdown-label { font-size: 10.5px; color: var(--ink-3); }
+
+.account-breakdown-label {
+	font-family: var(--sans);
+	font-size: var(--fs-xs, 12px);
+	line-height: var(--lh-ui, 1.55);
+	color: var(--ink-3);
+}
+
 .account-breakdown-value {
-	font-size: 11px;
+	font-family: var(--mono);
+	font-size: var(--fs-sm, 13px);
+	line-height: var(--lh-ui, 1.55);
 	color: var(--ink-2);
 	font-variant-numeric: tabular-nums;
 	white-space: nowrap;
 }
 
 .account-sessions { display: block; }
+
 .account-session {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
-	gap: 14px;
-	padding: 11px 0;
+	gap: var(--sp-4, 16px);
+	padding: var(--sp-4, 16px) 0;
 	border-top: 1px solid var(--rule-soft);
 }
+
 .account-session:first-child { padding-top: 0; border-top: 0; }
+
 .account-session-main { min-width: 0; }
+
 .account-session-title {
 	display: flex;
 	align-items: center;
 	flex-wrap: wrap;
-	gap: 7px;
-	font-size: 12.5px;
-	line-height: 1.6;
+	gap: var(--sp-2, 8px);
+	font-family: var(--serif);
+	font-size: var(--fs-item, 16.5px);
+	line-height: 1.35;
+	color: var(--ink);
 }
+
 .account-session-title strong { font-weight: 600; }
-.account-session-device { font-size: 11px; color: var(--ink-3); overflow-wrap: anywhere; }
-.account-session-meta {
-	margin: 4px 0 0;
-	font-size: 10.5px;
-	line-height: 1.65;
+
+.account-session-device {
+	font-family: var(--sans);
+	font-size: var(--fs-xs, 12px);
+	line-height: var(--lh-ui, 1.55);
 	color: var(--ink-3);
 	overflow-wrap: anywhere;
 }
 
+.account-session-meta {
+	margin: var(--sp-1, 4px) 0 0;
+	font-family: var(--mono);
+	font-size: var(--fs-xs, 12px);
+	line-height: var(--lh-ui, 1.55);
+	color: var(--ink-3);
+	font-variant-numeric: tabular-nums;
+	overflow-wrap: anywhere;
+}
+
+/* 徽章是「小印」，字 11px，边框比底重一点。 */
 .account-badge {
 	display: inline-flex;
 	align-items: center;
-	padding: 1px 6px;
+	padding: var(--sp-1, 4px) var(--sp-2, 8px);
 	border: 1px solid var(--rule);
-	border-radius: 999px;
-	font-size: 9.5px;
-	line-height: 1.6;
+	border-radius: var(--r-pill, 999px);
+	font-family: var(--sans);
+	font-size: var(--fs-label, 11px);
+	font-weight: 500;
+	line-height: 1.5;
 	letter-spacing: 0.04em;
 	white-space: nowrap;
 	color: var(--ink-3);
 }
+
 .account-badge.is-current,
 .account-badge.is-on {
-	border-color: var(--moss-edge);
-	background: var(--moss-soft);
-	color: var(--moss);
+	border-color: var(--rule);
+	background: var(--paper-lo);
+	border-color: color-mix(in srgb, var(--moss) 40%, transparent);
+	background: color-mix(in srgb, var(--moss) 10%, transparent);
+	color: var(--ink-2);
 }
+
 .account-badge.is-admin {
-	border-color: var(--cinnabar-edge);
-	background: var(--cinnabar-tint);
+	border-color: var(--rule);
+	background: var(--paper-lo);
+	border-color: color-mix(in srgb, var(--cinnabar) 40%, transparent);
+	background: var(--cinnabar-wash);
 	color: var(--cinnabar-ink);
 }
-.account-badge.is-off {
+
+.account-badge.is-off,
+.account-badge.is-user {
 	border-color: var(--rule);
 	background: var(--paper-lo);
 	color: var(--ink-3);
 }
 
 .account-form { margin: 0; }
-.account-form .field { margin-bottom: 12px; }
+
+.account-form .field { margin-bottom: var(--sp-4, 16px); }
+.account-form .field:last-child { margin-bottom: 0; }
+
+.account-form .field label {
+	display: block;
+	margin-bottom: var(--sp-2, 8px);
+	font-family: var(--sans);
+	font-size: var(--fs-label, 11px);
+	line-height: var(--lh-ui, 1.55);
+	letter-spacing: 0.14em;
+	color: var(--ink-3);
+}
+
+.account-form .field .hint {
+	margin-top: var(--sp-1, 4px);
+	font-family: var(--sans);
+	font-size: var(--fs-xs, 12px);
+	line-height: var(--lh-ui, 1.55);
+	color: var(--ink-3);
+}
+
+.account-form input:not([type="checkbox"]):not([type="radio"]),
+.account-form select,
+.account-form textarea {
+	min-height: var(--tap, 44px);
+	margin: 0;
+	padding: var(--sp-2, 8px) var(--sp-3, 12px);
+	border: 1px solid var(--rule);
+	border-radius: 8px;
+	background-color: var(--paper-sunk);
+	color: var(--ink);
+	font-family: var(--serif);
+	font-size: var(--fs-item, 16.5px);
+	line-height: 1.5;
+	caret-color: var(--cinnabar);
+}
+
+.account-form select { padding-right: var(--sp-6, 32px); }
+
+.account-form input::placeholder,
+.account-form textarea::placeholder { color: var(--ink-3); opacity: 1; }
+
+.account-form input:not([type="checkbox"]):not([type="radio"]):focus,
+.account-form select:focus,
+.account-form textarea:focus {
+	outline: none;
+	border-color: var(--cinnabar);
+	box-shadow: 0 0 0 3px var(--cinnabar-wash);
+}
+
+.account-form input:disabled,
+.account-form select:disabled,
+.account-form textarea:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.account-form input.is-error,
+.account-form select.is-error,
+.account-form textarea.is-error { border-color: var(--cinnabar); }
+
+.account-form input:-webkit-autofill,
+.account-form input:-webkit-autofill:hover,
+.account-form input:-webkit-autofill:focus {
+	-webkit-box-shadow: 0 0 0 100px var(--paper-sunk) inset;
+	-webkit-text-fill-color: var(--ink);
+	caret-color: var(--cinnabar);
+}
+
 .account-form-actions {
 	display: flex;
 	align-items: center;
 	justify-content: flex-end;
 	flex-wrap: wrap;
-	gap: 9px;
-	margin-top: 12px;
+	gap: var(--sp-2, 8px);
+	margin-top: var(--sp-4, 16px);
 }
+
+.account-form-actions .btn { min-height: var(--tap, 44px); }
+
 .account-muted {
-	margin: 10px 0 0;
-	font-size: 10.5px;
-	line-height: 1.7;
+	margin: var(--sp-3, 12px) 0 0;
+	font-family: var(--sans);
+	font-size: var(--fs-xs, 12px);
+	line-height: var(--lh-ui, 1.55);
 	color: var(--ink-3);
 	overflow-wrap: anywhere;
 }
@@ -596,59 +936,77 @@ html.auth-locked #boot-skeleton { visibility: hidden; }
 /* ── 连接云端 ─────────────────────────────────────────────── */
 
 .account-connect-form {
-	padding: 18px;
-	border: 1px solid var(--rule-soft);
-	border-radius: 10px;
-	background: var(--paper);
+	padding: var(--sp-5, 24px);
+	border: 1px solid var(--rule);
+	border-radius: 12px;
+	background: var(--paper-hi);
 }
+
 .account-seg {
 	display: inline-flex;
 	align-items: center;
-	margin: 0 0 14px;
-	padding: 2px;
+	gap: var(--sp-1, 4px);
+	margin: 0 0 var(--sp-4, 16px);
+	padding: var(--sp-1, 4px);
 	border: 1px solid var(--rule);
-	border-radius: 999px;
+	border-radius: var(--r-pill, 999px);
 	background: var(--paper-lo);
 }
+
 .account-seg-item {
-	padding: 6px 16px;
+	min-height: var(--tap, 44px);
+	padding: 0 var(--sp-4, 16px);
 	border: 0;
-	border-radius: 999px;
-	background: none;
+	border-radius: var(--r-pill, 999px);
+	background: transparent;
 	color: var(--ink-3);
-	font-family: var(--serif);
-	font-size: 12px;
-	letter-spacing: 0.05em;
+	font-family: var(--sans);
+	font-size: var(--fs-sm, 13px);
+	letter-spacing: 0.04em;
 	cursor: pointer;
 }
+
+.account-seg-item:hover { color: var(--ink); }
+.account-seg-item:disabled { opacity: 0.55; cursor: not-allowed; }
+
 .account-seg-item.is-on {
 	background: var(--paper-hi);
 	color: var(--ink);
+	font-weight: 600;
 	box-shadow: var(--elev-1);
 }
+
 .account-connect-status {
-	margin: 0 0 10px;
-	padding: 8px 10px;
-	border: 1px solid transparent;
-	border-radius: 6px;
-	font-size: 12px;
-	line-height: 1.7;
+	margin: 0 0 var(--sp-3, 12px);
+	padding: var(--sp-3, 12px) var(--sp-4, 16px);
+	border-left: 3px solid var(--rule-strong);
+	border-radius: 0 8px 8px 0;
+	background: var(--paper-lo);
+	color: var(--ink-2);
+	font-family: var(--sans);
+	font-size: var(--fs-md, 14px);
+	line-height: var(--lh-ui, 1.55);
 	overflow-wrap: anywhere;
 }
+
 .account-connect-status.is-error {
-	border-color: var(--cinnabar-edge);
+	border-left-color: var(--cinnabar);
 	background: var(--cinnabar-wash);
 	color: var(--cinnabar-ink);
 }
+
 .account-connect-status.is-ok {
-	border-color: var(--moss-edge);
-	background: var(--moss-wash);
-	color: var(--moss);
+	border-left-color: var(--moss);
+	background: var(--paper-lo);
+	background: color-mix(in srgb, var(--moss) 8%, transparent);
+	color: var(--ink-2);
 }
+
 .account-note {
-	margin: 12px 0 0;
-	font-size: 10.5px;
-	line-height: 1.75;
+	margin: var(--sp-4, 16px) 0 0;
+	font-family: var(--sans);
+	font-size: var(--fs-xs, 12px);
+	line-height: var(--lh-ui, 1.55);
 	color: var(--ink-3);
 }
 
@@ -658,67 +1016,97 @@ html.auth-locked #boot-skeleton { visibility: hidden; }
 	display: flex;
 	align-items: flex-start;
 	justify-content: space-between;
-	gap: 14px;
-	margin-bottom: 16px;
+	gap: var(--sp-4, 16px);
+	margin-bottom: var(--sp-5, 24px);
 }
+
 .account-page-copy { min-width: 0; }
+
 .account-page-title {
 	margin: 0;
 	font-family: var(--serif);
-	font-size: 18px;
+	font-size: var(--fs-2xl, 22px);
 	font-weight: 600;
-	letter-spacing: 0.06em;
-	line-height: 1.4;
+	line-height: 1.35;
+	letter-spacing: 0.04em;
+	color: var(--ink);
 }
+
 .account-page-hint {
-	margin: 4px 0 0;
-	font-size: 11px;
-	line-height: 1.7;
+	margin: var(--sp-1, 4px) 0 0;
+	font-family: var(--sans);
+	font-size: var(--fs-md, 14px);
+	line-height: var(--lh-ui, 1.55);
 	color: var(--ink-3);
+}
+
+.account-page-head .btn { min-height: var(--tap, 44px); }
+
+/* 单机/本地模式的说明页只有一个 page-head：收成一张有底的短帖。 */
+.account-body:has(> .account-page > .account-page-head:only-child) {
+	padding-top: var(--sp-4, 16px);
+	padding-bottom: calc(var(--sp-4, 16px) + var(--sp-1, 4px));
+}
+
+.account-body > .account-page > .account-page-head:only-child {
+	margin-bottom: 0;
+	padding-bottom: var(--sp-3, 12px);
+	border-bottom: 1px solid var(--rule-soft);
 }
 
 .account-stat-grid {
 	display: grid;
 	grid-template-columns: repeat(2, minmax(0, 1fr));
-	gap: 9px;
+	gap: var(--sp-4, 16px);
 }
+
 .account-stat {
-	padding: 14px 15px;
-	border: 1px solid var(--rule-soft);
-	border-radius: 9px;
-	background: var(--paper);
 	min-width: 0;
+	padding: var(--sp-5, 24px);
+	border: 1px solid var(--rule);
+	border-radius: 12px;
+	background: var(--paper-hi);
 }
+
 .account-stat-label {
 	display: block;
-	font-size: 10.5px;
-	letter-spacing: 0.1em;
+	font-family: var(--sans);
+	font-size: var(--fs-label, 11px);
+	line-height: var(--lh-ui, 1.55);
+	letter-spacing: 0.14em;
 	color: var(--ink-3);
 }
+
 .account-stat-value {
 	display: block;
-	margin: 5px 0 2px;
-	font-family: var(--serif);
-	font-size: 21px;
+	margin: var(--sp-2, 8px) 0 var(--sp-1, 4px);
+	font-family: var(--mono);
+	font-size: var(--fs-3xl, 28px);
 	font-weight: 600;
-	line-height: 1.35;
+	line-height: 1.3;
 	font-variant-numeric: tabular-nums;
 	overflow-wrap: anywhere;
+	color: var(--ink);
 }
+
 .account-stat-hint {
 	display: block;
-	font-size: 10.5px;
-	line-height: 1.65;
+	font-family: var(--sans);
+	font-size: var(--fs-xs, 12px);
+	line-height: var(--lh-ui, 1.55);
 	color: var(--ink-3);
 }
+
 .account-code {
 	display: block;
-	padding: 4px 6px;
-	border-radius: 4px;
+	padding: var(--sp-1, 4px) var(--sp-2, 8px);
+	border-radius: 8px;
 	background: var(--paper-lo);
 	font-family: var(--mono);
-	font-size: 10.5px;
-	line-height: 1.6;
+	font-size: var(--fs-xs, 12px);
+	font-weight: 400;
+	line-height: 1.5;
+	color: var(--ink-2);
 	overflow-wrap: anywhere;
 }
 
@@ -727,128 +1115,210 @@ html.auth-locked #boot-skeleton { visibility: hidden; }
 .account-search {
 	display: flex;
 	align-items: center;
-	gap: 8px;
-	margin: 0 0 12px;
+	gap: var(--sp-2, 8px);
+	margin: 0 0 var(--sp-4, 16px);
 }
-.sheet .account-search input {
+
+.account-search input:not([type="checkbox"]):not([type="radio"]) {
 	flex: 1;
 	width: auto;
 	min-width: 0;
+	min-height: var(--tap, 44px);
 	margin: 0;
+	padding: var(--sp-2, 8px) var(--sp-3, 12px);
+	border: 1px solid var(--rule);
+	border-radius: 8px;
+	background-color: var(--paper-sunk);
+	color: var(--ink);
+	font-family: var(--serif);
+	font-size: var(--fs-item, 16.5px);
+	line-height: 1.5;
+	caret-color: var(--cinnabar);
 }
 
-.account-details {
-	margin: 0 0 16px;
-	border: 1px solid var(--rule-soft);
-	border-radius: 9px;
-	background: var(--paper);
+.account-search input:not([type="checkbox"]):not([type="radio"]):focus {
+	outline: none;
+	border-color: var(--cinnabar);
+	box-shadow: 0 0 0 3px var(--cinnabar-wash);
 }
+
+.account-search .btn { min-height: var(--tap, 44px); }
+
+.account-details {
+	margin: 0 0 var(--sp-5, 24px);
+	border: 1px solid var(--rule);
+	border-radius: 12px;
+	background: var(--paper-hi);
+	overflow: hidden;
+}
+
 .account-details-summary {
-	padding: 10px 14px;
-	font-family: var(--serif);
-	font-size: 12.5px;
+	display: flex;
+	align-items: center;
+	gap: var(--sp-2, 8px);
+	min-height: 48px;
+	padding: var(--sp-3, 12px) var(--sp-4, 16px);
+	font-family: var(--sans);
+	font-size: var(--fs-md, 14px);
+	font-weight: 600;
+	line-height: var(--lh-ui, 1.55);
 	color: var(--ink-2);
 	cursor: pointer;
 	list-style: none;
 }
+
 .account-details-summary::-webkit-details-marker { display: none; }
+.account-details-summary:hover { background: var(--hover); color: var(--ink); }
+
 .account-details-summary::before {
-	content: "＋ ";
+	content: "＋";
+	width: 16px;
+	flex: none;
 	color: var(--cinnabar);
 	font-family: var(--sans);
-	font-size: 12px;
+	font-size: var(--fs-item, 16.5px);
+	font-weight: 400;
+	line-height: 1;
+	text-align: center;
 }
-.account-details[open] .account-details-summary::before { content: "－ "; }
-.account-details .account-form { padding: 2px 14px 14px; }
 
-.account-users { display: flex; flex-direction: column; gap: 9px; }
-.account-user {
-	padding: 13px 14px 12px;
-	border: 1px solid var(--rule-soft);
-	border-radius: 9px;
-	background: var(--paper);
+.account-details[open] .account-details-summary {
+	border-bottom: 1px solid var(--rule-soft);
 }
+
+.account-details[open] .account-details-summary::before { content: "－"; }
+
+.account-details .account-form { padding: 0 var(--sp-4, 16px) var(--sp-4, 16px); }
+.account-details .account-create-form { padding-top: var(--sp-1, 4px); }
+
+.account-users {
+	display: flex;
+	flex-direction: column;
+	gap: var(--sp-3, 12px);
+}
+
+.account-user {
+	padding: var(--sp-4, 16px);
+	border: 1px solid var(--rule);
+	border-radius: 12px;
+	background: var(--paper-hi);
+}
+
 .account-user-head {
 	display: flex;
 	align-items: flex-start;
 	justify-content: space-between;
-	gap: 10px;
+	gap: var(--sp-3, 12px);
 }
+
 .account-user-identity {
 	display: flex;
 	flex-direction: column;
-	gap: 2px;
+	gap: var(--sp-1, 4px);
 	min-width: 0;
 }
+
 .account-user-name {
 	font-family: var(--serif);
-	font-size: 14px;
+	font-size: var(--fs-item, 16.5px);
 	font-weight: 600;
-	line-height: 1.5;
+	line-height: 1.35;
+	color: var(--ink);
 	overflow-wrap: anywhere;
 }
+
 .account-user-email {
-	font-size: 10.5px;
-	line-height: 1.6;
+	font-family: var(--sans);
+	font-size: var(--fs-xs, 12px);
+	line-height: var(--lh-ui, 1.55);
 	color: var(--ink-3);
 	overflow-wrap: anywhere;
 }
+
 .account-user-badges {
 	display: flex;
 	flex-wrap: wrap;
-	gap: 5px;
 	justify-content: flex-end;
+	gap: var(--sp-1, 4px);
 }
+
 .account-user-meta {
-	margin: 6px 0 10px;
-	font-size: 10.5px;
-	line-height: 1.65;
+	margin: var(--sp-2, 8px) 0 var(--sp-3, 12px);
+	font-family: var(--mono);
+	font-size: var(--fs-xs, 12px);
+	line-height: var(--lh-ui, 1.55);
 	color: var(--ink-3);
+	font-variant-numeric: tabular-nums;
 	overflow-wrap: anywhere;
 }
+
 .account-user-actions {
 	display: flex;
 	align-items: center;
 	flex-wrap: wrap;
-	gap: 8px;
-	padding-top: 9px;
+	gap: var(--sp-2, 8px);
+	padding-top: var(--sp-3, 12px);
 	border-top: 1px solid var(--rule-soft);
 }
 
-.sheet .account-inline {
+.account-user-actions .btn { min-height: var(--tap, 44px); }
+
+.account-sheet .account-inline {
 	display: inline-flex;
 	align-items: center;
-	gap: 6px;
+	gap: var(--sp-2, 8px);
 	margin: 0;
-	font-size: 10.5px;
+	font-family: var(--sans);
+	font-size: var(--fs-xs, 12px);
+	line-height: var(--lh-ui, 1.55);
 	letter-spacing: 0;
 	color: var(--ink-3);
 	white-space: nowrap;
 }
-.sheet .account-inline select {
+
+.sheet.account-sheet .account-inline select {
 	width: auto;
-	min-width: 88px;
+	min-width: 96px;
+	min-height: var(--tap, 44px);
 	margin: 0;
-	padding: 5px 8px;
-	font-size: 12px;
+	padding: var(--sp-1, 4px) var(--sp-2, 8px);
+	font-family: var(--sans);
+	font-size: var(--fs-xs, 12px);
 }
-.sheet .account-inline input {
-	width: 82px;
+
+.sheet.account-sheet .account-inline input:not([type="checkbox"]):not([type="radio"]) {
+	width: 88px;
+	min-height: var(--tap, 44px);
 	margin: 0;
-	padding: 5px 7px;
-	font-size: 12px;
+	padding: var(--sp-1, 4px) var(--sp-2, 8px);
+	font-family: var(--mono);
+	font-size: var(--fs-xs, 12px);
+	font-variant-numeric: tabular-nums;
+	text-align: right;
+}
+
+.account-quota-input {
+	font-family: var(--mono);
+	font-size: var(--fs-xs, 12px);
+	font-variant-numeric: tabular-nums;
+	text-align: right;
 }
 
 .account-pager {
 	display: flex;
 	align-items: center;
-	gap: 10px;
-	margin-top: 14px;
+	gap: var(--sp-2, 8px);
+	margin-top: var(--sp-4, 16px);
 }
+
+.account-pager .btn { min-height: var(--tap, 44px); }
+
 .account-pager-info {
 	flex: 1;
 	text-align: center;
-	font-size: 10.5px;
+	font-family: var(--mono);
+	font-size: var(--fs-xs, 12px);
+	line-height: var(--lh-ui, 1.55);
 	color: var(--ink-3);
 	font-variant-numeric: tabular-nums;
 }
@@ -856,45 +1326,55 @@ html.auth-locked #boot-skeleton { visibility: hidden; }
 /* ── 管理员：审计 ─────────────────────────────────────────── */
 
 .account-audit-list { display: block; }
+
 .account-audit-row {
-	padding: 10px 0;
+	padding: var(--sp-4, 16px) 0;
 	border-top: 1px solid var(--rule-soft);
 }
+
 .account-audit-row:first-child { padding-top: 0; border-top: 0; }
+
 .account-audit-head {
 	display: flex;
 	align-items: baseline;
 	justify-content: space-between;
-	gap: 12px;
+	gap: var(--sp-3, 12px);
 }
+
 .account-audit-action {
 	font-family: var(--serif);
-	font-size: 12.5px;
+	font-size: var(--fs-body, 15px);
 	font-weight: 600;
-	line-height: 1.5;
+	line-height: 1.35;
+	color: var(--ink);
 }
+
 .account-audit-time {
 	flex: none;
-	font-size: 10px;
+	font-family: var(--mono);
+	font-size: var(--fs-xs, 12px);
 	color: var(--ink-3);
 	white-space: nowrap;
 	font-variant-numeric: tabular-nums;
 }
+
 .account-audit-meta {
-	margin: 3px 0 0;
-	font-size: 10.5px;
-	line-height: 1.65;
+	margin: var(--sp-1, 4px) 0 0;
+	font-family: var(--mono);
+	font-size: var(--fs-xs, 12px);
+	line-height: var(--lh-ui, 1.55);
 	color: var(--ink-3);
 	overflow-wrap: anywhere;
 }
+
 .account-audit-detail {
-	margin: 4px 0 0;
-	padding: 6px 8px;
-	border-radius: 4px;
+	margin: var(--sp-1, 4px) 0 0;
+	padding: var(--sp-2, 8px) var(--sp-3, 12px);
+	border-radius: 8px;
 	background: var(--paper-lo);
 	font-family: var(--mono);
-	font-size: 10.5px;
-	line-height: 1.65;
+	font-size: var(--fs-xs, 12px);
+	line-height: 1.55;
 	color: var(--ink-2);
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
@@ -902,14 +1382,66 @@ html.auth-locked #boot-skeleton { visibility: hidden; }
 
 /* ── 空态与错误态 ─────────────────────────────────────────── */
 
+/* 不用虚线框：一道小朱砂短线，加一句能读完的话。 */
 .account-empty {
 	margin: 0;
-	padding: 26px 0;
+	padding: var(--sp-6, 32px) var(--sp-4, 16px);
 	text-align: center;
-	font-size: 11.5px;
-	line-height: 1.8;
+	font-family: var(--serif);
+	font-size: var(--fs-body, 15px);
+	line-height: var(--lh-read, 1.9);
 	color: var(--ink-3);
 }
+
+.account-empty::before {
+	content: "";
+	display: block;
+	width: 24px;
+	height: 2px;
+	margin: 0 auto var(--sp-3, 12px);
+	background: var(--cinnabar);
+	opacity: 0.55;
+}
+
+/* 危险操作留在最轻一档：透明底、朱砂字，悬停才有一层淡红。 */
+.account-sheet .btn-danger {
+	min-height: var(--tap, 44px);
+	background: transparent;
+	border-color: color-mix(in srgb, var(--cinnabar) 32%, transparent);
+	color: var(--cinnabar-ink);
+}
+
+.account-sheet .btn-danger:hover {
+	background: var(--cinnabar-wash);
+	border-color: var(--cinnabar);
+}
+
+/* 账户弹层里的按钮统一 8px 圆角，小按钮也保证 44px 触控高度。 */
+.account-sheet .btn {
+	min-height: var(--tap, 44px);
+	border-radius: 8px;
+}
+
+.account-sheet .btn-sm { min-height: var(--tap, 44px); }
+
+/* ── 焦点与忙态 ───────────────────────────────────────────── */
+
+.auth-gate button:focus-visible,
+.account-sheet button:focus-visible,
+.account-sheet summary:focus-visible,
+#account-btn:focus-visible {
+	outline: 2px solid var(--cinnabar-ink);
+	outline-offset: 2px;
+}
+
+.auth-submit.is-loading,
+.account-sheet .btn.is-loading {
+	cursor: progress;
+	opacity: 0.65;
+}
+
+/* 顶栏按钮沿用全局 .btn，只把触控高度抬到 44。 */
+#account-btn { min-height: var(--tap, 44px); border-radius: 8px; }
 
 /* ── 窄屏 ─────────────────────────────────────────────────── */
 
@@ -918,46 +1450,107 @@ html.auth-locked #boot-skeleton { visibility: hidden; }
 	.account-sheet.is-admin {
 		width: 100vw;
 		max-width: 100vw;
-		height: 100dvh;
-		max-height: none;
+		height: auto;
+		max-height: 100vh;
+		max-height: 100dvh;
+		margin: auto;
 		border: 0;
 		border-radius: 0;
 	}
-	.account-head { padding: 16px 18px 13px; }
-	.account-tabs { padding: 0 18px; gap: 20px; }
-	.account-body { padding: 16px 18px 26px; }
+
+	.account-sheet::before { display: none; }
+
+	.account-head {
+		align-items: flex-start;
+		padding: calc(var(--sp-4, 16px) + env(safe-area-inset-top, 0px)) var(--sp-4, 16px) var(--sp-3, 12px);
+	}
+
+	.account-tabs {
+		gap: var(--sp-5, 24px);
+		padding: 0 var(--sp-4, 16px);
+	}
+
+	.account-body {
+		padding: var(--sp-4, 16px) var(--sp-4, 16px) calc(var(--sp-5, 24px) + env(safe-area-inset-bottom, 0px));
+	}
+
 	.account-breakdown { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 	.account-stat-grid { grid-template-columns: 1fr; }
+	.account-stat { padding: var(--sp-4, 16px); }
+
 	.account-session { align-items: flex-start; }
+	.account-user-head { flex-wrap: wrap; }
+	.account-user-badges { justify-content: flex-start; }
 	.account-user-actions { align-items: flex-start; }
+	.account-seg-item { min-height: var(--tap, 44px); }
 }
 
 @media (max-width: 640px) {
 	/* 顶栏在手机上只留一个字：账户按钮收成「账」印，触控面积不缩。 */
 	#account-btn {
 		position: relative;
-		width: var(--tap-lg);
-		min-width: var(--tap-lg);
-		height: var(--tap-lg);
+		width: var(--tap-lg, 48px);
+		min-width: var(--tap-lg, 48px);
+		height: var(--tap-lg, 48px);
 		padding: 0;
 		font-size: 0;
 	}
+
 	#account-btn::before {
 		content: "账";
 		font-family: var(--kai);
-		font-size: 15px;
+		font-size: var(--fs-item, 16.5px);
 		line-height: 1;
 	}
 }
 
 @media (max-width: 560px) {
 	.auth-gate {
-		align-items: start;
-		padding: 18px 14px calc(18px + var(--safe-b));
+		justify-content: flex-start;
+		padding: var(--sp-4, 16px) var(--sp-3, 12px) calc(var(--sp-4, 16px) + env(safe-area-inset-bottom, 0px));
 	}
+
 	.auth-card {
-		margin-top: max(4vh, 18px);
-		padding: 26px 21px 22px;
+		margin-block: max(3vh, var(--sp-4, 16px)) 0;
+		padding: var(--sp-5, 24px) var(--sp-4, 16px);
 	}
-	.auth-title { font-size: 21px; }
+
+	.auth-card::after { display: none; }
+
+	.auth-lead { margin-top: var(--sp-3, 12px); }
+
+	.auth-form,
+	.auth-retry { padding: var(--sp-4, 16px); }
+
+	.auth-title { font-size: var(--fs-2xl, 22px); }
+
+	.account-head {
+		padding: calc(var(--sp-4, 16px) + env(safe-area-inset-top, 0px)) var(--sp-4, 16px) var(--sp-3, 12px);
+	}
+
+	.account-id { gap: var(--sp-3, 12px); }
+	.account-avatar { width: 48px; height: 48px; }
+	.account-head .account-title { font-size: var(--fs-title, 19px); }
+	.account-tabs { gap: var(--sp-4, 16px); }
+
+	.account-body {
+		padding: var(--sp-4, 16px) var(--sp-4, 16px) calc(var(--sp-5, 24px) + env(safe-area-inset-bottom, 0px));
+	}
+
+	.account-section { padding: var(--sp-4, 16px) 0; }
+	.account-section-head { flex-wrap: wrap; }
+	.account-section-actions { justify-content: flex-start; }
+	.account-page-head { flex-wrap: wrap; }
+	.account-breakdown { grid-template-columns: 1fr; }
+
+	.account-copy-row { flex-wrap: wrap; }
+	.sheet.account-sheet input.account-copy-value { flex-basis: 100%; }
+
+	.account-user-actions .account-inline { white-space: normal; }
+}
+
+/* 窗口很矮时，门帖从顶部开始，保证第一眼能看到印与表单。 */
+@media (max-height: 680px) {
+	.auth-gate { justify-content: flex-start; }
+	.auth-card { margin-block: var(--sp-4, 16px) auto; }
 }
