@@ -485,7 +485,8 @@ const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
  */
 async function handleCloudProxy(req: IncomingMessage, res: ServerResponse, url: URL, config: AppConfig): Promise<void> {
 	const sink = createNodeApiSink(res);
-	if (!LOOPBACK_HOSTS.has(config.host.trim().toLowerCase())) {
+	// 生产部署一律关掉：这台服务器在公网上，转发口子等于给陌生站点当代理。
+	if (process.env.NODE_ENV === "production" || !LOOPBACK_HOSTS.has(config.host.trim().toLowerCase())) {
 		json(sink, 404, { error: "这台服务器不提供本机转发", code: "proxy_disabled" });
 		return;
 	}
