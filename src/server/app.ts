@@ -271,6 +271,11 @@ export async function createApp(config: AppConfig, publicDir: string): Promise<A
 					await handleRelay(req, res);
 					return;
 				}
+				// 本机调试用的同源转发：页面在 127.0.0.1 上直连云端会被 CORS 预检挡住。
+				if (url.pathname.startsWith("/__cloud/")) {
+					await handleCloudProxy(req, res, url, config);
+					return;
+				}
 				if (url.pathname.startsWith("/api/")) {
 					if (await handleSingleModeAuth(url, req, res)) return;
 					await handleApi(req, res, url);
@@ -450,7 +455,13 @@ function applyCors(req: IncomingMessage, res: ServerResponse, config: AppConfig,
 	res.setHeader("access-control-allow-credentials", "true");
 	if (!preflight) return false;
 	res.setHeader("access-control-allow-methods", "GET, POST, PATCH, DELETE, OPTIONS");
-	const asked = firstHeader(req.headers["access-control-request-headers"]);
+	// 预检里可能一次问好几个头（authorization + content-type + x-novel-client）。
+	// 必须把它们全部回出来：浏览器只认同"全部允许"的预检，回一个就整条请求作废。
+	const asked = String(req.headers["access-control-request-headers"] ?? "")
+		.split(",")
+		.map((name) => name.trim())
+		.filter(Boolean)
+		.join(", ");
 	res.setHeader("access-control-allow-headers", asked || "authorization, content-type, x-novel-client, accept");
 	res.setHeader("access-control-max-age", "600");
 	res.writeHead(204);
@@ -460,6 +471,71 @@ function applyCors(req: IncomingMessage, res: ServerResponse, config: AppConfig,
 
 function relayHostsText(config: AppConfig): string {
 	return config.relay.allowedHosts.length > 0 ? config.relay.allowedHosts.join(", ") : "（未设白名单：任何公开 https 主机）";
+}
+
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+
+/**
+ * 本机页面（`pnpm dev` 打开的 http://127.0.0.1:8787）直连云端是跨源请求：
+ * 云端只放行自身来源与 Tauri 外壳，预检会 403，浏览器随后报 "Failed to fetch"。
+ *
+ * 这里给本机调试留一条同源转发 —— 页面请求 `/__cloud/api/…` 并带上
+ * `x-cloud-target: https://…`，由本机服务端去取，浏览器看到的仍是同源请求。
+ * 只在服务端绑定回环地址时启用：公网部署（HOST=0.0.0.0）不会开这个口子。
+ */
+async function handleCloudProxy(req: IncomingMessage, res: ServerResponse, url: URL, config: AppConfig): Promise<void> {
+	const sink = createNodeApiSink(res);
+	if (!LOOPBACK_HOSTS.has(config.host.trim().toLowerCase())) {
+		json(sink, 404, { error: "这台服务器不提供本机转发", code: "proxy_disabled" });
+		return;
+	}
+	let target: URL;
+	try {
+		target = new URL(String(req.headers["x-cloud-target"] ?? "").trim());
+	} catch {
+		json(sink, 400, { error: "转发目标不是一个合法地址", code: "bad_target" });
+		return;
+	}
+	if (target.protocol !== "https:" && target.protocol !== "http:") {
+		json(sink, 400, { error: "只能用 http(s) 转发", code: "bad_target" });
+		return;
+	}
+	const behind = url.pathname.slice("/__cloud".length) || "/";
+	const targetUrl = new URL(behind + url.search, target.href.replace(/\/+$/, "") + "/");
+
+	const headers = new Headers();
+	for (const name of ["authorization", "content-type", "accept", "x-novel-client", "user-agent"]) {
+		const value = req.headers[name];
+		if (typeof value === "string" && value) headers.set(name, value);
+	}
+	// 让云端按"它自己的来源"看待这次请求：CSRF 校验与 CORS 白名单都认这个值。
+	headers.set("origin", target.origin);
+
+	let body: Buffer | undefined;
+	if (req.method !== "GET" && req.method !== "HEAD") {
+		const chunks: Buffer[] = [];
+		for await (const chunk of req) chunks.push(chunk as Buffer);
+		body = Buffer.concat(chunks);
+	}
+
+	let upstream: Response;
+	try {
+		upstream = await fetch(targetUrl, { method: req.method, headers, body, redirect: "manual" });
+	} catch (error) {
+		json(sink, 502, {
+			error: "本机转发到 " + target.host + " 失败：" + (error instanceof Error ? error.message : String(error)),
+			code: "upstream_unreachable",
+		});
+		return;
+	}
+
+	const passthrough = ["content-type", "cache-control", "vary"];
+	for (const name of passthrough) {
+		const value = upstream.headers.get(name);
+		if (value) res.setHeader(name, value);
+	}
+	res.statusCode = upstream.status;
+	res.end(Buffer.from(await upstream.arrayBuffer()));
 }
 
 function quotaText(bytes: number): string {

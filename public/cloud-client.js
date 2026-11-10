@@ -143,6 +143,26 @@ function defaultStatusMessage(status) {
 	}
 }
 
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+
+/**
+ * 本机页面（http://127.0.0.1:8787）直连云端是跨源请求，云端只放行自身来源与
+ * Tauri 外壳，预检会被 403，浏览器随后报 "Failed to fetch"。这种情况下改走
+ * 本机服务端的 /__cloud 同源转发，由它带上 x-cloud-target 去取。
+ * 云端部署的网页与桌面外壳不走这条路。
+ */
+function loopbackRelay(base) {
+	if (!base || typeof window === "undefined") return "";
+	const page = window.location;
+	if (!page || !LOOPBACK_HOSTS.has(page.hostname)) return "";
+	try {
+		if (new URL(base).origin === page.origin) return "";
+	} catch {
+		return "";
+	}
+	return page.origin + "/__cloud";
+}
+
 /**
  * 发一个 JSON 请求。
  * @param {string} path 以 / 开头的 API 路径（可带查询串）
@@ -150,9 +170,11 @@ function defaultStatusMessage(status) {
  */
 export async function api(path, options = {}) {
 	const base = cloudBase();
-	const target = base ? base + (path.startsWith("/") ? path : "/" + path) : path;
+	const relay = base ? loopbackRelay(base) : "";
+	const target = relay ? relay + (path.startsWith("/") ? path : "/" + path) : base ? base + (path.startsWith("/") ? path : "/" + path) : path;
 
 	const headers = new Headers(options.headers || {});
+	if (relay) headers.set("x-cloud-target", base);
 	let body = options.body;
 	if (isJsonBody(body)) {
 		if (!headers.has("content-type")) headers.set("content-type", "application/json; charset=utf-8");
@@ -176,7 +198,7 @@ export async function api(path, options = {}) {
 	} catch (cause) {
 		let host = "";
 		try {
-			host = new URL(target, window.location.href).host;
+			host = new URL(relay ? base : target, window.location.href).host;
 		} catch {
 			// 拼不出 host 就用通用文案。
 		}
