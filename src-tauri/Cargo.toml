@@ -1,6 +1,6 @@
 [package]
 name = "novel-studio"
-version = "0.4.0"
+version = "0.4.1"
 description = "墨耕 · 本地优先的长篇小说创作台"
 authors = ["novel-studio"]
 license = "MIT"
