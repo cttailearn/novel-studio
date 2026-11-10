@@ -7558,19 +7558,19 @@ textarea::placeholder { color: var(--ink-hold); opacity: 1; }
    ══════════════════════════════════════════════════════════════ */
 
 /* 底色只染背景：字仍是 --ink / --ink-2 / --ink-3，不跟着色相走。 */
-.card.mat[data-tint="1"]  { --mat-tint: var(--mat-tint-1); }
-.card.mat[data-tint="2"]  { --mat-tint: var(--mat-tint-2); }
-.card.mat[data-tint="3"]  { --mat-tint: var(--mat-tint-3); }
-.card.mat[data-tint="4"]  { --mat-tint: var(--mat-tint-4); }
-.card.mat[data-tint="5"]  { --mat-tint: var(--mat-tint-5); }
-.card.mat[data-tint="6"]  { --mat-tint: var(--mat-tint-6); }
-.card.mat[data-tint="7"]  { --mat-tint: var(--mat-tint-7); }
-.card.mat[data-tint="8"]  { --mat-tint: var(--mat-tint-8); }
-.card.mat[data-tint="9"]  { --mat-tint: var(--mat-tint-9); }
-.card.mat[data-tint="10"] { --mat-tint: var(--mat-tint-10); }
-.card.mat[data-tint="11"] { --mat-tint: var(--mat-tint-11); }
-.card.mat[data-tint="12"] { --mat-tint: var(--mat-tint-12); }
-.card.mat[data-tint="13"] { --mat-tint: var(--mat-tint-13); }
+[data-tint="1"]  { --mat-tint: var(--mat-tint-1); }
+[data-tint="2"]  { --mat-tint: var(--mat-tint-2); }
+[data-tint="3"]  { --mat-tint: var(--mat-tint-3); }
+[data-tint="4"]  { --mat-tint: var(--mat-tint-4); }
+[data-tint="5"]  { --mat-tint: var(--mat-tint-5); }
+[data-tint="6"]  { --mat-tint: var(--mat-tint-6); }
+[data-tint="7"]  { --mat-tint: var(--mat-tint-7); }
+[data-tint="8"]  { --mat-tint: var(--mat-tint-8); }
+[data-tint="9"]  { --mat-tint: var(--mat-tint-9); }
+[data-tint="10"] { --mat-tint: var(--mat-tint-10); }
+[data-tint="11"] { --mat-tint: var(--mat-tint-11); }
+[data-tint="12"] { --mat-tint: var(--mat-tint-12); }
+[data-tint="13"] { --mat-tint: var(--mat-tint-13); }
 
 .card.mat[data-tint] {
 	background-color: var(--paper-hi);
