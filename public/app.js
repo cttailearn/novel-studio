@@ -52,6 +52,25 @@ const PANES = {
 	library: { stream: "library-stream", input: "library-input", assistant: "设定官" },
 };
 
+/** 素材陈列方式：grid=格子，cols=按列。全局一份，存本机。 */
+const MATERIAL_LAYOUT_KEY = "novel-studio/material-layout";
+
+function readMaterialLayout() {
+	try {
+		return localStorage.getItem(MATERIAL_LAYOUT_KEY) === "cols" ? "cols" : "grid";
+	} catch {
+		return "grid";
+	}
+}
+
+function writeMaterialLayout(value) {
+	try {
+		localStorage.setItem(MATERIAL_LAYOUT_KEY, value);
+	} catch {
+		/* 本机存储不可用时只影响下次打开，不影响这一次陈列。 */
+	}
+}
+
 const state = {
 	projects: [],
 	/** 可用模型目录，档位过滤靠它判断当前这支笔支持什么。 */
@@ -150,6 +169,8 @@ const state = {
 	pendingSnapshotRestore: null,
 	/** 素材工作台里点选、准备让设定官按需求修改的素材 id。 */
 	pickedMaterials: new Set(),
+	/** 素材陈列：格子并排，或按列一行一条。 */
+	materialLayout: readMaterialLayout(),
 	/** 顶层模式：home 是案头（管理），workspace 是写作台（创作）。 */
 	mode: "home",
 	/** 编辑器自动存稿。正文只活在 textarea 里时，切走一步就可能整段丢。 */
@@ -2002,6 +2023,8 @@ function renderHomeBench() {
 	renderLibraryFilter();
 	const list = $("library-list");
 	list.replaceChildren();
+	applyMaterialLayout(list);
+	renderMaterialLayoutToggle($("library-layout"), "通用素材陈列方式");
 	const filtered = state.library.filter((entry) => {
 		if (state.libraryFilter && entry.kind !== state.libraryFilter) return false;
 		return matchesQuery(
@@ -2293,25 +2316,12 @@ function renderLibraryFilter() {
 }
 
 function libraryCard(entry) {
-	const card = el("div", "card mat");
-	const head = el("div", "mat-head");
-	head.append(el("h4", "", entry.title));
-	head.append(el("span", "kind", kindLabel(entry.kind)));
-	card.append(head);
-	if (entry.usage) card.append(el("div", "usage", "用于：" + entry.usage));
-
-	const open = state.openMaterials.has(entry.id);
-	if (open && entry.content) card.append(el("div", "mat-body", entry.content));
-
-	const meta = [];
-	if (entry.tags.length) meta.push("标签：" + entry.tags.join("、"));
+	const card = materialCardShell(entry);
 	const usedBy = entry.usedBy ?? [];
-	meta.push(usedBy.length ? "已用于：" + usedBy.map((use) => use.title).join("、") : "尚未被作品取用");
-	if (entry.content) meta.push(fmt(countWords(entry.content)) + " 字");
-	card.append(el("div", "tagline", meta.join(" · ")));
+	const usedHint = usedBy.length ? "已用于：" + usedBy.map((use) => use.title).join("、") : "尚未被作品取用";
 
 	const actions = el("div", "mat-actions");
-	actions.append(button(open ? "收起" : "看全文", "btn btn-quiet btn-xs", () => toggleMaterial(entry.id)));
+	actions.append(button("看全文", "btn btn-quiet btn-xs", () => openMaterialView(entry)));
 	actions.append(
 		iconButton("改", "btn btn-quiet btn-xs act act-edit", () => openMaterialDialog({ scope: "library", mode: "edit", entry }), "改素材"),
 	);
@@ -2324,8 +2334,11 @@ function libraryCard(entry) {
 			"删除素材",
 		),
 	);
-	card.append(actions);
-	return card;
+	return makePeekable(card, entry, actions, {
+		extraHint: usedHint,
+		dropHint: "拖到右侧「设定官」即算呈给它",
+		onEdit: () => openMaterialDialog({ scope: "library", mode: "edit", entry }),
+	});
 }
 
 async function deleteLibraryEntry(entry) {
@@ -2406,6 +2419,8 @@ function renderLibraryPick() {
 	for (const entry of list) {
 		const picked = state.libraryPick.has(entry.id);
 		const row = el("label", "pick-row" + (picked ? " is-on" : ""));
+		row.dataset.tint = String(materialTintIndex(entry.kind));
+		row.title = materialHoverText(entry, "勾选后随新卷取用");
 		const check = document.createElement("input");
 		check.type = "checkbox";
 		check.checked = picked;
@@ -2420,9 +2435,9 @@ function renderLibraryPick() {
 		const body = el("div", "pick-body");
 		const title = el("div", "pick-title");
 		title.append(el("span", "kind", kindLabel(entry.kind)));
-		title.append(el("span", "", entry.title));
+		title.append(el("span", "pick-name", entry.title));
+		title.append(el("span", "pick-words", materialWords(entry)));
 		body.append(title);
-		if (entry.usage) body.append(el("div", "pick-usage", entry.usage));
 		row.append(body);
 		box.append(row);
 	}
@@ -3302,6 +3317,40 @@ async function restoreRevision(chapterId, revisionNumber) {
 
 // ═══════════════════════════════════════════════════ 料 · 素材工作台
 
+/** 把「按列 / 格子」落到列表容器上；真正的排版由 style.css 的 .is-grid / .is-cols 决定。 */
+function applyMaterialLayout(node) {
+	if (!node) return;
+	node.classList.toggle("is-grid", state.materialLayout === "grid");
+	node.classList.toggle("is-cols", state.materialLayout === "cols");
+}
+
+/** 素材陈列开关。几个主要素材栏各放一枚，改的是同一个偏好。 */
+function renderMaterialLayoutToggle(box, label) {
+	if (!box) return;
+	box.replaceChildren();
+	box.setAttribute("role", "group");
+	box.setAttribute("aria-label", label);
+	for (const [value, text, hint] of [
+		["cols", "按列", "一行一条，看得清用法与动作"],
+		["grid", "格子", "多条并排，先扫一遍再挑"],
+	]) {
+		const active = state.materialLayout === value;
+		const btn = button(text, "mat-layout-btn" + (active ? " is-on" : ""), () => setMaterialLayout(value));
+		btn.setAttribute("aria-pressed", active ? "true" : "false");
+		btn.title = hint;
+		box.append(btn);
+	}
+}
+
+function setMaterialLayout(value) {
+	const next = value === "cols" ? "cols" : "grid";
+	if (state.materialLayout === next) return;
+	state.materialLayout = next;
+	writeMaterialLayout(next);
+	renderView();
+	renderBible();
+}
+
 function renderMaterialsBench() {
 	const project = state.project;
 	if (!project) return;
@@ -3338,6 +3387,8 @@ function renderMaterialsBench() {
 
 	const list = $("material-list");
 	list.replaceChildren();
+	applyMaterialLayout(list);
+	renderMaterialLayoutToggle($("material-layout"), "素材陈列方式");
 	const filtered = project.materials.filter((material) => {
 		if (state.materialFilter && material.kind !== state.materialFilter) return false;
 		return matchesQuery(
@@ -3386,44 +3437,80 @@ function renderMaterialsBench() {
 }
 
 /**
- * 素材卡的公共外壳：标题、种类、用法。
+ * 素材卡的公共外壳：名称、字数、种类。
  *
- * 素材库与生文工作台的两处列表共用它。同一份素材在两处长得不一样，
- * 作者每换个工作台就得重新认一遍哪张卡是干什么的。
- * 元信息单独一个函数，因为右案的紧凑列表要把它排在行内展开的正文之后。
+ * 素材库、生文工作台、右案与案头共用它 —— 作者每换个工作台就得重新认一遍
+ * 哪张卡是干什么的，不如让同一份素材到哪儿都长同一副样子。
+ * 底色按种类分，文字颜色仍走正文令牌，不跟着底色变。
  */
+const MATERIAL_TINT_INDEX = {
+	premise: 1,
+	character: 2,
+	world: 3,
+	location: 4,
+	plot: 5,
+	beat: 6,
+	scene: 7,
+	dialogue: 8,
+	imagery: 9,
+	foreshadow: 10,
+	style: 11,
+	research: 12,
+	other: 13,
+};
+
+/** 自定义种类没有预设色：用名字哈希到同一套 13 色里，至少每次打开一致。 */
+function materialTintIndex(kind) {
+	const known = MATERIAL_TINT_INDEX[kind];
+	if (known) return known;
+	let hash = 0;
+	for (const char of String(kind || "other")) hash = (hash * 33 + char.codePointAt(0)) >>> 0;
+	return 1 + (hash % 13);
+}
+
+/** 字数：与正文同口径，CJK 按字、西文按词。 */
+function materialWords(material) {
+	return fmt(countWords(material.content || "")) + " 字";
+}
+
 function materialCardShell(material) {
 	const card = el("div", "card mat");
 	if (state.pickedMaterials.has(material.id)) card.classList.add("is-picked");
+	card.dataset.kind = material.kind;
+	card.dataset.tint = String(materialTintIndex(material.kind));
 	const head = el("div", "mat-head");
 	head.append(el("h4", "", material.title));
+	head.append(el("span", "mat-words", materialWords(material)));
 	head.append(el("span", "kind", kindLabel(material.kind)));
 	if (material.status === "confirmed") head.append(el("span", "ok", "已确认"));
 	card.append(head);
-	if (material.usage) card.append(el("div", "usage", "用于：" + material.usage));
 	return card;
 }
 
-/** 标签、装入情况、来源、字数 —— 一行小字。 */
-function appendMaterialMeta(card, material) {
-	const meta = [];
-	if (material.tags.length) meta.push("标签：" + material.tags.join("、"));
-	const names = material.chapterIds.map(chapterTitleOf).filter(Boolean);
-	if (names.length) meta.push("已装入：" + names.join("、"));
-	const sourceLabel =
-		material.source === "agent" ? "墨客所拟" : material.source === "library" ? "取自素材库" : "书者所定";
-	meta.push(material.originId ? sourceLabel + " · 已入素材库" : sourceLabel);
-	if (material.content) meta.push(fmt(countWords(material.content)) + " 字");
-	card.append(el("div", "tagline", meta.join(" · ")));
+/**
+ * 悬停时那一行提示：用于、标签、已装入的章，都收进原生 title。
+ * 卡面只留名称、字数与动作；细节鼠标一停就能看到，也不挤占版面。
+ */
+function materialHoverText(material, hint) {
+	const bits = [];
+	if (material.usage) bits.push("用于：" + material.usage);
+	if (material.tags?.length) bits.push("标签：" + material.tags.join("、"));
+	const chapters = (material.chapterIds ?? []).map(chapterTitleOf).filter(Boolean);
+	if (chapters.length) bits.push("已装入：" + chapters.join("、"));
+	if (hint) bits.push(hint);
+	return bits.join(" · ");
 }
 
 /**
- * 让一张素材卡可点、可拖。
+ * 让一张素材卡可点、可拖、可双击改。
  *
- * 动作条由调用方拼好传进来：两处列表能做的事不同（库里有六件，装配只有摘除与装入）。
- * 但「点开看全文」和「拖给智能体」是两处都该有的，所以收在这里，免得各写一遍走样。
+ * 动作条由调用方拼好传进来：各处列表能做的事不同（库里有六件，装配只有摘除与装入）。
+ * 但「单击看全文、双击修改、拖给智能体」是各处都该有的，所以收在这里，
+ * 免得各写一遍走样。单击要等 220ms 才开全文，是为了给双击留出判定窗口。
  */
-function makePeekable(card, material, actions, dropHint) {
+function makePeekable(card, material, actions, options = {}) {
+	const { dropHint = "", onOpen, onEdit, extraHint = "" } =
+		typeof options === "string" ? { dropHint: options } : options;
 	card.classList.add("is-peek");
 	card.tabIndex = 0;
 	card.setAttribute("role", "button");
@@ -3441,55 +3528,71 @@ function makePeekable(card, material, actions, dropHint) {
 	if (picksOnTap) card.setAttribute("aria-pressed", picked ? "true" : "false");
 	else card.removeAttribute("aria-pressed");
 	card.setAttribute("aria-label", (picksOnTap ? "选中素材：" : "查看素材：") + material.title);
-	card.title = picksOnTap
-		? "点一下选中／取消，再在下方「已选中」条上按「装进本章」"
-		: "点开看全文；" + dropHint;
-	const open = () => openMaterialView(material);
+	const open = onOpen ?? (() => openMaterialView(material));
+	const edit = onEdit ?? (() => openMaterialDialog({ mode: "edit", material }));
 	const onTap = () => {
 		if (picksOnTap) toggleMaterialPick(material.id);
 		else open();
 	};
-	card.addEventListener("click", onTap);
+	const hint = picksOnTap
+		? "点一下选中／取消，再在下方「已选中」条上按「装进本章」"
+		: "单击看全文，双击修改";
+	card.title = [materialHoverText(material, extraHint), hint, dropHint].filter(Boolean).join(" · ");
+
+	// 单击延迟到双击判定之后再开全文：否则第一下就把阅读面板顶起来，
+	// 第二下再弹编辑表单，两层对话框叠在一起。
+	let clickTimer = 0;
+	const interactive = (event) => {
+		const target = event.target;
+		return target instanceof Element && target.closest("button, a, input, select, textarea, label") !== null;
+	};
+	card.addEventListener("click", (event) => {
+		if (interactive(event)) return;
+		if (picksOnTap) {
+			onTap();
+			return;
+		}
+		clearTimeout(clickTimer);
+		clickTimer = window.setTimeout(open, 220);
+	});
+	card.addEventListener("dblclick", (event) => {
+		if (interactive(event) || picksOnTap) return;
+		clearTimeout(clickTimer);
+		edit();
+	});
 	card.addEventListener("keydown", (event) => {
 		if (event.target !== card) return;
 		if (event.key === "Enter" || event.key === " ") {
 			event.preventDefault();
 			onTap();
+		} else if (event.key === "F2" && !picksOnTap) {
+			event.preventDefault();
+			edit();
 		}
 	});
 	makeDraggable(card, material);
 	// 动作在卡内，别让点按钮顺手把卡也点开了。
 	actions.addEventListener("click", (event) => event.stopPropagation());
+	actions.addEventListener("dblclick", (event) => event.stopPropagation());
 	card.append(actions);
 	return card;
 }
 
-/** 素材卡。紧凑模式下收起动作，点一下即可修改。 */
+/** 素材卡。紧凑模式给右案窄栏，动作收成两枚小按钮。 */
 function materialCard(material, options = {}) {
 	const card = materialCardShell(material);
-	const open = state.openMaterials.has(material.id);
 
 	if (options.compact) {
-		// 右案的窄栏仍是行内展开，正文排在元信息之前。
-		if (open && material.content) card.append(el("div", "mat-body", material.content));
-		appendMaterialMeta(card, material);
 		card.classList.add("is-compact");
-		card.tabIndex = 0;
-		card.setAttribute("role", "button");
-		card.title = "点开看全文";
-		const openView = () => openMaterialView(material);
-		card.addEventListener("click", openView);
-		card.addEventListener("keydown", (event) => {
-			if (event.target !== card) return;
-			if (event.key === "Enter" || event.key === " ") {
-				event.preventDefault();
-				openView();
-			}
+		const actions = el("div", "mat-actions");
+		actions.append(button("看全文", "btn btn-quiet btn-xs", () => openMaterialView(material)));
+		actions.append(
+			iconButton("改", "btn btn-quiet btn-xs act act-edit", () => openMaterialDialog({ mode: "edit", material }), "改素材"),
+		);
+		return makePeekable(card, material, actions, {
+			dropHint: "拖到右侧「设定官」即算呈给它",
 		});
-		return card;
 	}
-
-	appendMaterialMeta(card, material);
 
 	const actions = el("div", "mat-actions");
 	actions.append(button("看全文", "btn btn-quiet btn-xs", () => openMaterialView(material)));
@@ -3522,7 +3625,9 @@ function materialCard(material, options = {}) {
 			? button("再点一次确认删除", "btn btn-quiet btn-xs is-danger btn-danger", () => void deleteMaterial(material))
 			: iconButton("删", "btn btn-quiet btn-xs act act-del", () => void deleteMaterial(material), "删素材"),
 	);
-	return makePeekable(card, material, actions, "拖到右侧「设定官」即算呈给它");
+	return makePeekable(card, material, actions, {
+		dropHint: "拖到右侧「设定官」即算呈给它",
+	});
 }
 
 /**
@@ -3533,10 +3638,11 @@ function materialCard(material, options = {}) {
  */
 function openMaterialView(material) {
 	$("material-view-title").textContent = material.title;
-	$("material-view-meta").textContent =
-		[kindLabel(material.kind), material.status === "confirmed" ? "已确认" : "草稿", fmt(countWords(material.content)) + " 字"]
-			.filter(Boolean)
-			.join(" · ");
+	const meta = [kindLabel(material.kind), material.status === "confirmed" ? "已确认" : "草稿", materialWords(material)];
+	if (material.tags?.length) meta.push("标签：" + material.tags.join("、"));
+	const chapters = (material.chapterIds ?? []).map(chapterTitleOf).filter(Boolean);
+	if (chapters.length) meta.push("已装入：" + chapters.join("、"));
+	$("material-view-meta").textContent = meta.filter(Boolean).join(" · ");
 	$("material-view-usage").textContent = material.usage ? "用于：" + material.usage : "";
 	$("material-view-usage").classList.toggle("hidden", !material.usage);
 	$("material-view-body").textContent = material.content || "（此条尚无正文）";
@@ -4394,6 +4500,9 @@ function renderWritingBench() {
 	const poolBox = $("pool-list");
 	assemblyBox.replaceChildren();
 	poolBox.replaceChildren();
+	applyMaterialLayout(assemblyBox);
+	applyMaterialLayout(poolBox);
+	renderMaterialLayoutToggle($("pool-layout"), "可装素材陈列方式");
 
 	// 「库中可装」先定下这一轮的池子：库里还没装进本章的料。
 	// 检索与分类都作用在它身上，分类条上的数目也按它算 ——
@@ -4721,7 +4830,6 @@ function poolEmptyText() {
  */
 function assemblyCard(material, variant, locked = false) {
 	const card = materialCardShell(material);
-	appendMaterialMeta(card, material);
 
 	const actions = el("div", "mat-actions");
 	actions.append(button("看全文", "btn btn-quiet btn-xs", () => openMaterialView(material)));
@@ -4735,7 +4843,10 @@ function assemblyCard(material, variant, locked = false) {
 	} else {
 		actions.append(button("装入本章", "btn btn-quiet btn-xs", () => void assemble([material.id], [])));
 	}
-	return makePeekable(card, material, actions, "拖到右侧「执笔者」的输入框即装入本章");
+	return makePeekable(card, material, actions, {
+		dropHint: "拖到右侧「执笔者」的输入框即装入本章",
+		onEdit: () => openMaterialDialog({ mode: "edit", material }),
+	});
 }
 
 /** 一组装配卡，两列并排 —— 与素材库同一套网格。 */
@@ -5532,6 +5643,7 @@ async function deleteRecord(pane, record) {
 function renderBible() {
 	const box = $("bible");
 	box.replaceChildren();
+	applyMaterialLayout(box);
 	const project = state.project;
 	if (!project) return;
 	syncInput("bible-search", state.bibleQuery);

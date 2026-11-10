@@ -1857,6 +1857,10 @@ try {
 		// 排版阶梯（间距/圆角/字号）与墨晕曲线是尺度，不是颜色：换昼夜不该改版心与节奏。
 		"--sp-1", "--sp-2", "--sp-3", "--sp-4", "--sp-5", "--sp-6",
 		"--r-1", "--r-2", "--r-3", "--r-pill",
+		// 素材种类底色是调色基色，实际明暗由 color-mix 与纸色合成，无需暗色重复定义。
+		"--mat-tint-1", "--mat-tint-2", "--mat-tint-3", "--mat-tint-4", "--mat-tint-5",
+		"--mat-tint-6", "--mat-tint-7", "--mat-tint-8", "--mat-tint-9", "--mat-tint-10",
+		"--mat-tint-11", "--mat-tint-12", "--mat-tint-13",
 		"--fs-xs", "--fs-sm", "--fs-md", "--fs-lg", "--fs-xl",
 		// 版式阶梯与图标尺寸同样是尺度，不随昼夜变化；暗色块只覆盖颜色。
 		"--fs-2xl", "--fs-3xl", "--fs-title", "--fs-item", "--fs-body", "--fs-label", "--lh-body", "--track-label",

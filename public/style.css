@@ -67,6 +67,21 @@
 	--seal-edge: rgba(246, 241, 228, 0.32);
 	--seal-drop: rgba(120, 40, 30, 0.28);
 	--amber:        #b8862f;
+	/* 素材种类底色：只作调色基色，与昼夜无关；具体明暗由 color-mix 与纸色合成。
+	   这样卡片能按种类分色，字色仍走 --ink / --ink-2，不随底色变。 */
+	--mat-tint-1:  #b8863b;
+	--mat-tint-2:  #b5544a;
+	--mat-tint-3:  #4f7f63;
+	--mat-tint-4:  #4a7396;
+	--mat-tint-5:  #7b5f9e;
+	--mat-tint-6:  #a8793e;
+	--mat-tint-7:  #3f8a7a;
+	--mat-tint-8:  #b05a76;
+	--mat-tint-9:  #6a74b0;
+	--mat-tint-10: #8a6a45;
+	--mat-tint-11: #6f7f4a;
+	--mat-tint-12: #4f7f8c;
+	--mat-tint-13: #7a7468;
 	--cinnabar-edge: rgba(168, 57, 43, 0.32);
 	--cinnabar-soft: rgba(168, 57, 43, 0.05);
 	--cinnabar-faint: rgba(168, 57, 43, 0.12);
@@ -7536,5 +7551,166 @@ textarea::placeholder { color: var(--ink-hold); opacity: 1; }
 	#view-home .bench-pane:last-of-type {
 		padding-bottom: 0;
 	}
+}
+
+/* ══════════════════════════════════════════════════════════════
+   素材卡 · 种类底色 / 字数 / 按列与格子
+   ══════════════════════════════════════════════════════════════ */
+
+/* 底色只染背景：字仍是 --ink / --ink-2 / --ink-3，不跟着色相走。 */
+.card.mat[data-tint="1"]  { --mat-tint: var(--mat-tint-1); }
+.card.mat[data-tint="2"]  { --mat-tint: var(--mat-tint-2); }
+.card.mat[data-tint="3"]  { --mat-tint: var(--mat-tint-3); }
+.card.mat[data-tint="4"]  { --mat-tint: var(--mat-tint-4); }
+.card.mat[data-tint="5"]  { --mat-tint: var(--mat-tint-5); }
+.card.mat[data-tint="6"]  { --mat-tint: var(--mat-tint-6); }
+.card.mat[data-tint="7"]  { --mat-tint: var(--mat-tint-7); }
+.card.mat[data-tint="8"]  { --mat-tint: var(--mat-tint-8); }
+.card.mat[data-tint="9"]  { --mat-tint: var(--mat-tint-9); }
+.card.mat[data-tint="10"] { --mat-tint: var(--mat-tint-10); }
+.card.mat[data-tint="11"] { --mat-tint: var(--mat-tint-11); }
+.card.mat[data-tint="12"] { --mat-tint: var(--mat-tint-12); }
+.card.mat[data-tint="13"] { --mat-tint: var(--mat-tint-13); }
+
+.card.mat[data-tint] {
+	background-color: var(--paper-hi);
+	background-color: color-mix(in srgb, var(--mat-tint) 12%, var(--paper-hi));
+}
+.card.mat[data-tint]:hover {
+	background-color: color-mix(in srgb, var(--mat-tint) 18%, var(--paper-hi));
+}
+:root[data-theme="dark"] .card.mat[data-tint] {
+	background-color: color-mix(in srgb, var(--mat-tint) 22%, var(--paper-hi));
+}
+:root[data-theme="dark"] .card.mat[data-tint]:hover {
+	background-color: color-mix(in srgb, var(--mat-tint) 30%, var(--paper-hi));
+}
+
+/* 卡头：名称、字数、种类。字数不换行，标题自己折。 */
+.card.mat .mat-words {
+	flex: 0 0 auto;
+	margin-top: 1px;
+	font-family: var(--sans);
+	font-size: var(--fs-label);
+	font-variant-numeric: tabular-nums;
+	color: var(--ink-3);
+	white-space: nowrap;
+}
+
+/* 动作行一直摆出来：这一版的要求是「名称、按钮、字数」都在明面上。 */
+.card.mat.is-peek .mat-actions,
+.card.mat.is-peek:hover .mat-actions,
+.card.mat.is-peek:focus-within .mat-actions {
+	max-height: none;
+	margin-top: 9px;
+	overflow: visible;
+	opacity: 1;
+}
+.card.mat.is-compact .mat-actions { margin-top: 7px; }
+.card.mat.is-compact .mat-actions .btn { padding: 0 8px; }
+
+/* 文案里「按列」与「格子」两个按钮：小、轻，放在栏头。 */
+.mat-layout {
+	display: inline-flex;
+	align-items: center;
+	overflow: hidden;
+	border: 1px solid var(--rule-soft);
+	border-radius: var(--r-pill);
+	background: var(--paper-lo);
+}
+.mat-layout-btn {
+	appearance: none;
+	border: 0;
+	background: transparent;
+	padding: 5px 9px;
+	font-family: var(--sans);
+	font-size: var(--fs-label);
+	line-height: 1;
+	letter-spacing: 0.02em;
+	color: var(--ink-3);
+	cursor: pointer;
+}
+.mat-layout-btn + .mat-layout-btn { border-left: 1px solid var(--rule-soft); }
+.mat-layout-btn:hover { color: var(--ink); }
+.mat-layout-btn.is-on { background: var(--paper-hi); color: var(--ink); }
+
+/* 格子：卡片并排，卡高拉齐，动作落在卡脚。 */
+.material-list.is-grid .mat-grid,
+.pool-list.is-grid .mat-grid,
+.assembly-list.is-grid .mat-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+	gap: 10px;
+	align-items: stretch;
+}
+.material-list.is-grid .mat-grid > .card.mat,
+.pool-list.is-grid .mat-grid > .card.mat,
+.assembly-list.is-grid .mat-grid > .card.mat {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	width: 100%;
+}
+.material-list.is-grid .mat-grid > .card.mat .mat-actions,
+.pool-list.is-grid .mat-grid > .card.mat .mat-actions,
+.assembly-list.is-grid .mat-grid > .card.mat .mat-actions {
+	margin-top: auto;
+	padding-top: 9px;
+}
+.material-list.is-grid .card.mat .mat-head,
+.pool-list.is-grid .card.mat .mat-head,
+.assembly-list.is-grid .card.mat .mat-head {
+	flex-wrap: wrap;
+	row-gap: 2px;
+}
+.material-list.is-grid .card.mat .mat-head h4,
+.pool-list.is-grid .card.mat .mat-head h4,
+.assembly-list.is-grid .card.mat .mat-head h4 {
+	flex: 1 1 100%;
+}
+
+/* 按列：一行一条，动作仍在卡脚。 */
+.material-list.is-cols .mat-grid,
+.pool-list.is-cols .mat-grid,
+.assembly-list.is-cols .mat-grid {
+	display: flex;
+	flex-direction: column;
+	align-items: stretch;
+	gap: 10px;
+}
+
+/* 右案直接挂卡，没有 .mat-grid 这层壳。 */
+#bible.is-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+	gap: 8px;
+	align-content: start;
+}
+#bible.is-cols {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+/* 新建作品时从库里勾选：同样按种类染色，只轻一档，免得盖过勾选态。 */
+.pick-row[data-tint]:not(.is-on) {
+	background-color: color-mix(in srgb, var(--mat-tint) 7%, var(--paper-hi));
+}
+.pick-row[data-tint]:not(.is-on):hover {
+	background-color: color-mix(in srgb, var(--mat-tint) 12%, var(--paper-hi));
+}
+.pick-title .pick-name {
+	font-family: var(--serif);
+	font-size: var(--fs-md);
+	color: var(--ink);
+	min-width: 0;
+}
+.pick-words {
+	flex: none;
+	margin-left: auto;
+	font-family: var(--sans);
+	font-size: var(--fs-label);
+	color: var(--ink-3);
+	white-space: nowrap;
 }
 

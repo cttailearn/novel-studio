@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="zh-CN">
 	<head>
 		<meta charset="utf-8" />
@@ -316,6 +316,7 @@
 								<h3>通用素材库</h3>
 								<span id="library-count" class="pane-count"></span>
 								<div class="pane-tools">
+									<div id="library-layout" class="mat-layout" role="group" aria-label="通用素材陈列方式"></div>
 									<button class="btn btn-quiet btn-sm act act-new" data-action="new-library">收录一条</button>
 								</div>
 							</header>
@@ -411,6 +412,9 @@
 							<header class="pane-head">
 								<h3>素材库</h3>
 								<span id="material-count" class="pane-count"></span>
+								<div class="pane-tools">
+									<div id="material-layout" class="mat-layout" role="group" aria-label="素材陈列方式"></div>
+								</div>
 							</header>
 							<input id="material-search" class="mat-search" type="search" placeholder="搜素材：标题、用法、正文、标签" autocomplete="off" aria-label="搜素材" />
 							<div id="material-filter" class="mat-filter"></div>
@@ -461,6 +465,9 @@
 							<header class="pane-head">
 								<h3>库中可装</h3>
 								<span id="pool-count" class="pane-count"></span>
+								<div class="pane-tools">
+									<div id="pool-layout" class="mat-layout" role="group" aria-label="可装素材陈列方式"></div>
+								</div>
 							</header>
 							<input id="pool-search" class="mat-search" type="search" placeholder="搜素材：标题、用法、正文、标签" autocomplete="off" aria-label="搜可装素材" />
 							<div id="pool-filter" class="mat-filter"></div>
