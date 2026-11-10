@@ -2729,8 +2729,10 @@ function ensureChapterBody(chapterId) {
 function fitEditor(editor) {
 	// 重渲染后旧节点会脱开文档，再量它只会白算一次。
 	if (!editor.isConnected) return;
-	editor.style.height = "auto";
-	editor.style.height = editor.scrollHeight + "px";
+	// 只往高里撑，不先归零：长稿每敲一个字都塌一次版面，外层 scrollTop 会被
+	// 夹回去，作者看到的就是稿子突然跳走。变矮的情况留到下次进稿面再收。
+	const needed = editor.scrollHeight;
+	if (needed > editor.offsetHeight) editor.style.height = needed + "px";
 }
 
 function navButton(id, label) {

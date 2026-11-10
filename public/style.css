@@ -6823,7 +6823,8 @@ textarea::placeholder { color: var(--ink-hold); opacity: 1; }
 /* 稿纸不该是一张浮在半空的卡片：它是一页纸，要长到台面底下。
    旧样式给 .ms-page / .front-matter 26px 上距 + 72px 内下距 + elev-1，
    空稿时纸在 433px 处断掉，下面留一大片空白 —— 像只写了一半被抽走。
-   这里改成：纸面撑满稿台、留 24px 桌沿；空态那句话落在纸的视觉中心。 */
+   这里改成：短稿时纸面撑满稿台、留 24px 桌沿；长稿时纸跟着正文一起长高。
+   注意 flex-shrink 必须是 0：1 1 auto 会让纸被压回一屏高，正文溢出纸框。 */
 #view-manuscript.is-on {
 	display: flex;
 	flex-direction: column;
@@ -6831,8 +6832,7 @@ textarea::placeholder { color: var(--ink-hold); opacity: 1; }
 }
 #view-manuscript > .ms-page,
 #view-manuscript > .front-matter {
-	flex: 1 1 auto;
-	min-height: 0;
+	flex: 1 0 auto;
 	margin-top: 18px;
 	border-radius: 10px;
 	box-shadow: 0 1px 0 var(--rule-soft), 0 18px 40px -32px rgba(0, 0, 0, 0.4);
