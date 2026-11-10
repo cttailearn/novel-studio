@@ -11,6 +11,12 @@
 
 const CONFIG_KEY = "novel-studio/cloud";
 
+/**
+ * 官方云端地址：连接页据此预填，用户改成自己的服务器地址就会覆盖它。
+ * 只在这里写一次，免得登录页、账户页各写一份。
+ */
+export const DEFAULT_CLOUD_BASE = "https://novel.cttai.art/";
+
 /** 把用户填的服务器地址归一成不带末尾斜杠的 http(s) 地址。 */
 export function normalizeCloudBase(value) {
 	let base = typeof value === "string" ? value.trim() : "";

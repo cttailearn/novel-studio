@@ -1691,7 +1691,12 @@
 	margin-left: auto;
 }
 .settings-dialog .about-auto { border-top: 1px solid var(--rule-soft); }
-.settings-dialog .about-switch { margin-top: 8px; }
+.settings-dialog .about-auto .about-switch {
+	display: flex;
+	width: fit-content;
+	margin-top: 8px;
+}
+.settings-dialog .about-auto .about-switch + .about-switch { margin-top: 10px; }
 .settings-dialog .about-update {
 	max-width: 760px;
 	margin-top: 16px;

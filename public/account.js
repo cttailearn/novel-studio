@@ -7,6 +7,7 @@
 // 和 settings.js 一样是原生 DOM，不引入框架，也不使用 innerHTML。
 
 import {
+	DEFAULT_CLOUD_BASE,
 	api,
 	apiErrorMessage,
 	audit,
@@ -836,10 +837,27 @@ function connectView() {
 	const form = document.createElement("form");
 	form.className = "account-form account-connect-form";
 
-	const server = textInput("url", "server", "url", "https://novel.example.com");
+	const server = textInput("url", "server", "url", DEFAULT_CLOUD_BASE);
 	server.spellcheck = false;
 	server.autocapitalize = "off";
-	const serverField = field("服务器地址", server, "可以只填域名，默认按 https 连接。");
+	// 预填官方地址；上次连过的服务器优先，用户手填的地址会覆盖默认值。
+	const remembered =
+		(getCloudConfig() && getCloudConfig().base) ||
+		(typeof window.__NOVEL_CLOUD__?.base === "string" ? window.__NOVEL_CLOUD__.base : "");
+	server.value = remembered || DEFAULT_CLOUD_BASE;
+	const serverField = field(
+		"服务器地址",
+		server,
+		"默认已填官方地址，直接登录即可；换用自建服务器时改成自己的域名，会覆盖默认值。",
+	);
+	const resetServer = button("用默认地址", "btn btn-quiet btn-xs account-server-reset", () => {
+		server.value = DEFAULT_CLOUD_BASE;
+		server.focus();
+	});
+	resetServer.type = "button";
+	const serverHint = serverField.querySelector(".hint");
+	if (serverHint) serverField.insertBefore(resetServer, serverHint);
+	else serverField.append(resetServer);
 	form.append(serverField);
 
 	const modeRow = el("div", "account-seg");

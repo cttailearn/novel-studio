@@ -1549,6 +1549,23 @@ html.auth-locked #boot-skeleton { visibility: hidden; }
 	.account-user-actions .account-inline { white-space: normal; }
 }
 
+/* 服务器地址下面那枚「用默认地址」：一个安静的文字钮，不跟主按钮抢。 */
+.account-connect-form .field .account-server-reset {
+	align-self: flex-start;
+	margin: calc(-1 * var(--sp-1, 4px)) 0 var(--sp-2, 8px);
+	padding: 2px 0;
+	border: 0;
+	background: none;
+	box-shadow: none;
+	font-size: var(--fs-xs, 12px);
+	color: var(--ink-3);
+}
+
+.account-connect-form .field .account-server-reset:hover {
+	color: var(--cinnabar-ink);
+	background: none;
+}
+
 /* 窗口很矮时，门帖从顶部开始，保证第一眼能看到印与表单。 */
 @media (max-height: 680px) {
 	.auth-gate { justify-content: flex-start; }

@@ -8,13 +8,19 @@
 const RELEASES_URL = "https://github.com/cttailearn/novel-studio/releases";
 const LATEST_RELEASE_API = "https://api.github.com/repos/cttailearn/novel-studio/releases/latest";
 const AUTO_CHECK_KEY = "mogeng.update.auto-check";
+const AUTO_INSTALL_KEY = "mogeng.update.auto-install";
 
 const state = {
 	initialized: false,
 	currentVersion: "",
 	pref: true,
+	autoInstall: true,
 	checking: false,
 	installing: false,
+	stage: "",
+	received: 0,
+	total: 0,
+	percent: 0,
 	info: null,
 	error: "",
 };
@@ -65,6 +71,23 @@ function writePref(value) {
 		localStorage.setItem(AUTO_CHECK_KEY, value ? "1" : "0");
 	} catch {
 		// 存不下就只在本次运行里生效；不影响检查更新本身。
+	}
+}
+
+/** 发现新版后是否直接下载并安装。关掉就只提示，等用户点按钮。 */
+function readAutoInstall() {
+	try {
+		return localStorage.getItem(AUTO_INSTALL_KEY) !== "0";
+	} catch {
+		return true;
+	}
+}
+
+function writeAutoInstall(value) {
+	try {
+		localStorage.setItem(AUTO_INSTALL_KEY, value ? "1" : "0");
+	} catch {
+		// 同上。
 	}
 }
 
@@ -145,7 +168,7 @@ function buildPanel() {
 	host.append(card);
 
 	const autoSection = el("section", "web-section about-auto");
-	autoSection.append(el("h5", "", "自动检查"));
+	autoSection.append(el("h5", "", "自动更新"));
 	const autoLabel = el("label", "switch about-switch");
 	const auto = document.createElement("input");
 	auto.type = "checkbox";
@@ -155,12 +178,27 @@ function buildPanel() {
 		setStatus(auto.checked ? "会在下次启动时自动检查" : "已关闭启动时自动检查");
 	});
 	autoLabel.append(auto, document.createTextNode(" 启动时自动检查更新"));
-	autoSection.append(autoLabel);
+
+	const installLabel = el("label", "switch about-switch");
+	const autoInstall = document.createElement("input");
+	autoInstall.type = "checkbox";
+	autoInstall.addEventListener("change", () => {
+		state.autoInstall = autoInstall.checked;
+		writeAutoInstall(autoInstall.checked);
+		setStatus(
+			autoInstall.checked
+				? "发现新版会直接下载并安装，装完自动重启"
+				: "发现新版只提示，等你点「下载并安装」",
+		);
+	});
+	installLabel.append(autoInstall, document.createTextNode(" 发现新版后自动下载安装"));
+
+	autoSection.append(autoLabel, installLabel);
 	autoSection.append(
 		el(
 			"p",
 			"settings-section-note",
-			"只查询版本号；发现新版后仍需你点「下载并安装」。安装完成后应用会自动重启。",
+			"安装包先经签名校验再交给系统安装器；安装完成后应用会自动关闭并重启，作品与素材不受影响。关掉自动下载后，仍可随时点「下载并安装」。",
 		),
 	);
 	host.append(autoSection);
@@ -196,6 +234,7 @@ function buildPanel() {
 		release,
 		autoSection,
 		auto,
+		autoInstall,
 		updateBox,
 		newVersion,
 		updateDate,
@@ -219,6 +258,7 @@ function sync() {
 	refs.channel.className = "web-state" + (info?.available ? " is-on" : "");
 	refs.autoSection.hidden = kind !== "desktop";
 	refs.auto.checked = state.pref;
+	refs.autoInstall.checked = state.autoInstall;
 	refs.check.hidden = kind === "web";
 	refs.check.disabled = state.checking || state.installing;
 	refs.check.textContent = state.checking ? "检查中…" : "检查更新";
@@ -230,7 +270,9 @@ function sync() {
 	} else if (state.checking) {
 		setStatus("正在检查…");
 	} else if (state.installing) {
-		setStatus("正在安装…", "warn");
+		setStatus(progressLine(), "warn");
+	} else if (state.stage === "installed") {
+		setStatus("安装完成，应用即将重启…", "ok");
 	} else if (info?.available) {
 		setStatus(`发现新版本 v${info.version}`, "ok");
 	} else if (info) {
@@ -245,14 +287,25 @@ function sync() {
 	refs.install.hidden = kind !== "desktop" && kind !== "android";
 	refs.install.disabled = state.installing;
 	refs.install.textContent = state.installing
-		? kind === "android"
-			? "正在下载…"
-			: "正在安装…"
+		? state.stage === "installing"
+			? "正在安装…"
+			: "正在下载…"
 		: kind === "android"
 			? "下载并安装"
 			: "下载并安装更新";
 	refs.download.hidden = kind === "desktop";
 	refs.progress.hidden = !state.installing;
+	if (state.installing) {
+		const line = refs.progress.querySelector("span");
+		if (line) line.textContent = progressLine();
+		const note = refs.progress.querySelector("p");
+		if (note) {
+			note.textContent =
+				state.stage === "installing"
+					? "安装包已下载并通过签名校验，正在交给系统安装器；应用会自动重启。"
+					: "正在下载并校验安装包，请保持网络连接…";
+		}
+	}
 	if (available) {
 		refs.newVersion.textContent = `v${info.version}`;
 		refs.updateDate.textContent = formatDate(info.date);
@@ -329,6 +382,13 @@ async function checkForUpdates(silent) {
 		state.info = info;
 		if (info?.currentVersion && !state.currentVersion) state.currentVersion = info.currentVersion;
 		state.error = "";
+		// 桌面端默认「发现新版就下载并安装」：静默检查也走这条路，
+		// 用户下次打开就是新版本，不必再去设置页点一次。
+		if (kind === "desktop" && info?.available && state.autoInstall && !state.installing) {
+			window.setTimeout(() => {
+				if (state.autoInstall) void installUpdate(true);
+			}, 900);
+		}
 	} catch (error) {
 		// 后台静默检查失败只记日志，不把「尚未检查」的干净状态改成红字；
 		// 用户主动点检查时仍然要把失败原因说清楚。
@@ -340,23 +400,65 @@ async function checkForUpdates(silent) {
 	}
 }
 
-async function installUpdate() {
+/** 状态行文字：下载阶段给百分比与已下载量，安装阶段说明会重启。 */
+function progressLine() {
+	const size = (value) => `${(value / 1024 / 1024).toFixed(1)} MB`;
+	if (state.stage === "installing") return "正在安装，应用即将重启…";
+	if (!state.received) return "正在准备下载…";
+	if (state.total) return `已下载 ${state.percent}% · ${size(state.received)} / ${size(state.total)}`;
+	return `已下载 ${size(state.received)}`;
+}
+
+async function installUpdate(auto = false) {
 	if (state.installing) return;
 	const kind = platformKind();
 
 	if (kind === "desktop") {
 		const version = state.info?.version ? `v${state.info.version}` : "新版本";
-		if (!window.confirm(`将下载并安装 ${version}。安装完成后应用会自动关闭并重启，现在继续吗？`)) return;
+		if (!auto && !window.confirm(`将下载并安装 ${version}。安装完成后应用会自动关闭并重启，现在继续吗？`)) return;
 		state.installing = true;
+		state.stage = "downloading";
+		state.received = 0;
+		state.total = 0;
+		state.percent = 0;
 		state.error = "";
 		sync();
+		// 面板通常停在版本行，安装卡在折叠线以下：把它带进视野，
+		// 否则「正在下载」只出现在按钮上，看着像没反应。
+		refs.updateBox?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+		let stop = null;
 		try {
+			stop = await listen("update-progress", (payload) => {
+				const received = Number(payload?.received) || 0;
+				const total = Number(payload?.total) || 0;
+				const percent = total ? Math.min(100, Math.round((received / total) * 100)) : 0;
+				state.received = received;
+				state.total = total;
+				// 分块回调可能一秒几十次：只在百分比真的变了才重排界面；
+				// 服务器没给总大小时退化成按字节数更新。
+				if (total && percent === state.percent) return;
+				state.percent = percent;
+				sync();
+			});
+			await listen("update-stage", (stage) => {
+				if (typeof stage === "string") {
+					state.stage = stage;
+					sync();
+				}
+			});
 			await invoke("update_install");
+			state.stage = "installed";
+			state.percent = 100;
+			state.installing = false;
+			sync();
 			setStatus("安装完成，应用即将重启…", "ok");
 		} catch (error) {
 			state.installing = false;
+			state.stage = "";
 			state.error = error instanceof Error ? error.message : String(error);
 			sync();
+		} finally {
+			if (typeof stop === "function") stop();
 		}
 		return;
 	}
@@ -416,6 +518,7 @@ export function initUpdatePanel() {
 	if (state.initialized) return;
 	state.initialized = true;
 	state.pref = readPref();
+	state.autoInstall = readAutoInstall();
 	buildPanel();
 	sync();
 	void loadVersion().then(() => {
