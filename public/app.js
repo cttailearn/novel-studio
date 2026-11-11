@@ -90,6 +90,25 @@ function writeRecordLayout(value) {
 	}
 }
 
+/** 原料陈列方式：上传的资料与整本小说。默认按列——章节收在 details 里，一行一份看得清。 */
+const SOURCE_LAYOUT_KEY = "novel-studio/source-layout";
+
+function readSourceLayout() {
+	try {
+		return localStorage.getItem(SOURCE_LAYOUT_KEY) === "grid" ? "grid" : "cols";
+	} catch {
+		return "cols";
+	}
+}
+
+function writeSourceLayout(value) {
+	try {
+		localStorage.setItem(SOURCE_LAYOUT_KEY, value);
+	} catch {
+		/* 同上。 */
+	}
+}
+
 const state = {
 	projects: [],
 	/** 可用模型目录，档位过滤靠它判断当前这支笔支持什么。 */
@@ -192,6 +211,7 @@ const state = {
 	materialLayout: readMaterialLayout(),
 	/** 卷宗陈列：与素材同一套开关，但记的是书架的排法。 */
 	recordLayout: readRecordLayout(),
+	sourceLayout: readSourceLayout(),
 	/** 顶层模式：home 是案头（管理），workspace 是写作台（创作）。 */
 	mode: "home",
 	/** 编辑器自动存稿。正文只活在 textarea 里时，切走一步就可能整段丢。 */
@@ -3341,6 +3361,41 @@ async function restoreRevision(chapterId, revisionNumber) {
 // ═══════════════════════════════════════════════════ 料 · 素材工作台
 
 /** 把「按列 / 格子」落到列表容器上；真正的排版由 style.css 的 .is-grid / .is-cols 决定。 */
+function applySourceLayout(node) {
+	if (!node) return;
+	// 案头右栏那份是窄列表（is-compact），只按列 —— 并排会把标题压碎。
+	const narrow = node.classList.contains("is-compact");
+	const grid = !narrow && state.sourceLayout === "grid";
+	node.classList.toggle("is-grid", grid);
+	node.classList.toggle("is-cols", !grid);
+}
+
+/** 原料陈列开关：资料、小说同受它管。 */
+function renderSourceLayoutToggle(box, label) {
+	if (!box) return;
+	box.replaceChildren();
+	box.setAttribute("role", "group");
+	box.setAttribute("aria-label", label);
+	for (const [value, text, hint] of [
+		["cols", "按列", "一行一份，章节收在里面"],
+		["grid", "格子", "并排铺开，宽栏一次看全几份"],
+	]) {
+		const active = state.sourceLayout === value;
+		const btn = button(text, "mat-layout-btn" + (active ? " is-on" : ""), () => setSourceLayout(value));
+		btn.setAttribute("aria-pressed", active ? "true" : "false");
+		btn.title = hint;
+		box.append(btn);
+	}
+}
+
+function setSourceLayout(value) {
+	const next = value === "grid" ? "grid" : "cols";
+	if (state.sourceLayout === next) return;
+	state.sourceLayout = next;
+	writeSourceLayout(next);
+	renderMaterialSources();
+}
+
 function applyMaterialLayout(node) {
 	if (!node) return;
 	node.classList.toggle("is-grid", state.materialLayout === "grid");
@@ -3998,7 +4053,10 @@ function materialSourceGroup(kind, sources, pane) {
 	summary.append(el("span", "material-source-group-title", kind === "document" ? "资料" : "小说"));
 	summary.append(el("span", "material-source-group-count", `${sources.length} 份`));
 	group.append(summary);
-	for (const source of sources) group.append(materialSourceCard(source, pane));
+	// 卡片裹在一层里：原料要能按列也能并排铺开，而 details 的内容层不好当网格容器。
+	const body = el("div", "novel-source-body");
+	for (const source of sources) body.append(materialSourceCard(source, pane));
+	group.append(body);
 	group.addEventListener("toggle", () => {
 		state.materialGroupOpen[kind] = group.open;
 	});
@@ -4013,6 +4071,7 @@ function renderMaterialSources() {
 	if (count) count.textContent = sources.length ? `${sources.length} 份` : "";
 	for (const box of boxes) {
 		box.replaceChildren();
+		applySourceLayout(box);
 		if (sources.length === 0) {
 			box.append(el("p", "novel-empty", "还没有原料。资料会整篇保存，小说会按章拆解；两者都能反复用来提炼素材。"));
 			continue;
@@ -4023,6 +4082,7 @@ function renderMaterialSources() {
 			if (grouped.length > 0) box.append(materialSourceGroup(kind, grouped, pane));
 		}
 	}
+	renderSourceLayoutToggle($("source-layout"), "原料陈列方式");
 }
 
 function renderNovelSources() {
@@ -4557,6 +4617,7 @@ function renderWritingBench() {
 	poolBox.replaceChildren();
 	applyMaterialLayout(assemblyBox);
 	applyMaterialLayout(poolBox);
+	renderMaterialLayoutToggle($("assembly-layout"), "装配陈列方式");
 	renderMaterialLayoutToggle($("pool-layout"), "可装素材陈列方式");
 
 	// 「库中可装」先定下这一轮的池子：库里还没装进本章的料。

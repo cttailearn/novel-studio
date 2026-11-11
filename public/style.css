@@ -7802,3 +7802,29 @@ textarea::placeholder { color: var(--ink-hold); opacity: 1; }
 
 
 
+
+/* ══════════════════════════════════════════════════════════════
+   原料 · 按列 / 格子
+   一份资料或一本小说就是一张牌；章节收在 details 里，
+   宽栏并排铺开能一眼扫完几本书，窄栏（案头右栏的 is-compact）只按列。
+   ══════════════════════════════════════════════════════════════ */
+.novel-source-body { display: flex; flex-direction: column; gap: 8px; }
+.novel-source-list.is-grid .novel-source-body {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+	gap: 10px;
+	align-items: stretch;
+}
+.novel-source-list.is-grid .material-source-group { display: block; }
+.novel-source-list.is-grid .novel-source {
+	height: 100%;
+	display: flex;
+	flex-direction: column;
+	margin-top: 0;
+}
+.novel-source-list.is-grid .novel-source-actions { margin-top: auto; }
+/* 窄栏永远按列：并排会把「拆 86 章 · 1.3 MB」这类副题挤断。 */
+.novel-source-list.is-compact .novel-source-body { display: flex; flex-direction: column; }
+/* 栏头里的说明（如「尚无章目」）在窄栏要能收，别把陈列开关挤出去。 */
+.pane-head .pane-note { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pane-head { flex-wrap: wrap; row-gap: 2px; }
