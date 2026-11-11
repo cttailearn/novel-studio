@@ -55,6 +55,9 @@ const PANES = {
 /** 素材陈列方式：grid=格子，cols=按列。全局一份，存本机。 */
 const MATERIAL_LAYOUT_KEY = "novel-studio/material-layout";
 
+/** 卷宗陈列方式：跟素材那套一样，但单独记一份 —— 书和料是两种东西。 */
+const RECORD_LAYOUT_KEY = "novel-studio/record-layout";
+
 function readMaterialLayout() {
 	try {
 		return localStorage.getItem(MATERIAL_LAYOUT_KEY) === "cols" ? "cols" : "grid";
@@ -68,6 +71,22 @@ function writeMaterialLayout(value) {
 		localStorage.setItem(MATERIAL_LAYOUT_KEY, value);
 	} catch {
 		/* 本机存储不可用时只影响下次打开，不影响这一次陈列。 */
+	}
+}
+
+function readRecordLayout() {
+	try {
+		return localStorage.getItem(RECORD_LAYOUT_KEY) === "cols" ? "cols" : "grid";
+	} catch {
+		return "grid";
+	}
+}
+
+function writeRecordLayout(value) {
+	try {
+		localStorage.setItem(RECORD_LAYOUT_KEY, value);
+	} catch {
+		/* 同上。 */
 	}
 }
 
@@ -171,6 +190,8 @@ const state = {
 	pickedMaterials: new Set(),
 	/** 素材陈列：格子并排，或按列一行一条。 */
 	materialLayout: readMaterialLayout(),
+	/** 卷宗陈列：与素材同一套开关，但记的是书架的排法。 */
+	recordLayout: readRecordLayout(),
 	/** 顶层模式：home 是案头（管理），workspace 是写作台（创作）。 */
 	mode: "home",
 	/** 编辑器自动存稿。正文只活在 textarea 里时，切走一步就可能整段丢。 */
@@ -2009,6 +2030,8 @@ function renderHomeBench() {
 	$("project-count").textContent = state.projects.length ? state.projects.length + " 部" : "";
 	const cards = $("project-cards");
 	cards.replaceChildren();
+	applyRecordLayout(cards);
+	renderRecordLayoutToggle($("project-layout"), "卷宗陈列方式");
 	if (state.projects.length === 0) {
 		cards.append(el("div", "bench-empty", "案上尚无卷宗。\n点上方「另起一卷」立一部新书。"));
 	} else {
@@ -3349,6 +3372,38 @@ function setMaterialLayout(value) {
 	writeMaterialLayout(next);
 	renderView();
 	renderBible();
+}
+
+/** 卷宗的「按列 / 格子」：和素材一个手势，落到 .record-list 上。 */
+function applyRecordLayout(node) {
+	if (!node) return;
+	node.classList.toggle("is-grid", state.recordLayout === "grid");
+	node.classList.toggle("is-cols", state.recordLayout === "cols");
+}
+
+function renderRecordLayoutToggle(box, label) {
+	if (!box) return;
+	box.replaceChildren();
+	box.setAttribute("role", "group");
+	box.setAttribute("aria-label", label);
+	for (const [value, text, hint] of [
+		["cols", "按列", "一行一部，最近动笔排前面"],
+		["grid", "格子", "并排放，宽屏下一次看全几部"],
+	]) {
+		const active = state.recordLayout === value;
+		const btn = button(text, "mat-layout-btn" + (active ? " is-on" : ""), () => setRecordLayout(value));
+		btn.setAttribute("aria-pressed", active ? "true" : "false");
+		btn.title = hint;
+		box.append(btn);
+	}
+}
+
+function setRecordLayout(value) {
+	const next = value === "cols" ? "cols" : "grid";
+	if (state.recordLayout === next) return;
+	state.recordLayout = next;
+	writeRecordLayout(next);
+	renderHomeBench();
 }
 
 function renderMaterialsBench() {

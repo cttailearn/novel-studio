@@ -7724,3 +7724,81 @@ textarea::placeholder { color: var(--ink-hold); opacity: 1; }
 	white-space: nowrap;
 }
 
+/* ══════════════════════════════════════════════════════════════
+   案头 v5 · 卷宗排法与宽屏留白
+   ──────────────────────────────────────────────────────────────
+   卷宗跟着素材学：栏头一枚「按列 / 格子」。书少时按列看得清，
+   书多时格子并排，一屏扫完。
+   宽屏（≥1400）三栏不再挤在 1560 的中间，两侧的空白收进栏内 ——
+   卷宗拿到能放下两列卡片的宽度，中间留给素材，右侧留给设定官。
+   ══════════════════════════════════════════════════════════════ */
+
+/* 格子：卡片并排、等高，动作落在卡脚。 */
+#view-home .record-list.is-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+	gap: 14px;
+	align-items: stretch;
+}
+#view-home .record-list.is-grid > .card.record {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	margin-top: 0;
+}
+#view-home .record-list.is-grid > .card.record .mat-actions {
+	margin-top: auto;
+}
+#view-home .record-list.is-grid > .bench-empty {
+	grid-column: 1 / -1;
+}
+
+/* 按列：一行一部，最近动笔的排前面。 */
+#view-home .record-list.is-cols {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+#view-home .record-list.is-cols > .card.record {
+	margin-top: 0;
+}
+
+@media (min-width: 1400px) {
+	#view-home .bench.bench-three {
+		grid-template-columns: minmax(400px, 30%) minmax(0, 1fr) minmax(380px, 27%);
+		max-width: none;
+	}
+	/* 栏内留白跟着栏宽走：宽屏上 20px 显得贴边。 */
+	#view-home .bench-three > .bench-pane {
+		padding-inline: 22px;
+	}
+}
+
+/* 通用素材库也跟着开关走：46em 的阅读宽是给正文的，不是给卡片的。
+   （#view-home 里有 id 级的单列规则，这里要用同样的 id 级压过去。） */
+#view-home .record-list,
+#view-home .material-list {
+	max-width: none;
+}
+#view-home .material-list.is-grid .mat-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+	gap: 12px;
+	align-items: stretch;
+}
+#view-home .material-list.is-grid .mat-grid > .card.mat {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+}
+#view-home .material-list.is-grid .mat-grid > .card.mat .mat-actions {
+	margin-top: auto;
+}
+#view-home .material-list.is-cols .mat-grid {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+
+
