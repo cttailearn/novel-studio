@@ -1064,6 +1064,59 @@
 			</footer>
 		</dialog>
 
+		<!-- 局部改写：选中的那一段交给执笔者，先看后采用 -->
+		<dialog id="polish-dialog" class="sheet sheet-form polish-sheet" aria-labelledby="polish-title">
+			<header class="form-head">
+				<h3 id="polish-title">改写这一段</h3>
+				<p class="form-hint" id="polish-hint">只改选中的字，前后文一字不动；采用之前不会写进稿子。</p>
+			</header>
+			<div class="form-body polish-body">
+				<blockquote class="polish-quote" id="polish-quote"></blockquote>
+				<div class="polish-presets" id="polish-presets" role="group" aria-label="改写方向">
+					<button type="button" class="chip" data-preset="更凝练些，删掉重复与铺垫，句子更短">更凝练</button>
+					<button type="button" class="chip" data-preset="更口语些，像人随口说出来的，不要书面腔">更口语</button>
+					<button type="button" class="chip" data-preset="补一点环境与动作的细节，让画面立起来，不要加新情节">补细节</button>
+					<button type="button" class="chip" data-preset="把这段的因果理顺：人物为什么这么做要说清，不要含糊">理逻辑</button>
+					<button type="button" class="chip" data-preset="把冲突写得更紧，删掉缓冲，让读者感到压力">加强冲突</button>
+					<button type="button" class="chip" data-preset="统一称呼与用词，与上下文一致">统一称呼</button>
+				</div>
+				<label class="field">
+					<span class="field-label">要改成什么样</span>
+					<textarea id="polish-instruction" rows="3" placeholder="一句话说清：比如「把这段对白写得冷一点，裴渡不要解释自己」"></textarea>
+				</label>
+				<label class="field">
+					<span class="field-label">别动什么（可空）</span>
+					<input id="polish-keep" type="text" placeholder="对白、数字、称呼、十七个名字…" />
+				</label>
+				<div class="polish-result" id="polish-result" hidden>
+					<div class="polish-compare">
+						<div class="polish-col">
+							<span class="polish-col-head">原文</span>
+							<p class="polish-old" id="polish-old"></p>
+						</div>
+						<div class="polish-col">
+							<span class="polish-col-head">改写</span>
+							<p class="polish-new" id="polish-new"></p>
+						</div>
+					</div>
+					<div class="polish-checks" id="polish-checks"></div>
+					<label class="field polish-again-field">
+						<span class="field-label">不满意？说一句再改</span>
+						<input id="polish-again" type="text" placeholder="比如「太文了，再短些」" />
+					</label>
+				</div>
+				<p class="form-error" id="polish-error"></p>
+			</div>
+			<footer class="form-foot">
+				<div class="dialog-actions">
+					<button type="button" class="btn btn-quiet" id="polish-cancel">作罢</button>
+					<button type="button" class="btn btn-quiet" id="polish-retry" hidden>再改一版</button>
+					<button type="button" class="btn btn-quiet" id="polish-run">让执笔者改</button>
+					<button type="button" class="btn btn-ink" id="polish-apply" disabled>采用这一版</button>
+				</div>
+			</footer>
+		</dialog>
+
 		<!-- 浏览器本地模式（?local=1，或 localStorage 里把 mode 记成 local）用的模块映射。
 		     页面自己（/app.js 与 /settings.js）是原生脚本、没有 import，所以平时这份映射
 		     不参与；只有 boot.js 决定接管、懒加载 /browser/local-api.js 时才会用到。

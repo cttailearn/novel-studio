@@ -16,7 +16,14 @@
  */
 import type { Agent, AgentEvent, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model, MutableModels } from "@earendil-works/pi-ai";
-import { createNovelAgent, type AgentRole } from "../ai/novel-agent.ts";
+import { createNovelAgent, createOneShotAgent, type AgentRole } from "../ai/novel-agent.ts";
+import {
+	POLISH_SYSTEM_PROMPT,
+	POLISH_WINDOW,
+	buildPolishPrompt,
+	checkPolish,
+	sanitizePolish,
+} from "../ai/polish.ts";
 import type { ChapterWriteMode, WritingContext } from "../ai/prompts.ts";
 // 注意：这里刻意不 import ../ai/models.ts。
 // 那个文件静态 import 了 42 个 pi-ai 内置 provider，连带 openai / @anthropic-ai/sdk /
@@ -3246,6 +3253,193 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 		if (!run) return json(sink, 404, { error: "这一轮不在了（可能已结束并回收）" });
 		const stopped = run.abort("user");
 		return json(sink, 200, { ok: true, stopped, status: run.status });
+	}
+
+	// ── 局部改写（polish）────────────────────────────────────────
+	// 只出一段文本，不落盘。作者在稿纸上点「采用」才走下面那条 apply。
+	const polishMatch = pathname.match(/^\/api\/projects\/([\w-]+)\/chapters\/([^/]+)\/polish$/);
+	if (polishMatch && req.method === "POST") {
+		const projectId = polishMatch[1]!;
+		const project = store.get(projectId);
+		if (!project) return json(sink, 404, { error: "工程不存在" });
+		const chapterId = decodeURIComponent(polishMatch[2]!);
+		const chapter = project.outline.find((item) => item.id === chapterId);
+		if (!chapter) return json(sink, 404, { error: "章节不存在" });
+		const meta = project.drafts[chapterId];
+		if (!meta) return json(sink, 400, { error: "这一章还没有正文，先起稿再来改。" });
+
+		const body = await readJsonBody<{
+			start?: number;
+			end?: number;
+			text?: string;
+			instruction?: string;
+			keep?: string;
+			modelRef?: string;
+			revision?: number;
+		}>(req);
+		const start = Math.trunc(Number(body.start));
+		const end = Math.trunc(Number(body.end));
+		if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start) {
+			return json(sink, 400, { error: "选区不对，重新选一段。" });
+		}
+		const draft = await store.readDraftBody(projectId, chapterId);
+		const content = draft?.content ?? "";
+		if (end > content.length) {
+			return json(sink, 409, { error: "正文比选区短了，可能刚被改过；重新选一次。", code: "stale" });
+		}
+		const selected = content.slice(start, end);
+		if (typeof body.text === "string" && body.text !== selected) {
+			return json(sink, 409, { error: "选区里的字和你看到的不一样了，重新选一次。", code: "stale" });
+		}
+		if (typeof body.revision === "number" && body.revision !== meta.revision) {
+			return json(sink, 409, { error: "这一章刚改过一版，重新选一次再改。", code: "stale" });
+		}
+
+		const modelRef = resolveDefaultModel(ctx, body.modelRef);
+		if (!modelRef) return json(sink, 400, { error: "请指定模型" });
+		let model: Model<any>;
+		try {
+			model = await resolveModel(modelRef);
+		} catch (error) {
+			return json(sink, error instanceof ModelResolutionError ? 400 : 500, { error: (error as Error).message });
+		}
+
+		const characters = project.materials
+			.filter((material) => material.kind === "character")
+			.map((material) => material.title.trim())
+			.filter((title) => title.length >= 2);
+		const notes = project.notes
+			.filter((note) => note.status === "open" && note.severity !== "info")
+			.filter((note) => !note.chapterId || note.chapterId === chapterId)
+			.slice(0, 5)
+			.map((note) => note.category + " · " + note.subject + (note.description ? " —— " + note.description.slice(0, 160) : ""));
+		const before = content.slice(Math.max(0, start - POLISH_WINDOW), start);
+		const after = content.slice(end, Math.min(content.length, end + POLISH_WINDOW));
+
+		sink.writeHead(200, {
+			"content-type": "application/x-ndjson; charset=utf-8",
+			"cache-control": "no-store",
+			"x-accel-buffering": "no",
+		});
+		const emit = (event: unknown) => {
+			if (sink.ended || sink.destroyed) return;
+			sink.write(JSON.stringify(event) + "\n");
+		};
+		emit({ type: "run", model: modelRef });
+
+		let closed = false;
+		sink.onClose(() => {
+			closed = true;
+		});
+		let active: Agent | null = null;
+
+		try {
+			let last = "";
+			let verdict = checkPolish(selected, selected, characters);
+			for (let attempt = 1; attempt <= 2; attempt += 1) {
+				if (attempt > 1) emit({ type: "retry", attempt, reason: verdict.feedback });
+				const agent = createOneShotAgent({
+					model,
+					models: ctx.deps.models.current(),
+					sessionId: randomUUID(),
+					systemPrompt: POLISH_SYSTEM_PROMPT,
+					thinkingLevel: settingsStore.get().defaultThinkingLevel,
+				});
+				active = agent;
+				let text = "";
+				const off = agent.subscribe((event: AgentEvent) => {
+					if (event.type !== "message_update") return;
+					const inner = event.assistantMessageEvent;
+					if (inner.type !== "text_delta") return;
+					text += inner.delta;
+					emit({ type: "text", delta: inner.delta });
+				});
+				try {
+					await agent.prompt(
+						buildPolishPrompt({
+							chapterTitle: chapter.title,
+							chapterSummary: chapter.summary,
+							before,
+							after,
+							selected,
+							instruction: String(body.instruction ?? ""),
+							keep: String(body.keep ?? ""),
+							characters,
+							notes,
+							...(attempt > 1 ? { feedback: verdict.feedback } : {}),
+							attempt,
+						}),
+					);
+				} finally {
+					off();
+					active = null;
+				}
+				if (closed) return;
+				last = sanitizePolish(text);
+				verdict = checkPolish(selected, last, characters);
+				emit({ type: "checks", checks: verdict.checks });
+				if (!verdict.hard) break;
+			}
+			emit({ type: "done", text: last, checks: verdict.checks, hard: verdict.hard });
+		} catch (error) {
+			emit({ type: "error", message: "这一轮没改完：" + (error instanceof Error ? error.message : String(error)) });
+		} finally {
+			active?.abort();
+			if (!sink.ended && !sink.destroyed) sink.end();
+		}
+		return;
+	}
+
+	// 采用这一版：位置 + 期望原文 + 期望版本 三重校验，任一不符就拒绝，绝不猜位置。
+	const polishApplyMatch = pathname.match(/^\/api\/projects\/([\w-]+)\/chapters\/([^/]+)\/polish\/apply$/);
+	if (polishApplyMatch && req.method === "POST") {
+		const projectId = polishApplyMatch[1]!;
+		const chapterId = decodeURIComponent(polishApplyMatch[2]!);
+		const body = await readJsonBody<{
+			start?: number;
+			end?: number;
+			expectedText?: string;
+			expectedRevision?: number;
+			replacement?: string;
+		}>(req);
+		const start = Math.trunc(Number(body.start));
+		const end = Math.trunc(Number(body.end));
+		const replacement = typeof body.replacement === "string" ? body.replacement : "";
+		if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end < start) {
+			return json(sink, 400, { error: "选区不对，重新选一段。" });
+		}
+		let conflict = "";
+		const saved = await store.withChapterLock(projectId, chapterId, async () => {
+			const project = store.get(projectId);
+			const meta = project?.drafts[chapterId];
+			if (!project || !meta) {
+				conflict = "这一章还没有正文。";
+				return undefined;
+			}
+			if (typeof body.expectedRevision === "number" && body.expectedRevision !== meta.revision) {
+				conflict = "这一章刚改过一版，这次的改动没落盘；重新选一次。";
+				return undefined;
+			}
+			const draft = await store.readDraftBody(projectId, chapterId);
+			const content = draft?.content ?? "";
+			const current = content.slice(start, end);
+			if (typeof body.expectedText === "string" && current !== body.expectedText) {
+				conflict = "选区里的字已经变了，这次的改动没落盘；重新选一次。";
+				return undefined;
+			}
+			const next = content.slice(0, start) + replacement + content.slice(end);
+			return store.saveDraftBody(projectId, chapterId, {
+				title: meta.title,
+				content: next,
+				summary: meta.summary,
+				materialIds: meta.materialIds,
+				mode: "polish",
+				keepHistory: true,
+			});
+		});
+		if (conflict || !saved) return json(sink, 409, { error: conflict || "这一章没能存上。", code: "stale" });
+		await store.flushForProject(projectId);
+		return json(sink, 200, { ok: true, chapter: saved, stats: store.stats(store.get(projectId)!) });
 	}
 
 	return json(sink, 404, { error: "未知接口" });

@@ -7922,3 +7922,119 @@ textarea::placeholder { color: var(--ink-hold); opacity: 1; }
 @media (max-width: 640px) {
 	.outline-actions .btn { height: 30px; padding: 0 11px; }
 }
+
+/* ── 局部改写 · 选区浮条与先看后采用 ───────────────────────── */
+
+[hidden] { display: none !important; }
+
+.ms-selectbar {
+	position: fixed;
+	z-index: 64;
+	left: 50%;
+	bottom: calc(78px + var(--safe-b));
+	transform: translateX(-50%);
+	height: 38px;
+	padding: 0 16px;
+	border: 0;
+	border-radius: var(--r-pill, 999px);
+	background: var(--ink);
+	color: var(--paper-hi);
+	font-size: var(--fs-xs);
+	letter-spacing: .04em;
+	box-shadow: 0 10px 26px -12px rgba(20, 16, 10, .55);
+	cursor: pointer;
+}
+.ms-selectbar:hover { background: var(--ink-2); }
+.ms-selectbar:focus-visible { outline: 2px solid var(--cinnabar); outline-offset: 2px; }
+
+.polish-sheet { width: min(780px, 94vw); max-height: 88dvh; display: flex; flex-direction: column; }
+.polish-sheet .form-head,
+.polish-sheet .form-foot { flex: 0 0 auto; }
+.polish-sheet .form-body { flex: 1 1 auto; min-height: 0; max-height: none; overflow-y: auto; }
+.polish-body { display: flex; flex-direction: column; gap: 14px; }
+
+.polish-quote {
+	flex: 0 0 auto;
+	margin: 0;
+	padding: 9px 12px;
+	border-left: 2px solid var(--cinnabar);
+	background: var(--paper-sunk);
+	color: var(--ink-2);
+	font-family: var(--serif);
+	font-size: var(--fs-sm);
+	line-height: 1.75;
+	white-space: pre-wrap;
+	max-height: 118px;
+	overflow-y: auto;
+}
+
+.polish-presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.polish-presets .chip { cursor: pointer; }
+
+.polish-result { display: flex; flex-direction: column; gap: 10px; }
+.polish-compare { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+.polish-col {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	min-width: 0;
+	border: 1px solid var(--rule);
+	border-radius: var(--r-2);
+	background: var(--paper-hi);
+	padding: 10px 12px;
+}
+.polish-col-head {
+	font-size: 10.5px;
+	letter-spacing: .16em;
+	color: var(--ink-3);
+}
+.polish-old, .polish-new {
+	margin: 0;
+	font-family: var(--serif);
+	font-size: var(--fs-sm);
+	line-height: 1.85;
+	color: var(--ink-2);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	max-height: 34dvh;
+	overflow-y: auto;
+}
+.polish-new { color: var(--ink); }
+
+.polish-checks { display: flex; flex-wrap: wrap; gap: 6px; }
+.polish-check {
+	display: inline-flex;
+	align-items: center;
+	height: 22px;
+	padding: 0 8px;
+	border-radius: var(--r-pill, 999px);
+	font-size: 10.5px;
+	letter-spacing: .02em;
+	border: 1px solid var(--rule);
+	color: var(--ink-3);
+	background: var(--paper);
+}
+.polish-check.is-ok { color: var(--moss); border-color: rgba(85, 104, 74, .35); }
+.polish-check.is-warn { color: var(--amber); border-color: rgba(184, 134, 47, .35); }
+.polish-check.is-bad { color: var(--cinnabar-ink); border-color: var(--cinnabar-edge); background: var(--cinnabar-wash); }
+
+.polish-again-field { margin-top: 2px; }
+
+.ms-undo-polish { margin-left: 8px; height: 22px; padding: 0 8px; font-size: 10.5px; }
+
+@media (max-width: 640px) {
+	.ms-selectbar { bottom: calc(70px + var(--safe-b)); height: 36px; }
+	.polish-sheet { width: 100vw; max-width: 100vw; margin: 0; height: auto; max-height: 92dvh; border-radius: 16px 16px 0 0; }
+	/* 手机上的弹层默认把动作收进标题栏，这里没那两枚按钮，
+	   所以把页脚放回来 —— 改写没有「采用」就不成立。 */
+	.sheet-form.polish-sheet .form-head { padding: calc(16px + var(--safe-t)) 16px 12px; }
+	.sheet-form.polish-sheet .form-foot { display: block; padding: 10px 16px calc(12px + var(--safe-b)); border-top: 1px solid var(--rule-soft); }
+	.sheet-form.polish-sheet .form-foot .dialog-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+	.sheet-form.polish-sheet .dialog-actions .btn { flex: 1 1 0; min-width: 0; min-height: 44px; padding: 0 10px; }
+	.polish-compare { grid-template-columns: minmax(0, 1fr); }
+	.polish-old, .polish-new { max-height: 22dvh; }
+}
+
+:root[data-theme="dark"] .ms-selectbar { background: #e3d8c3; color: #17150f; }
+:root[data-theme="dark"] .ms-selectbar:hover { background: #f0e7d6; }
+:root[data-theme="dark"] .polish-col { background: #241f1a; border-color: rgba(236, 229, 212, .16); }

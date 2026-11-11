@@ -228,6 +228,13 @@ const state = {
 	bibleQuery: "",
 	/** 待办只看本章：写作时最想知道「这一章还欠什么」。 */
 	notesOnlyChapter: false,
+	/** 稿纸上选中的那一段：{ start, end, text }。局部改写全靠它定位。 */
+	polishSelection: null,
+	/** 这一轮改写的产物：采用时才落盘。 */
+	polishResult: null,
+	polishBusy: false,
+	/** 刚采用的那一版：留一条「撤销这次改写」的窄路。 */
+	polishUndo: null,
 	/** 生文工作台「库中可装」的检索词与分类。 */
 	poolQuery: "",
 	poolFilter: "",
@@ -1565,6 +1572,8 @@ async function fetchKinds() {
 }
 
 async function bootstrap() {
+	// 弹层与浮条先接线：接口慢或失败时，稿面已经能选、能改。
+	wirePolish();
 	const [data, library, materialSources] = await Promise.all([
 		api("/api/bootstrap"),
 		api("/api/library"),
@@ -2691,7 +2700,12 @@ function renderChapter(box, project) {
 		editor.addEventListener("input", () => {
 			fitEditor(editor);
 			markEditorDirty();
+			// 一边打字一边选区会变，浮条得跟着走。
+			syncPolishSelection(editor);
 		});
+		for (const type of ["select", "mouseup", "keyup"]) {
+			editor.addEventListener(type, () => syncPolishSelection(editor));
+		}
 		editor.addEventListener("blur", () => {
 			// 焦点离开稿台往往意味着要切走：先落盘，再让下一步行动。
 			if (state.editorDirty) void autoSaveNow();
@@ -2793,6 +2807,299 @@ function fitEditor(editor) {
 	// 夹回去，作者看到的就是稿子突然跳走。变矮的情况留到下次进稿面再收。
 	const needed = editor.scrollHeight;
 	if (needed > editor.offsetHeight) editor.style.height = needed + "px";
+}
+
+/* ── 局部改写 ───────────────────────────────────────────────
+ * 作者在稿纸上选一段，说一句要改成什么样；执笔者只重写这一段。
+ * 与对话里的「止笔/改稿」不同，这里**先出稿、后落盘**：
+ * 采用之前正文一个字都不动，所以改坏了不用回滚版本。
+ */
+
+/** 选中文字后浮出来的那枚按钮。挂在 body 上，避免被稿台的滚动容器裁掉。 */
+function polishBarNode() {
+	let bar = document.getElementById("ms-selectbar");
+	if (bar) return bar;
+	bar = el("button", "ms-selectbar");
+	bar.id = "ms-selectbar";
+	bar.type = "button";
+	bar.hidden = true;
+	// 按下时别抢走 textarea 的焦点，否则选中的那一段会立刻消失。
+	bar.addEventListener("mousedown", (event) => event.preventDefault());
+	bar.addEventListener("click", () => openPolishDialog());
+	document.body.append(bar);
+	return bar;
+}
+
+/** 记下选区。空选区就把浮条收起来 —— 没有选中的字，改写无从谈起。 */
+function syncPolishSelection(editor) {
+	const start = editor.selectionStart ?? 0;
+	const end = editor.selectionEnd ?? 0;
+	const text = end > start ? editor.value.slice(start, end) : "";
+	const bar = polishBarNode();
+	if (!state.editing || !text.trim()) {
+		bar.hidden = true;
+		state.polishSelection = null;
+		return;
+	}
+	state.polishSelection = { start, end, text };
+	bar.hidden = false;
+	bar.textContent = "改写选中 " + text.length + " 字";
+}
+
+function openPolishDialog() {
+	const selection = state.polishSelection;
+	if (!selection || !state.chapterId) {
+		toast("先在稿纸上选一段。", "info", 2400);
+		return;
+	}
+	state.polishResult = null;
+	$("polish-quote").textContent = selection.text.length > 260 ? selection.text.slice(0, 260) + "…" : selection.text;
+	$("polish-old").textContent = selection.text;
+	$("polish-new").textContent = "";
+	$("polish-instruction").value = "";
+	$("polish-keep").value = "";
+	$("polish-again").value = "";
+	$("polish-result").hidden = true;
+	$("polish-error").textContent = "";
+	$("polish-checks").replaceChildren();
+	$("polish-apply").disabled = true;
+	$("polish-retry").hidden = true;
+	$("polish-run").textContent = "让执笔者改";
+	openDialog($("polish-dialog"));
+}
+
+/** 校验结果落成几枚小签：一眼看出这一版能不能用。 */
+function renderPolishChecks(checks) {
+	const box = $("polish-checks");
+	box.replaceChildren();
+	for (const check of checks ?? []) {
+		const chip = el("span", "polish-check " + (check.ok ? "is-ok" : check.hard ? "is-bad" : "is-warn"), check.label + " · " + check.detail);
+		box.append(chip);
+	}
+}
+
+async function runPolish(instructionOverride) {
+	const selection = state.polishSelection;
+	if (!selection || !state.projectId || !state.chapterId) return;
+	const instruction = String(instructionOverride ?? $("polish-instruction").value ?? "").trim();
+	const keep = $("polish-keep").value.trim();
+	if (!instruction) {
+		$("polish-error").textContent = "说一句要改成什么样，比如「更冷一点，裴渡不要解释自己」。";
+		return;
+	}
+	polishAbort?.abort();
+	const controller = new AbortController();
+	polishAbort = controller;
+	state.polishBusy = true;
+	state.polishResult = null;
+	$("polish-error").textContent = "";
+	$("polish-result").hidden = false;
+	$("polish-new").textContent = "";
+	$("polish-checks").replaceChildren();
+	$("polish-apply").disabled = true;
+	$("polish-retry").hidden = true;
+	$("polish-run").textContent = "改着…";
+	let text = "";
+	try {
+		const res = await fetch(
+			"/api/projects/" + state.projectId + "/chapters/" + encodeURIComponent(state.chapterId) + "/polish",
+			{
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					start: selection.start,
+					end: selection.end,
+					text: selection.text,
+					instruction,
+					keep,
+				}),
+				signal: controller.signal,
+			},
+		);
+		if (!res.ok) {
+			const data = await res.json().catch(() => ({}));
+			throw new Error(data.error || "改写没能开始（" + res.status + "）");
+		}
+		const reader = res.body.getReader();
+		const decoder = new TextDecoder();
+		let buffer = "";
+		for (;;) {
+			const { value, done } = await reader.read();
+			if (done) break;
+			buffer += decoder.decode(value, { stream: true });
+			let index = buffer.indexOf("\n");
+			while (index >= 0) {
+				const line = buffer.slice(0, index).trim();
+				buffer = buffer.slice(index + 1);
+				index = buffer.indexOf("\n");
+				if (!line) continue;
+				let event;
+				try {
+					event = JSON.parse(line);
+				} catch {
+					continue;
+				}
+				if (event.type === "text") {
+					text += event.delta;
+					$("polish-new").textContent = text;
+				} else if (event.type === "retry") {
+					text = "";
+					$("polish-new").textContent = "（这一版没通过检查，正在重写…）";
+				} else if (event.type === "checks") {
+					renderPolishChecks(event.checks);
+				} else if (event.type === "done") {
+					text = event.text || text;
+					$("polish-new").textContent = text;
+					state.polishResult = {
+						start: selection.start,
+						end: selection.end,
+						text: selection.text,
+						replacement: text,
+						hard: Boolean(event.hard),
+					};
+					$("polish-apply").disabled = Boolean(event.hard) || !text.trim();
+					$("polish-retry").hidden = false;
+					if (event.hard) $("polish-error").textContent = "这一版没通过检查，可以再改一版，也可以作罢。";
+				} else if (event.type === "error") {
+					throw new Error(event.message || "这一轮没改完。");
+				}
+			}
+		}
+	} catch (error) {
+		if (error.name !== "AbortError") $("polish-error").textContent = error.message || String(error);
+	} finally {
+		state.polishBusy = false;
+		$("polish-run").textContent = "让执笔者改";
+		if (polishAbort === controller) polishAbort = null;
+	}
+}
+
+/** 采用：把这一版写进稿子。位置 + 期望原文由服务端再核一遍。 */
+async function applyPolish() {
+	const result = state.polishResult;
+	if (!result || !state.projectId || !state.chapterId) return;
+	$("polish-apply").disabled = true;
+	try {
+		const data = await api(
+			"/api/projects/" + state.projectId + "/chapters/" + encodeURIComponent(state.chapterId) + "/polish/apply",
+			{
+				method: "POST",
+				body: {
+					start: result.start,
+					end: result.end,
+					expectedText: result.text,
+					replacement: result.replacement,
+				},
+			},
+		);
+		const editor = document.querySelector("#view-manuscript .ms-edit");
+		if (editor) {
+			editor.value = editor.value.slice(0, result.start) + result.replacement + editor.value.slice(result.end);
+			fitEditor(editor);
+			state.editorDirty = false;
+		}
+		applySavedChapter(state.chapterId, data, editor?.value);
+		state.editorSavedAt = Date.now();
+		syncSaveState();
+		closeDialog($("polish-dialog"));
+		offerPolishUndo({
+			start: result.start,
+			end: result.start + result.replacement.length,
+			replacement: result.replacement,
+			previous: result.text,
+		});
+		toast("已采用，存为第 " + (data.chapter?.revision ?? "新") + " 稿。", "ok", 2600);
+	} catch (error) {
+		$("polish-apply").disabled = false;
+		$("polish-error").textContent = error.message;
+	}
+}
+
+/** 采用后留一条窄路：十五秒内可以原地撤回，不必翻版本历史。 */
+function offerPolishUndo(record) {
+	state.polishUndo = record;
+	document.querySelectorAll(".ms-undo-polish").forEach((node) => node.remove());
+	const holder = $("ms-save-state");
+	if (!holder) return;
+	const undo = button("撤销这次改写", "btn btn-quiet btn-xs ms-undo-polish", () => void undoPolish());
+	holder.insertAdjacentElement("afterend", undo);
+	const stamp = Date.now();
+	window.setTimeout(() => {
+		undo.remove();
+		if (state.polishUndo === record && Date.now() - stamp >= 15000) state.polishUndo = null;
+	}, 15000);
+}
+
+async function undoPolish() {
+	const record = state.polishUndo;
+	if (!record || !state.projectId || !state.chapterId) return;
+	try {
+		const data = await api(
+			"/api/projects/" + state.projectId + "/chapters/" + encodeURIComponent(state.chapterId) + "/polish/apply",
+			{
+				method: "POST",
+				body: {
+					start: record.start,
+					end: record.end,
+					expectedText: record.replacement,
+					replacement: record.previous,
+				},
+			},
+		);
+		const editor = document.querySelector("#view-manuscript .ms-edit");
+		if (editor) {
+			editor.value = editor.value.slice(0, record.start) + record.previous + editor.value.slice(record.end);
+			fitEditor(editor);
+		}
+		applySavedChapter(state.chapterId, data, editor?.value);
+		state.editorSavedAt = Date.now();
+		state.editorDirty = false;
+		syncSaveState();
+		document.querySelectorAll(".ms-undo-polish").forEach((node) => node.remove());
+		state.polishUndo = null;
+		toast("已撤回这次改写。", "ok", 2000);
+	} catch (error) {
+		toast("没能撤回：" + error.message, "error");
+	}
+}
+
+/** 弹层里的按钮只接一次线，别跟着每次渲染重绑。 */
+let polishAbort = null;
+let polishWired = false;
+function wirePolish() {
+	if (polishWired) return;
+	polishWired = true;
+	const dialog = $("polish-dialog");
+	if (!dialog) return;
+	for (const chip of dialog.querySelectorAll("[data-preset]")) {
+		chip.addEventListener("click", () => {
+			const box = $("polish-instruction");
+			const preset = chip.dataset.preset ?? "";
+			box.value = box.value.trim() ? box.value.trim() + "；" + preset : preset;
+			box.focus();
+		});
+	}
+	$("polish-run").addEventListener("click", () => void runPolish());
+	$("polish-retry").addEventListener("click", () => {
+		const again = $("polish-again").value.trim();
+		const base = $("polish-instruction").value.trim();
+		const next = [base, again].filter(Boolean).join("；");
+		if (!again) {
+			$("polish-error").textContent = "说一句哪里不满意，再让执笔者改一版。";
+			$("polish-again").focus();
+			return;
+		}
+		$("polish-keep").value = $("polish-keep").value;
+		void runPolish(next);
+	});
+	$("polish-apply").addEventListener("click", () => void applyPolish());
+	$("polish-cancel").addEventListener("click", () => {
+		polishAbort?.abort();
+		closeDialog(dialog);
+	});
+	dialog.addEventListener("close", () => {
+		polishAbort?.abort();
+	});
 }
 
 function navButton(id, label) {
@@ -2924,6 +3231,10 @@ function clearEditorState() {
 	state.editorSaving = false;
 	state.editorSavingPromise = null;
 	state.editorSavedAt = 0;
+	// 离开改稿态时把改写入口一并收掉，免得它在读稿时还挂着。
+	const bar = document.getElementById("ms-selectbar");
+	if (bar) bar.hidden = true;
+	state.polishSelection = null;
 }
 
 /** 把一次成功的写入同步到内存与页面上，但不重绘稿台 —— 重绘会抢走光标。 */

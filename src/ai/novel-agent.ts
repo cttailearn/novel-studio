@@ -269,6 +269,33 @@ ${latest ? buildContextDigest(latest, { scope: role, chapterId: options.chapterI
 }
 
 /**
+ * 一次性纯文本智能体：没有工具、不写数据，只把一段话改写成另一段话。
+ *
+ * 局部改写必须走这条：借道写作角色会把 revise_chapter 一起带进来，
+ * 模型一调工具就当场落盘，作者就没有「先看后采用」的机会了。
+ */
+export interface OneShotAgentOptions {
+	model: Model<any>;
+	models: Models;
+	sessionId: string;
+	systemPrompt: string;
+	thinkingLevel: ThinkingLevel;
+}
+
+export function createOneShotAgent(options: OneShotAgentOptions): Agent {
+	return new Agent({
+		initialState: {
+			systemPrompt: options.systemPrompt,
+			model: options.model,
+			thinkingLevel: options.thinkingLevel,
+			tools: [],
+		},
+		streamFn: withStreamDefaults(options.models),
+		sessionId: options.sessionId,
+	});
+}
+
+/**
  * 通用素材库的状态快照。
  *
  * 与工程快照同理：模型靠它知道库里现在有什么，不必反复调 list_materials。
