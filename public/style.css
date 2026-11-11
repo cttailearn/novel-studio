@@ -1,4 +1,4 @@
-﻿/* ══════════════════════════════════════════════════════════════
+/* ══════════════════════════════════════════════════════════════
    墨耕 · 水墨视觉系统
    宣纸为底，墨色为字，朱砂为记。深色不是水墨的真解。
    ══════════════════════════════════════════════════════════════ */
@@ -44,9 +44,19 @@
 	--on-cinnabar: #f8f2e6;   /* 落在朱砂上的字 */
 	--song:   var(--serif);   /* 正文用的宋体；此前引用了未定义的 --song，会落回无衬线 */
 
-	--serif: "Songti SC", "STSong", "SimSun", "Noto Serif SC", "Source Han Serif SC", serif;
-	--kai:   "Kaiti SC", "STKaiti", "KaiTi", "楷体", var(--serif);
-	--sans:  -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+	/*
+	 * 全站只用宋体。
+	 *
+	 * 三端共用一个字体栈：Mac 落 Songti SC，Windows 落 SimSun，Android/Linux
+	 * 落 Noto Serif CJK。楷体在安卓上根本不存在，标题曾因此退化成黑体，
+	 * 与桌面对不上 —— 干脆把标题、界面、正文收进同一个衬线栈，
+	 * 靠字号、字距、字重拉层级，不靠换字体。
+	 *
+	 * 等宽只在代码与键位这类必须对齐的地方保留（--mono）。
+	 */
+	--serif: "Songti SC", "STSong", "Songti TC", "Source Han Serif SC", "Noto Serif CJK SC", "Noto Serif SC", "SimSun", serif;
+	--kai:   var(--serif);
+	--sans:  var(--serif);
 	--mono:  "Cascadia Code", "SF Mono", Consolas, monospace;
 	/* 稿台排版偏好。JS 会按「排版」里的选择改写这三个变量。 */
 	--ms-font-size: 17px;
