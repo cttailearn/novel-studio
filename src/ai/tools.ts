@@ -526,13 +526,48 @@ function sharedTools(deps: NovelToolDeps): AgentTool<any>[] {
 				{ description: "记录待办" },
 			),
 			execute: async (_toolCallId, params) => {
+				const severity = (params.severity ?? "info") as NoteSeverity;
+				const chapterId = deps.allowedChapterId;
+				const project = getProject(deps);
+				// 同一件事不记第二遍：同类别 + 同对象且还开着，就并到那条上。
+				// 长稿里模型很容易把「同一个缺口」在每一轮都记一遍，记到第八条作者就不看了。
+				const existing = project.notes.find(
+					(note) => note.status === "open" && note.category === params.category && note.subject === params.subject,
+				);
+				if (existing) {
+					const weight = { info: 0, warning: 1, blocker: 2 } as const;
+					const nextSeverity = weight[severity] > weight[existing.severity] ? severity : existing.severity;
+					// 描述留更详尽的那段：后一轮往往带着新依据。
+					const nextDescription =
+						params.description.length > existing.description.length ? params.description : existing.description;
+					const changed = nextSeverity !== existing.severity || nextDescription !== existing.description;
+					deps.store.mutate(deps.projectId, (draft) => {
+						const target = draft.notes.find((note) => note.id === existing.id);
+						if (!target) return;
+						target.severity = nextSeverity;
+						target.description = nextDescription;
+						if (!target.chapterId && chapterId) target.chapterId = chapterId;
+						target.updatedAt = Date.now();
+					});
+					await deps.store.flushForProject(deps.projectId);
+					return result(
+						(changed ? "已并入既有待办（" : "这条已在待办里，未重复记录（") +
+							nextSeverity +
+							"）：" +
+							existing.category +
+							" / " +
+							existing.subject,
+						{ ...existing, severity: nextSeverity, description: nextDescription },
+					);
+				}
 				const note: ContinuityNote = {
 					id: newId(),
-					severity: (params.severity ?? "info") as NoteSeverity,
+					severity,
 					category: params.category,
 					subject: params.subject,
 					description: params.description,
 					status: "open",
+					...(chapterId ? { chapterId } : {}),
 					createdAt: Date.now(),
 				};
 				deps.store.mutate(deps.projectId, (p) => {

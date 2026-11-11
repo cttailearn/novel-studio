@@ -337,7 +337,11 @@ export interface ContinuityNote {
 	subject: string;
 	description: string;
 	status: NoteStatus;
+	/** 记在哪一章出的问题；有了它，写作时能按章提醒，界面上也能直达。 */
+	chapterId?: string;
 	createdAt: number;
+	/** 合并或改状态时记一笔，界面上能看出「这条是老账」。 */
+	updatedAt?: number;
 }
 
 export interface Project {
@@ -417,7 +421,9 @@ function normalizeNote(raw: unknown): ContinuityNote | undefined {
 		subject: typeof input.subject === "string" ? input.subject : "",
 		description: input.description,
 		status: NOTE_STATUSES.includes(input.status as NoteStatus) ? (input.status as NoteStatus) : "open",
+		...(typeof input.chapterId === "string" && input.chapterId ? { chapterId: input.chapterId } : {}),
 		createdAt: typeof input.createdAt === "number" ? input.createdAt : now,
+		...(typeof input.updatedAt === "number" ? { updatedAt: input.updatedAt } : {}),
 	};
 }
 
@@ -660,7 +666,10 @@ export interface ProjectStats {
 	/** 已装配素材的章节比例，用来判断"料够不够开写"。 */
 	coveredChapters: number;
 	draftedChapters: number;
+	/** 还开着、且需要作者动手的（warning / blocker）；info 只算看过。 */
 	openNotes: number;
+	/** 只标了一下、不必逐条处理的。 */
+	openInfo: number;
 }
 
 /** 消除作品所有派生数据的字段，用于界面展示。 */
@@ -674,7 +683,8 @@ export function projectStats(project: Project): ProjectStats {
 		materials: project.materials.length,
 		coveredChapters: project.outline.filter((chapter) => chapter.materialIds.length > 0).length,
 		draftedChapters: Object.values(project.drafts).filter((meta) => meta.hasDraft).length,
-		openNotes: project.notes.filter((note) => note.status === "open").length,
+		openNotes: project.notes.filter((note) => note.status === "open" && note.severity !== "info").length,
+		openInfo: project.notes.filter((note) => note.status === "open" && note.severity === "info").length,
 	};
 }
 

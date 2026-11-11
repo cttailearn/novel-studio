@@ -226,6 +226,8 @@ const state = {
 	materialQuery: "",
 	libraryQuery: "",
 	bibleQuery: "",
+	/** 待办只看本章：写作时最想知道「这一章还欠什么」。 */
+	notesOnlyChapter: false,
 	/** 生文工作台「库中可装」的检索词与分类。 */
 	poolQuery: "",
 	poolFilter: "",
@@ -4610,6 +4612,25 @@ function renderWritingBench() {
 			$("material-input").focus();
 		}),
 	);
+	// 本章还欠几条待办：写作时最该看见的一个数，点了直接看那几条。
+	const openNotes = project.notes.filter((note) => note.status === "open");
+	const mine = state.chapterId
+		? openNotes.filter((note) => note.chapterId === state.chapterId && note.severity !== "info")
+		: [];
+	if (mine.length > 0) {
+		$("stage-actions").append(
+			button("本章 " + mine.length + " 条待办", "btn btn-quiet btn-sm act act-notes", () => {
+				state.bibleTab = "notes";
+				state.bibleQuery = "";
+				state.notesOnlyChapter = true;
+				syncInput("bible-search", "");
+				syncBibleTabs();
+				renderBible();
+				// 窄屏右案是抽屉：直接替作者拉开。
+				if (phoneQuery?.matches) $("toggle-bible")?.click();
+			}),
+		);
+	}
 
 	const assemblyBox = $("assembly-list");
 	const poolBox = $("pool-list");
@@ -5821,26 +5842,136 @@ function renderBible() {
 	}
 
 	const openNotes = project.notes.filter((note) => note.status === "open");
-	const notes = openNotes.filter((note) =>
+	// 待办分「只看本章 / 看全部」：写作时最想知道的是这一章还欠什么。
+	const chapterId = state.chapterId;
+	const scoped = state.notesOnlyChapter && Boolean(chapterId);
+	const pool = scoped ? openNotes.filter((note) => note.chapterId === chapterId) : openNotes;
+	const notes = pool.filter((note) =>
 		matchesQuery(state.bibleQuery, note.subject, note.category, note.description),
 	);
+
+	const head = el("div", "note-scope");
+	if (chapterId) {
+		head.append(
+			button(
+				scoped
+					? "看全部（" + openNotes.length + "）"
+					: "只看本章（" + openNotes.filter((n) => n.chapterId === chapterId).length + "）",
+				"chip" + (scoped ? " is-on" : ""),
+				() => {
+					state.notesOnlyChapter = !state.notesOnlyChapter;
+					renderBible();
+				},
+			),
+		);
+	}
+	const need = openNotes.filter((note) => note.severity !== "info").length;
+	const info = openNotes.length - need;
+	if (openNotes.length > 0) {
+		head.append(el("span", "note-scope-count", need + " 条要处理" + (info ? " · " + info + " 条备记" : "")));
+	}
+	if (head.childNodes.length > 0) box.append(head);
+
 	if (openNotes.length === 0) {
 		box.append(el("div", "bible-empty", "无待办事项"));
 		return;
 	}
 	if (notes.length === 0) {
-		box.append(el("div", "bible-empty", "没有匹配的待办"));
+		box.append(el("div", "bible-empty", scoped ? "本章没有待办" : "没有匹配的待办"));
 		return;
 	}
 	for (const note of notes) {
-		const row = el("div", "note " + note.severity);
-		row.append(el("span", "note-mark"));
-		const body = el("div", "note-body");
-		body.append(el("div", "note-where", note.category + " · " + note.subject));
-		body.append(el("div", "note-text", note.description));
-		row.append(body);
-		box.append(row);
+		box.append(noteRow(note, project));
 	}
+}
+
+/** 一条待办：写清在哪一章出的、是什么事，并给「补料 / 关闭 / 删除」三条去路。 */
+function noteRow(note, project) {
+	const row = el("div", "note " + note.severity);
+	row.append(el("span", "note-mark"));
+	const body = el("div", "note-body");
+	const where = note.category + " · " + note.subject;
+	body.append(el("div", "note-where", where));
+	body.append(el("div", "note-text", note.description));
+	// 章号按骨架里的次序算：大纲数组本身就是章的顺序，章里没有单独的序号字段。
+	const chapterIndex = note.chapterId ? project.outline.findIndex((item) => item.id === note.chapterId) : -1;
+	const chapter = chapterIndex >= 0 ? project.outline[chapterIndex] : null;
+	if (chapter || note.severity === "info") {
+		const meta = [
+			chapter ? "第 " + (chapterIndex + 1) + " 章 " + chapter.title : "",
+			note.severity === "info" ? "备记" : "",
+		]
+			.filter(Boolean)
+			.join(" · ");
+		if (meta) body.append(el("div", "note-meta", meta));
+	}
+	const actions = el("div", "note-actions");
+	actions.append(button("据此补料", "btn btn-quiet btn-xs", () => void askForNoteMaterial(note)));
+	actions.append(button("关闭", "btn btn-quiet btn-xs", () => void setNoteStatus(note, "resolved")));
+	actions.append(iconButton("删", "btn btn-quiet btn-xs act act-del", () => void deleteNote(note), "删除这条待办"));
+	body.append(actions);
+	row.append(body);
+	return row;
+}
+
+/** 把待办丢给设定官：预填一句能直接呈上的话。 */
+async function askForNoteMaterial(note) {
+	const line = `请把这条缺口补进素材库：${note.subject}。${note.description}`;
+	const input = $("material-input");
+	if (input) {
+		if (state.view !== "materials") switchView("materials");
+		input.value = line;
+		input.focus();
+		input.setSelectionRange(line.length, line.length);
+		input.dispatchEvent(new Event("input", { bubbles: true }));
+		return;
+	}
+	// 案头上没有素材台输入框：交给设定官那一栏。
+	const library = $("library-input");
+	if (library) {
+		library.value = line;
+		library.focus();
+		library.dispatchEvent(new Event("input", { bubbles: true }));
+	}
+	toast("已把这条待办交给设定官。");
+}
+
+async function setNoteStatus(note, status) {
+	if (!state.projectId) return;
+	try {
+		const data = await api(
+			"/api/projects/" + state.projectId + "/notes/" + encodeURIComponent(note.id),
+			{ method: "PATCH", body: { status } },
+		);
+		adoptProjectUpdate(data);
+		toast(status === "resolved" ? "已关闭这条待办。" : "已重新打开。", "ok", 1600);
+	} catch (error) {
+		toast("没能改这条待办：" + error.message, "error");
+	}
+}
+
+async function deleteNote(note) {
+	if (!state.projectId) return;
+	try {
+		const data = await api(
+			"/api/projects/" + state.projectId + "/notes/" + encodeURIComponent(note.id),
+			{ method: "DELETE" },
+		);
+		adoptProjectUpdate(data);
+		toast("已删掉这条待办。", "ok", 1600);
+	} catch (error) {
+		toast("没能删这条待办：" + error.message, "error");
+	}
+}
+
+/** 服务端改完一条待办会把整份工程与统计带回来：就地采用，别为一条备注重拉全书。 */
+function adoptProjectUpdate(data) {
+	if (data?.project) state.project = data.project;
+	if (data?.stats) state.stats = data.stats;
+	$("project-stats").textContent = statsLine();
+	renderHomeBench();
+	renderBible();
+	if (state.view === "writing") renderWritingBench();
 }
 
 // ═══════════════════════════════════════════════════ 工程

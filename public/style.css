@@ -7828,3 +7828,69 @@ textarea::placeholder { color: var(--ink-hold); opacity: 1; }
 /* 栏头里的说明（如「尚无章目」）在窄栏要能收，别把陈列开关挤出去。 */
 .pane-head .pane-note { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pane-head { flex-wrap: wrap; row-gap: 2px; }
+/* ═══════════════════════════════════════════════════ 待办 · 能关、能补、能删
+   待办是「这一章还欠什么」的清单，不是只读批注：
+   每条都给出路，列表头给出范围（全部 / 只看本章）。 */
+
+.note-scope {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+	margin: 0 0 10px;
+}
+
+.note-scope .chip {
+	height: 26px;
+	padding: 0 10px;
+	font-size: var(--fs-xs);
+	line-height: 24px;
+}
+
+.note-scope-count {
+	font-size: var(--fs-xs);
+	color: var(--ink-3);
+	letter-spacing: 0.02em;
+}
+
+.note .note-body {
+	flex: 1 1 auto;
+}
+
+.note-meta {
+	margin-top: 4px;
+	font-size: var(--fs-xs);
+	color: var(--ink-3);
+}
+
+.note-actions {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex-wrap: wrap;
+	margin-top: 8px;
+}
+
+.note-actions .btn {
+	height: 26px;
+	padding: 0 9px;
+	font-size: var(--fs-xs);
+}
+
+/* 删除推到最右，免得和「关闭」并排被误触。 */
+.note-actions .act-del {
+	margin-left: auto;
+}
+
+@media (max-width: 640px) {
+	.note-actions .btn {
+		height: 30px;
+		padding: 0 11px;
+	}
+}
+/* 手机右案是抽屉：底部导航浮在上面，待办列表得给自己留出让位。 */
+@media (max-width: 640px) {
+	#bible {
+		padding-bottom: calc(74px + var(--safe-b));
+	}
+}

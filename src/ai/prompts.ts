@@ -603,15 +603,8 @@ export function buildContextDigest(project: Project, options?: { scope?: DigestS
 		);
 		// 本章素材全文不进 digest：系统提示词里已经带了一份（materialBlock），
 		// 这里再塞一次就是同一段文字在一次请求里出现两遍，白白吃掉上下文预算。
-		const openNotes = project.notes.filter((n) => n.status === "open");
-		if (openNotes.length > 0) {
-			parts.push(
-				section(
-					"待办",
-					openNotes.map((n) => `- [${n.severity}] ${n.category} / ${n.subject}。${n.description}`).join("\n"),
-				),
-			);
-		}
+		const noteLines = noteDigest(project.notes);
+		if (noteLines) parts.push(section("待办", noteLines));
 		return wrap(parts, options?.maxChars);
 	}
 
@@ -674,16 +667,30 @@ export function buildContextDigest(project: Project, options?: { scope?: DigestS
 			),
 		);
 	}
-	const openNotes = project.notes.filter((n) => n.status === "open");
-	if (openNotes.length > 0) {
-		parts.push(
-			section(
-				"待办",
-				openNotes.map((n) => `- [${n.severity}] ${n.category} / ${n.subject}。${n.description}`).join("\n"),
-			),
-		);
-	}
+	const noteLines = noteDigest(project.notes);
+	if (noteLines) parts.push(section("待办", noteLines));
 	return wrap(parts, options?.maxChars);
+}
+
+/**
+ * 待办摘要。
+ *
+ * 全量摊开会让旧账常年占着上下文，而且越写越长；这里只把最要紧的几条说清楚，
+ * 剩下的报个数 —— 模型真需要时还能用 list_notes 翻。
+ */
+const NOTE_INLINE_LIMIT = 8;
+const NOTE_WEIGHT: Record<string, number> = { blocker: 0, warning: 1, info: 2 };
+
+export function noteDigest(notes: Project["notes"]): string {
+	const open = notes
+		.filter((note) => note.status === "open")
+		.sort((a, b) => (NOTE_WEIGHT[a.severity] ?? 3) - (NOTE_WEIGHT[b.severity] ?? 3) || a.createdAt - b.createdAt);
+	if (open.length === 0) return "";
+	const head = open.slice(0, NOTE_INLINE_LIMIT);
+	const rest = open.length - head.length;
+	const lines = head.map((note) => `- [${note.severity}] ${note.category} / ${note.subject}。${note.description}`);
+	if (rest > 0) lines.push(`- 另有 ${rest} 条待办未列出；需要时用 list_notes 查看，能关的关掉。`);
+	return lines.join("\n");
 }
 
 const MAX_DIGEST_CHARS = 24_000;

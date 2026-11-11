@@ -1721,6 +1721,37 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 		}
 	}
 
+	// 待办不是模型的自言自语：作者能自己关掉、也能改严重程度。
+	const noteMatch = pathname.match(/^\/api\/projects\/([\w-]+)\/notes\/([\w-]+)$/);
+	if (noteMatch && (req.method === "PATCH" || req.method === "DELETE")) {
+		const projectId = noteMatch[1]!;
+		if (!store.get(projectId)) return json(sink, 404, { error: "工程不存在" });
+		const noteId = noteMatch[2]!;
+		if (req.method === "DELETE") {
+			const saved = store.mutate(projectId, (draft) => {
+				draft.notes = draft.notes.filter((note) => note.id !== noteId);
+			});
+			await store.flushForProject(projectId);
+			return json(sink, 200, { ok: true, project: saved!, stats: store.stats(saved!) });
+		}
+		const body = await readJsonBody<{ status?: string; severity?: string }>(req);
+		const saved = store.mutate(projectId, (draft) => {
+			const note = draft.notes.find((item) => item.id === noteId);
+			if (!note) return;
+			if (body.status === "open" || body.status === "resolved") note.status = body.status;
+			if (body.severity === "info" || body.severity === "warning" || body.severity === "blocker") {
+				note.severity = body.severity;
+			}
+			note.updatedAt = Date.now();
+		});
+		if (!saved?.notes.some((note) => note.id === noteId)) {
+			return json(sink, 404, { error: "这条待办不在了" });
+		}
+		await store.flushForProject(projectId);
+		const note = saved.notes.find((item) => item.id === noteId)!;
+		return json(sink, 200, { ok: true, note, project: saved, stats: store.stats(saved) });
+	}
+
 	if (pathname === "/api/sessions" && req.method === "POST") {
 		const body = await readJsonBody<{
 			projectId?: string;
