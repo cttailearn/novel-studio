@@ -83,6 +83,7 @@ import {
 import { extractNovelText, extractText, MAX_UPLOAD_BYTES, UnsupportedUploadError, UploadTooLargeError } from "./upload.ts";
 import type { AskChannel } from "./ask.ts";
 import type { RecordFilter, RecordRole } from "./records.ts";
+import { LiveRun, LiveRunRegistry, ProjectLimiter, type RunStatus } from "./live-runs.ts";
 
 /**
  * 一次请求。
@@ -374,7 +375,8 @@ interface WriteRun extends RunAcceptance {
 	/** 没有客户端幂等键的请求也占章锁，但不留下重放入口。 */
 	requestId?: string;
 	recordId: string;
-	events: unknown[];
+	/** 这一轮的事件与订阅都挂在这里；它比连接活得久。 */
+	live?: LiveRun;
 	done: boolean;
 	createdAt: number;
 	completedAt?: number;
@@ -398,6 +400,10 @@ interface WriteRunRegistry {
 interface RouterContext {
 	deps: ApiRouterDeps;
 	runs: WriteRunRegistry;
+	/** 按连接无关的那一批轮次：断线可续、可列、可叫停。 */
+	live: LiveRunRegistry;
+	/** 同一部作品最多同时跑几轮。 */
+	limiter: ProjectLimiter;
 }
 
 function writeRunKey(projectId: string, chapterId: string): string {
@@ -1024,6 +1030,10 @@ async function streamNdjson(
 	/** 这一轮结束后（含中途断线、中止）调用，用来把对话补进记录。 */
 	onFinish?: () => Promise<void>,
 	acceptance?: RunAcceptance,
+	/** 这一轮登在册上的实体。有它就能断线续上、能被叫停、能写 journal。 */
+	liveRun?: LiveRun,
+	/** 排队的作品：同一部书最多并行几轮，超出的先占位再跑。 */
+	queueProjectId?: string,
 ): Promise<void> {
 	sink.writeHead(200, {
 		"content-type": "application/x-ndjson; charset=utf-8",
@@ -1032,49 +1042,87 @@ async function streamNdjson(
 		"x-accel-buffering": "no",
 	});
 
-	const state = { aborted: false };
-	const emit = (event: unknown) => {
-		if (acceptance) {
-			const run = ctx.runs.writeRuns.get(acceptance.runId);
-			if (run && !run.done) run.events.push(event);
-		}
+	const state = { aborted: false, abortReason: "", detached: false };
+	let failure = "";
+	/** 这一轮的事件发到哪里：有 live 就交给它（它负责分发与缓冲），否则直接写给这条连接。 */
+	const live = liveRun ?? (acceptance ? ctx.runs.writeRuns.get(acceptance.runId)?.live : undefined);
+	const writeToSink = (chunk: string) => {
 		// 连接已经没了还往里写，Node 会在响应上抛一个 error 事件。
 		// 那个事件没人接，就会把整个进程带走 —— 作者下一句话直接撞上"连不上服务"。
 		if (sink.ended || sink.destroyed) return;
 		try {
-			sink.write(`${JSON.stringify(event)}\n`);
+			sink.write(chunk);
 		} catch (error) {
 			console.error("[server] 回话通道写失败", error);
 		}
 	};
-	/**
-	 * 客户端断开就停笔。
-	 *
-	 * 早先监听的是 req 的 close，但请求体读尽之后 req 不会再触发 close ——
-	 * 于是关页、断网、按"止笔"之后模型仍在后台继续生成，还会照常覆盖正文。
-	 * 真正代表连接死活的是响应这一侧的 close；正常结束时 ended 已为 true，
-	 * 只有半途关闭才需要中止。
-	 */
-	const abortOnClose = () => {
-		if (sink.ended) return;
-		state.aborted = true;
-		agent.abort();
+	const subscriber = { write: writeToSink, end: () => { if (!sink.ended) sink.end(); } };
+	// 接上（或新建）这一轮：live 会把缓冲补发过来，之后实时推。
+	const closeSub = live ? live.subscribe(subscriber) : null;
+	const emit = (event: unknown) => {
+		if (typeof (event as { type?: unknown }).type === "string" && (event as { type: string }).type === "error") {
+			failure = String((event as { message?: unknown }).message ?? "这一轮失败了");
+		}
+		if (live) {
+			live.publish(event);
+			return;
+		}
+		writeToSink(`${JSON.stringify(event)}\n`);
 	};
-	const offClose = sink.onClose(abortOnClose);
+	if (live) {
+		// 模型名要等解析完才知道，登记到轮次上，journal 才有得写。
+		live.model = modelRef;
+		live.setAbort(() => {
+			state.aborted = true;
+			state.abortReason = "user";
+			agent.abort();
+		});
+	}
+	/**
+	 * 连接断了：只是少一个看客。
+	 *
+	 * 从前这里直接 agent.abort()，于是关页、切换后台、网络一抖，
+	 * 写了半小时的一章就没了，事后连日志都没有。现在这一轮继续跑，
+	 * 章末照常落盘；客户端回来时按 seq 接上。
+	 */
+	const onClose = () => {
+		state.detached = true;
+		closeSub?.();
+	};
+	const offClose = sink.onClose(onClose);
 	// 半路断线的写错误就地咽下：不接这个事件，它就是一个未捕获异常。
 	sink.onError((error) => {
-		state.aborted = true;
-		console.error("[server] 回话通道断了", error);
+		// 写不出去不等于这一轮没价值：继续跑，章末照样落盘。
+		state.detached = true;
+		closeSub?.();
+		console.error("[server] 回话通道断了（这一轮继续跑）", error);
 	});
 
 	// 智能体在这一轮里问出来的问题，走这条流送到作者眼前。
 	ask?.bindEmitter((event) => emit(event));
 
+	// 第一件事就把轮次号报给客户端：断线之后它得凭这个号回来接。
+	if (live) emit({ type: "run", id: live.id, status: live.status });
+
+	// 同一部书里的并发上限：排到了再跑，作者看得见自己在第几位。
+	let releaseSlot: (() => void) | undefined;
 	try {
+		if (queueProjectId) {
+			releaseSlot = await ctx.limiter.acquire(queueProjectId, (position: number) => {
+				emit({ type: "queued", position });
+			});
+		}
 		await runAgentStream(ctx, agent, modelRef, input, emit, state, acceptance);
 	} finally {
+		releaseSlot?.();
 		ask?.bindEmitter(null);
 		offClose();
+		// 收尾按"这一轮怎么结束的"落一个状态：叫停、出错、正常完成。
+		const status: RunStatus = state.aborted ? "aborted" : failure ? "failed" : "done";
+		if (live) {
+			live.finish(status, failure || (status === "aborted" ? "作者叫停" : ""));
+			ctx.live.report(live);
+		}
 		if (!sink.ended) sink.end();
 		if (acceptance) {
 			const run = ctx.runs.writeRuns.get(acceptance.runId);
@@ -1281,7 +1329,10 @@ function replayWriteRun(sink: ApiSink, run: WriteRun): void {
 		"cache-control": "no-store",
 		"x-write-replay": "1",
 	});
-	for (const event of run.events) sink.write(JSON.stringify(event) + "\n");
+	// 事件留在轮次自己的缓冲里，重放时按序号全量补一遍。
+	run.live?.replay(0, (line) => {
+		if (!sink.ended && !sink.destroyed) sink.write(line);
+	});
 	sink.end();
 }
 
@@ -1840,14 +1891,26 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 		// 写作会话的组装上下文会随装料变化，每轮重建让提示词跟上。
 		if (session.role === "writing") await refreshWritingAgent(ctx, session);
 		const recordId = session.recordId;
+		// 会话也有轮次：断线能续、按钮能停、失败能查。
+		const sessionRun = ctx.live.create({
+			id: randomUUID(),
+			kind: "session",
+			sessionId: session.id,
+			role: session.role,
+			projectId: session.projectId,
+			chapterId: session.chapterId,
+			model: session.modelRef,
+		});
 		if (session.role === "writing" && session.projectId && session.chapterId) {
 			sweepWriteRuns(ctx.runs);
 			const runKey = writeRunKey(session.projectId, session.chapterId);
 			if (ctx.runs.activeWriteRuns.has(runKey)) {
+				sessionRun.finish("failed", "这一章正在生成或保存");
+				ctx.live.report(sessionRun);
 				return json(sink, 409, { error: "这一章正在生成或保存，请等这一轮结束再提交。" });
 			}
 			const acceptance: RunAcceptance = {
-				runId: randomUUID(),
+				runId: sessionRun.id,
 				projectId: session.projectId,
 				chapterId: session.chapterId,
 				mode: "patch",
@@ -1858,7 +1921,7 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 				...acceptance,
 				requestId: acceptance.runId,
 				recordId: recordId ?? "",
-				events: [],
+				live: sessionRun,
 				done: false,
 				createdAt: Date.now(),
 			};
@@ -1874,6 +1937,8 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 					session.ask,
 					recordId ? roundRecorder(ctx, session.agent, recordId) : undefined,
 					acceptance,
+					sessionRun,
+					session.projectId,
 				);
 			} finally {
 				ctx.runs.writeRuns.delete(acceptance.runId);
@@ -1888,6 +1953,9 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 			input,
 			session.ask,
 			recordId ? roundRecorder(ctx, session.agent, recordId) : undefined,
+			undefined,
+			sessionRun,
+			session.projectId,
 		);
 	}
 
@@ -1949,6 +2017,14 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 			return json(sink, 409, { error: "这一章正在生成或保存，请等这一轮结束再提交；不要重复点击。" });
 		}
 		const runId = randomUUID();
+		const live = ctx.live.create({
+			id: runId,
+			kind: "write",
+			projectId,
+			chapterId,
+			role: "writing",
+			label: body.mode,
+		});
 		const run: WriteRun = {
 			runId,
 			requestId,
@@ -1957,7 +2033,7 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 			mode: body.mode as ChapterWriteMode,
 			beforeRevision: 0,
 			recordId: "",
-			events: [],
+			live,
 			done: false,
 			createdAt: Date.now(),
 		};
@@ -2049,18 +2125,34 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 				const head = agent.state.messages[0]?.role === "system" ? agent.state.messages.slice(0, 1) : [];
 				agent.state.messages = [...head, ...resumed.messages];
 			}
-			return await streamNdjson(ctx, sink, agent, `${model.provider}/${model.id}`, instruction, undefined, roundRecorder(ctx, agent, record.id), {
-				runId,
+			return await streamNdjson(
+				ctx,
+				sink,
+				agent,
+				`${model.provider}/${model.id}`,
+				instruction,
+				undefined,
+				roundRecorder(ctx, agent, record.id),
+				{
+					runId,
+					projectId,
+					chapterId,
+					mode,
+					beforeRevision: project.drafts[chapterId]?.revision ?? 0,
+				},
+				live,
 				projectId,
-				chapterId,
-				mode,
-				beforeRevision: project.drafts[chapterId]?.revision ?? 0,
-			});
+			);
 		} finally {
 			// 校验失败是普通 return，也走这里；不能只清异常路径，否则章会永久卡在 409。
 			const latest = ctx.runs.writeRuns.get(runId);
 			if (!latest || !latest.done) ctx.runs.writeRuns.delete(runId);
 			if (ctx.runs.activeWriteRuns.get(runKey) === runId) ctx.runs.activeWriteRuns.delete(runKey);
+			// 没走到 streamNdjson 的（参数不对、404、409）也要收尾，否则 /api/runs 里会留一条永远「正在跑」。
+			if (live.status === "running") {
+				live.finish("failed", "这一轮没能开始");
+				ctx.live.report(live);
+			}
 		}
 	}
 
@@ -3039,6 +3131,64 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 		return json(sink, 200, result);
 	}
 
+	// ---------------------------------------------------------------- 在跑的轮次
+	//
+	// 一轮生成是一个实体，不是一条连接：断线能续、能列、能被明确叫停。
+	// 写作与对议共用这一套；会话那几轮只活在这一次进程里，跑完留十分钟。
+
+	if (pathname === "/api/runs" && req.method === "GET") {
+		ctx.live.sweep();
+		const projectId = req.searchParams.get("projectId") ?? undefined;
+		const statusParam = req.searchParams.get("status");
+		const status = statusParam === "running" || statusParam === "done" || statusParam === "aborted" || statusParam === "failed" ? statusParam : undefined;
+		const kindParam = req.searchParams.get("kind");
+		const kind = kindParam === "write" || kindParam === "session" ? kindParam : undefined;
+		const runs = ctx.live.list({ projectId, status, kind }).map((run) => run.snapshot());
+		const projects = projectId ? ctx.limiter.stats(projectId) : undefined;
+		return json(sink, 200, { runs, projects });
+	}
+
+	const runStreamMatch = pathname.match(/^\/api\/runs\/([\w-]+)\/stream$/);
+	if (runStreamMatch && req.method === "GET") {
+		const run = ctx.live.get(runStreamMatch[1]!);
+		if (!run) return json(sink, 404, { error: "这一轮不在了（可能已结束并回收）" });
+		const since = Math.max(0, Math.trunc(Number(req.searchParams.get("since") ?? 0)) || 0);
+		sink.writeHead(200, {
+			"content-type": "application/x-ndjson; charset=utf-8",
+			"cache-control": "no-cache, no-transform",
+			connection: "keep-alive",
+			"x-accel-buffering": "no",
+			"x-run": run.id,
+			"x-run-status": run.status,
+		});
+		const subscriber = {
+			write: (chunk: string) => {
+				if (sink.ended || sink.destroyed) return;
+				try {
+					sink.write(chunk);
+				} catch {
+					// 这条连接又断了；轮次本身不受影响。
+				}
+			},
+			end: () => {
+				if (!sink.ended) sink.end();
+			},
+		};
+		const off = run.subscribe(subscriber, since);
+		// 补发完且这一轮已经结束的，subscribe 已经替我们 end 了。
+		if (run.status !== "running") return;
+		sink.onClose(() => off());
+		return;
+	}
+
+	const runAbortMatch = pathname.match(/^\/api\/runs\/([\w-]+)\/abort$/);
+	if (runAbortMatch && req.method === "POST") {
+		const run = ctx.live.get(runAbortMatch[1]!);
+		if (!run) return json(sink, 404, { error: "这一轮不在了（可能已结束并回收）" });
+		const stopped = run.abort("user");
+		return json(sink, 200, { ok: true, stopped, status: run.status });
+	}
+
 	return json(sink, 404, { error: "未知接口" });
 }
 
@@ -3057,9 +3207,12 @@ export function createApiRouter(deps: ApiRouterDeps): ApiRouter {
 			activeWriteRuns: new Map<string, string>(),
 			completedWriteRequests: new Map<string, string>(),
 		},
+		live: new LiveRunRegistry((run) => logRun(run)),
+		limiter: new ProjectLimiter(runConcurrencyPerProject()),
 	};
 	return async (req: ApiRequest, sink: ApiSink): Promise<void> => {
 		try {
+			ctx.live.sweep();
 			await handleRoutes(ctx, req, sink);
 		} catch (error) {
 			const status = error instanceof HttpError ? error.status : 500;
@@ -3068,4 +3221,42 @@ export function createApiRouter(deps: ApiRouterDeps): ApiRouter {
 			else if (!sink.ended) sink.end();
 		}
 	};
+}
+
+/**
+ * 同一部作品允许几轮并行。
+ *
+ * 默认 2（两章各跑一轮是正常用法），可用环境变量调到 1（串行，最省配额）
+ * 或 3 以上；无论多少，同一章永远只有一轮（章锁在前面拦着）。
+ */
+function runConcurrencyPerProject(): number {
+	const asked = Number(process.env.RUN_CONCURRENCY_PER_PROJECT ?? "");
+	if (!Number.isFinite(asked) || asked < 1) return 2;
+	return Math.min(Math.trunc(asked), 8);
+}
+
+/**
+ * 每一轮收尾写一行 journal。
+ *
+ * 从前生成失败只回给浏览器，服务端一个字都不留 —— 线上出了问题只能猜。
+ * 这一行够把「谁、哪一章、用的哪个模型、跑了多久、怎么结束的」对上。
+ */
+function logRun(run: LiveRun): void {
+	if (typeof process === "undefined" || !process.stdout) return;
+	const line = {
+		run: run.id,
+		kind: run.kind,
+		status: run.status,
+		ms: (run.endedAt || Date.now()) - run.startedAt,
+		project: run.projectId,
+		chapter: run.chapterId,
+		session: run.sessionId,
+		role: run.role,
+		model: run.model,
+		abort: run.abortReason || undefined,
+		error: run.error || undefined,
+	};
+	const text = "[run] " + JSON.stringify(line);
+	if (run.status === "done") console.log(text);
+	else console.error(text);
 }

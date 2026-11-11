@@ -1,4 +1,4 @@
-﻿// 墨耕 · 前端。不使用框架，直接消费后端 NDJSON 事件流。
+// 墨耕 · 前端。不使用框架，直接消费后端 NDJSON 事件流。
 //
 // 界面按「写小说」而非「聊天」来组织：
 //   左卷  选卷与章目
@@ -5218,6 +5218,7 @@ async function runWrite(mode, note, chapterOverride, options = {}) {
 	} finally {
 		dismissWaiting("writing", waiting);
 		state.writeAbort = null;
+		runHandles.delete("writing");
 		if (!streamStale("writing", epoch)) {
 			endStream("writing");
 			setStreaming("writing", false);
@@ -6823,8 +6824,36 @@ async function reloadLibrarySafely(pane, note, options = {}) {
  * epoch 是发起这一轮时的流代次：中途换了卷，这一轮就作废了，
  * 剩下的 token 不许再往界面上写 —— 那是另一部作品的面板了。
  */
+/**
+ * 正在跑的轮次号，按面板分格。
+ *
+ * 从前一轮生成和那条 HTTP 长连接生死与共：关页、切后台、网线一抖，
+ * 服务端就跟着把模型掐了，写了半小时的一章连个残稿都不剩。
+ * 现在那一轮在服务端自己跑，这里只记它的号 —— 断线之后凭号回来接着看。
+ */
+const runHandles = new Map();
+
+/** 回去接上这一轮：补发 since 之后的事件。 */
+async function reattachRun(pane, since, attempt) {
+	const runId = runHandles.get(pane);
+	if (!runId) return null;
+	if (attempt >= 4) return null;
+	const wait = [600, 1500, 3000, 6000][Math.min(attempt, 3)];
+	await new Promise((resolve) => setTimeout(resolve, wait));
+	try {
+		const res = await fetch("/api/runs/" + encodeURIComponent(runId) + "/stream?since=" + encodeURIComponent(String(since)), {
+			method: "GET",
+			headers: { accept: "application/x-ndjson" },
+			cache: "no-store",
+		});
+		return res.ok && res.body ? res : null;
+	} catch {
+		return null;
+	}
+}
+
 async function pumpStream(res, pane, epoch = streamSlot(pane).epoch, waiting = null, context = {}) {
-	const reader = res.body.getReader();
+	let reader = res.body.getReader();
 	const decoder = new TextDecoder();
 	let buffer = "";
 	let message = null;
@@ -6832,6 +6861,10 @@ async function pumpStream(res, pane, epoch = streamSlot(pane).epoch, waiting = n
 	let thinkingText = null;
 	let usage = null;
 	let cursor = null;
+	// 服务端每条流第一件事就报轮次号；断网之后凭它和已收到的 seq 回去接。
+	let lastSeq = 0;
+	let ended = false;
+	let attempt = 0;
 
 	/**
 	 * 占位让位。
@@ -6864,8 +6897,29 @@ async function pumpStream(res, pane, epoch = streamSlot(pane).epoch, waiting = n
 	};
 
 	while (true) {
-		const chunk = await reader.read();
-		if (chunk.done) break;
+		let chunk;
+		try {
+			chunk = await reader.read();
+		} catch (error) {
+			// 断在半路：这一轮在服务端还活着，接着读它，别把半小时的稿子丢在网线里。
+			if (error?.name === "AbortError" || streamStale(pane, epoch)) throw error;
+			const next = await reattachRun(pane, lastSeq, attempt);
+			attempt += 1;
+			if (!next) throw error;
+			reader = next.body.getReader();
+			continue;
+		}
+		if (chunk.done) {
+			if (!ended && !streamStale(pane, epoch)) {
+				const next = await reattachRun(pane, lastSeq, attempt);
+				attempt += 1;
+				if (next) {
+					reader = next.body.getReader();
+					continue;
+				}
+			}
+			break;
+		}
 		if (streamStale(pane, epoch)) {
 			await reader.cancel().catch(() => {});
 			dismissWaiting(pane, waiting);
@@ -6883,7 +6937,18 @@ async function pumpStream(res, pane, epoch = streamSlot(pane).epoch, waiting = n
 			} catch {
 				continue;
 			}
+			if (typeof event.seq === "number") lastSeq = Math.max(lastSeq, event.seq);
 			switch (event.type) {
+				case "run": {
+					// 记下这一轮的号：断线重连、明确止笔都要用它。
+					if (typeof event.id === "string") runHandles.set(pane, event.id);
+					break;
+				}
+				case "queued": {
+					// 同一部书里排着队：告诉作者前面还有几轮，别以为卡住了。
+					if (waiting) setWaitingPhase(waiting, "前面还有 " + Math.max(0, Number(event.position) || 0) + " 轮，排在后面…");
+					break;
+				}
 				case "text": {
 					ensureMessage();
 					// 第一个字到了：墨点收工，往后由光标表示"正在写"。
@@ -6954,6 +7019,7 @@ async function pumpStream(res, pane, epoch = streamSlot(pane).epoch, waiting = n
 					break;
 				}
 				case "run_end":
+					ended = true;
 					usage = event.usage;
 					if (message) {
 						message.body.classList.remove("cursor");
@@ -6982,6 +7048,7 @@ async function pumpStream(res, pane, epoch = streamSlot(pane).epoch, waiting = n
 		}
 	}
 	if (waiting) dismissWaiting(pane, waiting);
+	runHandles.delete(pane);
 	if (usage) {
 		streamNode(pane, epoch).append(
 			el("div", "msg-foot", "入 " + usage.input + " · 出 " + usage.output + " · " + usage.turns + " 轮"),
@@ -7368,6 +7435,10 @@ for (const [pane, ids] of Object.entries(PANES)) {
 		}
 	});
 	form.querySelector("[data-abort]").addEventListener("click", () => {
+		// 先明确告诉服务端「这一轮不要了」：从前只断本地连接，
+		// 服务端要么跟着掐（丢稿）、要么继续空转。现在由轮次自己受理。
+		const runId = runHandles.get(pane);
+		if (runId) fetch("/api/runs/" + encodeURIComponent(runId) + "/abort", { method: "POST" }).catch(() => {});
 		// 一次性成文（执笔者那支）没有会话，直接掐断 fetch。
 		// 判 pane 是必须的：这块是执笔者的一次性成文，别处的「止笔」不许把它掐掉。
 		if (pane === "writing" && state.writeAbort) {
