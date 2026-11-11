@@ -45,18 +45,20 @@
 	--song:   var(--serif);   /* 正文用的宋体；此前引用了未定义的 --song，会落回无衬线 */
 
 	/*
-	 * 全站只用宋体。
+	 * 两套字，各管一段。
 	 *
-	 * 三端共用一个字体栈：Mac 落 Songti SC，Windows 落 SimSun，Android/Linux
-	 * 落 Noto Serif CJK。楷体在安卓上根本不存在，标题曾因此退化成黑体，
-	 * 与桌面对不上 —— 干脆把标题、界面、正文收进同一个衬线栈，
-	 * 靠字号、字距、字重拉层级，不靠换字体。
+	 * 界面（按钮、菜单、标签、表单、设置、账户）走系统无衬线：11–13px 的中文
+	 * 在宋体里笔画太细，Windows 上落 SimSun 时小字会发虚。无衬线在 Windows 落
+	 * Segoe UI + 微软雅黑，Mac 落 SF + 苹方，安卓落 Roboto + Noto Sans SC。
 	 *
-	 * 等宽只在代码与键位这类必须对齐的地方保留（--mono）。
+	 * 内容（稿纸正文、对话正文、篇名、品牌、空态引语、改写比对）留宋体：
+	 * 16px 以上才是宋体的舒适区，也是这套「宣纸 + 墨」的底子。
+	 *
+	 * 等宽只在代码、键位与要对齐的数字上保留（--mono）。
 	 */
 	--serif: "Songti SC", "STSong", "Songti TC", "Source Han Serif SC", "Noto Serif CJK SC", "Noto Serif SC", "SimSun", serif;
 	--kai:   var(--serif);
-	--sans:  var(--serif);
+	--sans:  system-ui, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", "Source Han Sans SC", "Helvetica Neue", Arial, sans-serif;
 	--mono:  "Cascadia Code", "SF Mono", Consolas, monospace;
 	/* 稿台排版偏好。JS 会按「排版」里的选择改写这三个变量。 */
 	--ms-font-size: 17px;
@@ -143,24 +145,25 @@
 	--fs-xs: 12px;
 	--fs-sm: 13px;
 	--fs-md: 14px;
-	--fs-lg: 15.5px;
-	--fs-xl: 19px;
+	--fs-lg: 16px;
+	--fs-xl: 20px;
 
 	/* ── 排版阶梯 ────────────────────────────────────────────
-	   标题 30 / 栏目 22 / 条目 17 / 正文 16·1.9 / 标签 11。
-	   旧的四档（12/13/14.5/16.5）彼此只差 1–2px，主次看不出来；
-	   这次把跨度拉开，并且让「能读的句子」一律走宋体。 */
-	--fs-3xl: 28px;
-	--fs-2xl: 22px;
-	--fs-title: 19px;
-	--fs-item: 16.5px;
-	--fs-body: 15.5px;
-	--lh-body: 1.9;
+	   标签 12 / 正文 14 / 输入 16 / 条目 17 / 栏目 20 / 标题 24 / 品牌 30。
+	   界面小字（12–14）交给无衬线：宋体在 11–13px 上笔画太细，屏幕上看不清。
+	   稿纸、对话正文、篇名、品牌仍旧是宋体 —— 16px 以上才是它的舒适区。
+	   行高：界面 1.55，说明 1.65，正文 1.85，稿纸 2.05（另有 --ms-line-height）。 */
+	--fs-3xl: 30px;
+	--fs-2xl: 24px;
+	--fs-title: 20px;
+	--fs-item: 17px;
+	--fs-body: 16px;
+	--lh-body: 1.85;
 	/* 界面文字的行高。稿台正文另有 --ms-line-height，不受这一条管。 */
 	--lh-ui: 1.55;
 	--lh-read: 1.95;
-	--fs-label: 11px;
-	--track-label: 0.08em;
+	--fs-label: 12px;
+	--track-label: 0.06em;
 	/* 下拉箭头的颜色只能烧进 data-uri，所以昼夜各一支 */
 	--chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%23635b4f' stroke-width='1.4' stroke-linecap='round'%3E%3Cpath d='M1.5 2.2 6 6.6l4.5-4.4'/%3E%3C/svg%3E");
 
@@ -521,7 +524,7 @@ body::before {
 	align-items: center;
 	gap: 8px;
 	margin: 0 0 10px 4px;
-	font-family: var(--kai);
+	font-family: var(--sans);
 	font-size: var(--fs-sm);
 	font-weight: 600;
 	letter-spacing: 0.14em;
@@ -541,7 +544,7 @@ body::before {
 	font-size: var(--fs-sm);
 	line-height: 1.9;
 	color: var(--ink-3);
-	font-family: var(--serif);
+	font-family: var(--sans);
 	/* 空卷底下一痕远山：写不写得出字还不知道，先给个开门见山 */
 	background-image: var(--mountains);
 	background-repeat: no-repeat;
@@ -632,7 +635,7 @@ body::before {
 	flex: none;
 	width: 1.7em;
 	/* 楷体的「一二三」才有书口题号的味道，宋体的数字偏印刷体 */
-	font-family: var(--kai);
+	font-family: var(--sans);
 	font-size: var(--fs-sm);
 	color: var(--ink-3);
 	font-variant-numeric: tabular-nums;
@@ -942,7 +945,7 @@ body::before {
 	display: block;
 	cursor: pointer;
 	list-style: none;
-	font-family: var(--kai);
+	font-family: var(--sans);
 	font-size: var(--fs-xs);
 	color: var(--ink-3);
 	letter-spacing: 0.06em;
@@ -954,7 +957,7 @@ body::before {
 .thinking-body {
 	margin-top: 4px;
 	color: var(--ink-3);
-	font-family: var(--serif);
+	font-family: var(--sans);
 	font-size: var(--fs-md);
 	line-height: 1.85;
 	white-space: pre-wrap;
@@ -990,14 +993,14 @@ body::before {
 	box-shadow: inset 0 1px 0 var(--panel-hi);
 }
 .ask-head {
-	font-family: var(--kai);
+	font-family: var(--sans);
 	font-size: var(--fs-xs);
 	letter-spacing: 0.16em;
 	color: var(--ink-3);
 	margin-bottom: var(--sp-1);
 }
 .ask-text {
-	font-family: var(--serif);
+	font-family: var(--sans);
 	font-size: var(--fs-md);
 	line-height: 1.9;
 	color: var(--ink);
@@ -1016,7 +1019,7 @@ body::before {
 	background: transparent;
 	color: var(--ink-2);
 	padding: 4px 10px;
-	font-family: var(--kai);
+	font-family: var(--sans);
 	font-size: var(--fs-xs);
 	letter-spacing: 0.05em;
 	cursor: pointer;
@@ -1037,7 +1040,7 @@ body::before {
 	border: 1px solid var(--rule);
 	border-radius: var(--r-1);
 	padding: 6px 10px;
-	font-family: var(--serif);
+	font-family: var(--sans);
 	font-size: var(--fs-md);
 	outline: none;
 	transition: border-color var(--wash), background var(--wash);
@@ -1097,7 +1100,7 @@ body::before {
 	border-bottom: 2px solid transparent;
 	background: transparent;
 	color: var(--ink-3);
-	font-family: var(--kai);
+	font-family: var(--sans);
 	font-size: var(--fs-md);
 	letter-spacing: 0.1em;
 	cursor: pointer;
@@ -1112,7 +1115,7 @@ body::before {
 .card:last-child { border-bottom: 0; }
 .card h4 {
 	margin: 0 0 7px;
-	font-family: var(--kai);
+	font-family: var(--sans);
 	font-size: var(--fs-body);
 	font-weight: 600;
 	letter-spacing: 0.05em;
@@ -1162,7 +1165,7 @@ body::before {
 	border: 1px solid var(--rule-soft);
 	border-radius: 999px;
 	background: transparent;
-	font-family: var(--kai);
+	font-family: var(--sans);
 	font-size: var(--fs-sm);
 	color: var(--ink-2);
 	cursor: pointer;
@@ -1240,7 +1243,7 @@ body::before {
 	border-radius: 4px;
 	background: var(--paper-hi);
 	color: var(--ink);
-	font-family: var(--serif);
+	font-family: var(--sans);
 	font-size: var(--fs-body);
 	line-height: 1.9;
 	transition: border-color var(--wash), background var(--wash);
@@ -1312,7 +1315,7 @@ body::before {
 	border-radius: 4px;
 	background: transparent;
 	color: var(--ink-3);
-	font-family: var(--kai);
+	font-family: var(--sans);
 	font-size: var(--fs-sm);
 	letter-spacing: 0.08em;
 	cursor: pointer;
@@ -1545,7 +1548,7 @@ select { max-width: 230px; cursor: pointer; }
 .pane-head::before { display: none; }
 .pane-head h3 {
 	padding-left: 0;
-	font-family: var(--serif);
+	font-family: var(--sans);
 	font-size: var(--fs-title);
 	font-weight: 600;
 	letter-spacing: 0.02em;
@@ -1575,7 +1578,7 @@ select { max-width: 230px; cursor: pointer; }
 .card.mat + .card.mat { margin-top: 12px; }
 .mat-grid > .card.mat + .card.mat { margin-top: 0; }
 .card.mat h4 {
-	font-family: var(--serif);
+	font-family: var(--sans);
 	font-size: var(--fs-body);
 	font-weight: 600;
 	line-height: 1.5;
@@ -1678,7 +1681,7 @@ select { max-width: 230px; cursor: pointer; }
 	border: 1px solid var(--sheet-edge);
 	border-radius: var(--r-3);
 	box-shadow: var(--elev-1);
-	font-family: var(--serif);
+	font-family: var(--sans);
 	font-size: var(--fs-body);
 	line-height: 1.85;
 }
@@ -2049,7 +2052,7 @@ body.is-splitting * {
 	margin: 0;
 	padding-left: 11px;
 	position: relative;
-	font-family: var(--kai);
+	font-family: var(--sans);
 	font-size: var(--fs-md);
 	font-weight: 600;
 	letter-spacing: 0.1em;
@@ -2079,7 +2082,7 @@ body.is-splitting * {
 /* 数量徽标当小方印：朱砂描边 + 楷体数字，空的时候整枚不出现 */
 .pane-count {
 	flex: none;
-	font-family: var(--kai);
+	font-family: var(--sans);
 	font-size: var(--fs-xs);
 	color: var(--cinnabar-ink);
 	padding: 1px 5px;
@@ -2149,7 +2152,7 @@ body.is-splitting * {
 	color: var(--ink-2);
 }
 .snap-why {
-	font-family: var(--kai);
+	font-family: var(--sans);
 	font-size: var(--fs-xs);
 	color: var(--ink-3);
 	margin-top: 1px;
@@ -2195,7 +2198,7 @@ body.is-splitting * {
 .upload-name {
 	flex: 1;
 	min-width: 0;
-	font-family: var(--serif);
+	font-family: var(--sans);
 	font-size: var(--fs-sm);
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -2282,7 +2285,7 @@ body.is-splitting * {
 .novel-source-title {
 	flex: 1;
 	min-width: 0;
-	font-family: var(--serif);
+	font-family: var(--sans);
 	font-size: var(--fs-md);
 	font-weight: 600;
 	overflow: hidden;
@@ -2600,7 +2603,7 @@ body.is-splitting * {
 
 .pane-lead {
 	margin: 0 0 2px;
-	font-family: var(--serif);
+	font-family: var(--sans);
 	font-size: var(--fs-xs);
 	line-height: 1.85;
 	color: var(--ink-3);
@@ -2778,7 +2781,7 @@ body.is-splitting * {
 }
 .picked-label { font-family: var(--kai); font-size: var(--fs-sm); color: var(--ink-2); letter-spacing: 0.04em; }
 .picked-chip {
-	font-family: var(--serif);
+	font-family: var(--sans);
 	font-size: var(--fs-xs);
 	color: var(--ink-2);
 	background: var(--focus-paper);
@@ -2799,7 +2802,7 @@ body.is-splitting * {
 	border-radius: 3px;
 	background: none;
 	color: var(--ink-3);
-	font-family: var(--kai);
+	font-family: var(--sans);
 	font-size: var(--fs-sm);
 	letter-spacing: 0.04em;
 	cursor: pointer;
@@ -2809,7 +2812,7 @@ body.is-splitting * {
 .bench-empty + .btn { display: table; margin: 14px auto 0; }
 .bench-hint {
 	margin: 0 0 10px;
-	font-family: var(--kai);
+	font-family: var(--sans);
 	font-size: var(--fs-sm);
 	color: var(--ink-3);
 	letter-spacing: 0.04em;
@@ -2927,7 +2930,7 @@ body.is-splitting * {
 	right: 0;
 	margin: 0;
 	text-align: center;
-	font-family: var(--kai);
+	font-family: var(--sans);
 	font-size: var(--fs-sm);
 	letter-spacing: 0.12em;
 	color: var(--cinnabar-ink);
@@ -3000,7 +3003,7 @@ body.is-splitting * {
 .beam-search:hover { color: var(--ink); }
 .beam-search-glyph {
 	display: none;
-	font-family: var(--kai);
+	font-family: var(--sans);
 	font-size: var(--fs-sm);
 	letter-spacing: 0.04em;
 }
@@ -3043,7 +3046,7 @@ kbd {
 	padding: 14px 4px;
 	font-size: var(--fs-xs);
 	color: var(--ink-3);
-	font-family: var(--kai);
+	font-family: var(--sans);
 }
 .bible-head {
 	display: flex;
@@ -3103,7 +3106,7 @@ kbd {
 	padding: 0 1px;
 	border: 1px solid currentColor;
 	border-radius: 2px;
-	font-family: var(--kai);
+	font-family: var(--sans);
 	font-size: var(--fs-label);
 	line-height: 1;
 	color: var(--ink-3);
@@ -3155,7 +3158,7 @@ kbd {
 	border: 0;
 	background: transparent;
 	color: var(--ink-3);
-	font-family: var(--kai);
+	font-family: var(--sans);
 	font-size: var(--fs-sm);
 	letter-spacing: 0.1em;
 }
@@ -3364,7 +3367,7 @@ kbd {
 	border: 0;
 	background: transparent;
 	color: var(--ink);
-	font-family: var(--serif);
+	font-family: var(--sans);
 	font-size: var(--fs-body);
 	padding: 4px 2px;
 	outline: none;
@@ -3981,7 +3984,7 @@ body.focus-mode { background: var(--paper); }
 /* 顶栏「笔墨」浮层的头：手机上它自己带一个可见的收起口。
    桌面端这块由结构侧的 display:none 收着（浮层是横向展开的，不需要头）。 */
 .beam-tools-title {
-	font-family: var(--kai);
+	font-family: var(--sans);
 	font-size: var(--fs-md);
 	letter-spacing: 0.18em;
 	color: var(--ink-2);
@@ -4004,7 +4007,7 @@ body.focus-mode { background: var(--paper); }
 	.beam-search-glyph, .beam-kbd { display: none; }
 	.beam-search-label { display: inline; }
 	.beam-controls .btn[data-cap] {
-		font-family: var(--kai);
+		font-family: var(--sans);
 		font-size: var(--fs-sm);
 		letter-spacing: 0.04em;
 		padding: 0 10px;
@@ -4333,7 +4336,7 @@ body.focus-mode { background: var(--paper); }
 .kind-row .kind-name {
 	flex: 1;
 	min-width: 0;
-	font-family: var(--kai);
+	font-family: var(--sans);
 	font-size: var(--fs-md);
 	color: var(--ink);
 	overflow-wrap: anywhere;
@@ -4423,7 +4426,7 @@ body.focus-mode { background: var(--paper); }
 	margin: 10px 0 2px;
 	padding: 8px 8px 5px;
 	border-top: 1px dashed var(--rule);
-	font-family: var(--kai);
+	font-family: var(--sans);
 	font-size: var(--fs-sm);
 	letter-spacing: 0.04em;
 	color: var(--ink-2);
@@ -4546,7 +4549,7 @@ body.focus-mode { background: var(--paper); }
 .records-titles { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .records-title {
 	margin: 0;
-	font-family: var(--kai);
+	font-family: var(--sans);
 	font-size: var(--fs-lg);
 	font-weight: 600;
 	letter-spacing: 0.04em;
@@ -4582,7 +4585,7 @@ body.focus-mode { background: var(--paper); }
 	flex: 1;
 	min-width: 0;
 	margin: 0;
-	font-family: var(--kai);
+	font-family: var(--sans);
 	font-size: var(--fs-md);
 	font-weight: 600;
 	line-height: 1.5;
@@ -4840,7 +4843,7 @@ input[type="search"]:focus {
 
 /* ── 设置弹层：标题走宋体，页签走朱砂下划线 ─────────────── */
 .settings-dialog .settings-head h3 {
-	font-family: var(--serif);
+	font-family: var(--sans);
 	font-size: var(--fs-2xl);
 	font-weight: 600;
 	letter-spacing: 0.03em;
@@ -4850,7 +4853,7 @@ input[type="search"]:focus {
 	color: var(--ink-3);
 }
 .settings-dialog .settings-nav .settings-tab {
-	font-family: var(--serif);
+	font-family: var(--sans);
 	font-size: var(--fs-md);
 	letter-spacing: 0.04em;
 }
@@ -4860,17 +4863,17 @@ input[type="search"]:focus {
 	box-shadow: inset 0 -2px 0 var(--cinnabar);
 }
 .settings-dialog .defaults-caption span {
-	font-family: var(--serif);
+	font-family: var(--sans);
 	font-size: var(--fs-body);
 	font-weight: 600;
 }
 .settings-dialog .settings-detail h4 {
-	font-family: var(--serif);
+	font-family: var(--sans);
 	font-size: var(--fs-item);
 	font-weight: 600;
 }
 .settings-dialog .providers-rail-title {
-	font-family: var(--serif);
+	font-family: var(--sans);
 	font-size: var(--fs-body);
 	font-weight: 600;
 	letter-spacing: 0.04em;
@@ -5013,7 +5016,7 @@ input[type="search"]:focus {
 .bible-search:focus { background: var(--paper-hi); border-color: var(--cinnabar); }
 .bible-tabs { gap: 18px; padding: 0 14px; }
 .bible-tab {
-	font-family: var(--serif);
+	font-family: var(--sans);
 	font-size: var(--fs-md);
 	letter-spacing: 0.06em;
 	color: var(--ink-3);
@@ -5185,7 +5188,7 @@ input[type="search"]:focus {
 	background: var(--cinnabar);
 	border-color: var(--cinnabar);
 	color: var(--on-cinnabar);
-	font-family: var(--serif);
+	font-family: var(--sans);
 	letter-spacing: 0.12em;
 }
 .composer-side .btn-ink:hover { background: var(--cinnabar-lt); border-color: var(--cinnabar-lt); }
@@ -5515,7 +5518,7 @@ input[type="search"]:focus {
 /* ── 章目序号改阿拉伯数字：楷体的「一」在 13px 上像一根破折号 ── */
 .chapter-item .ord {
 	width: 2em;
-	font-family: var(--serif);
+	font-family: var(--sans);
 	font-size: var(--fs-xs);
 	letter-spacing: 0.04em;
 	color: var(--ink-4);
@@ -5745,7 +5748,7 @@ input[type="search"]:focus {
 	box-shadow: var(--elev-2);
 }
 .sheet h3 {
-	font-family: var(--serif);
+	font-family: var(--sans);
 	font-size: var(--fs-2xl);
 	font-weight: 600;
 	letter-spacing: 0.1em;
@@ -5836,7 +5839,7 @@ input[type="search"]:focus {
 	border: 1px solid var(--rule);
 	border-radius: 8px;
 	padding: 9px 12px;
-	font-family: var(--serif);
+	font-family: var(--sans);
 	font-size: var(--fs-md);
 	line-height: 1.6;
 }
@@ -5867,7 +5870,7 @@ input[type="search"]:focus {
 }
 .bible .card h4 {
 	margin: 0 0 6px;
-	font-family: var(--serif);
+	font-family: var(--sans);
 	font-size: var(--fs-body);
 	font-weight: 600;
 	line-height: 1.5;
@@ -5896,7 +5899,7 @@ input[type="search"]:focus {
 .bible .bible-empty {
 	padding: 48px 0;
 	text-align: center;
-	font-family: var(--serif);
+	font-family: var(--sans);
 	font-size: var(--fs-sm);
 	color: var(--ink-4);
 }
@@ -6435,7 +6438,7 @@ textarea::placeholder { color: var(--ink-hold); opacity: 1; }
 .pane-head h3 {
 	margin: 0;
 	padding: 0;
-	font-family: var(--serif);
+	font-family: var(--sans);
 	font-size: var(--fs-lg);
 	font-weight: 600;
 	letter-spacing: 0.06em;
@@ -6503,7 +6506,7 @@ textarea::placeholder { color: var(--ink-hold); opacity: 1; }
 .card.record h4,
 .card.mat h4 {
 	margin: 0;
-	font-family: var(--serif);
+	font-family: var(--sans);
 	font-size: var(--fs-item);
 	font-weight: 600;
 	line-height: 1.45;
@@ -6688,7 +6691,7 @@ textarea::placeholder { color: var(--ink-hold); opacity: 1; }
 .empty-hint {
 	border: 0;
 	background-image: none;
-	font-family: var(--kai);
+	font-family: var(--sans);
 	line-height: 1.95;
 	color: var(--ink-3);
 }
@@ -6773,7 +6776,7 @@ textarea::placeholder { color: var(--ink-hold); opacity: 1; }
 	border-radius: var(--r-4);
 	background: var(--paper-hi);
 	box-shadow: var(--elev-1);
-	font-family: var(--serif);
+	font-family: var(--sans);
 	font-size: var(--fs-body);
 	line-height: 1.8;
 	/* 输入条自己会长高，右下角不需要一个拖拽手柄 ——
@@ -6826,7 +6829,7 @@ textarea::placeholder { color: var(--ink-hold); opacity: 1; }
 .bible-tab {
 	padding: 10px 0;
 	border-bottom: 2px solid transparent;
-	font-family: var(--serif);
+	font-family: var(--sans);
 	font-size: var(--fs-sm);
 	letter-spacing: 0.08em;
 }
@@ -6873,6 +6876,11 @@ textarea::placeholder { color: var(--ink-hold); opacity: 1; }
 	justify-content: center;
 	padding: 0 0 10vh;
 	text-align: center;
+	/* 这是写在纸上的话，不是界面提示：跟稿纸同一套字。 */
+	font-family: var(--serif);
+	font-size: var(--fs-md);
+	line-height: var(--lh-body);
+	color: var(--ink-2);
 }
 
 /* ── 12. 弹层：圆角与影再收一档 ────────────────────────────── */
@@ -7710,7 +7718,7 @@ textarea::placeholder { color: var(--ink-hold); opacity: 1; }
 	background-color: color-mix(in srgb, var(--mat-tint) 12%, var(--paper-hi));
 }
 .pick-title .pick-name {
-	font-family: var(--serif);
+	font-family: var(--sans);
 	font-size: var(--fs-md);
 	color: var(--ink);
 	min-width: 0;
@@ -7947,7 +7955,10 @@ textarea::placeholder { color: var(--ink-hold); opacity: 1; }
 .ms-selectbar:hover { background: var(--ink-2); }
 .ms-selectbar:focus-visible { outline: 2px solid var(--cinnabar); outline-offset: 2px; }
 
-.polish-sheet { width: min(780px, 94vw); max-height: 88dvh; display: flex; flex-direction: column; }
+/* 只在打开时排成纵向弹性：<dialog> 关闭时靠 UA 的 display:none 收着，
+   这里若无条件写 display:flex，会把「没打开」的弹层也留在页面上。 */
+.polish-sheet { width: min(780px, 94vw); max-height: 88dvh; }
+.polish-sheet[open] { display: flex; flex-direction: column; }
 .polish-sheet .form-head,
 .polish-sheet .form-foot { flex: 0 0 auto; }
 .polish-sheet .form-body { flex: 1 1 auto; min-height: 0; max-height: none; overflow-y: auto; }
@@ -8038,3 +8049,35 @@ textarea::placeholder { color: var(--ink-hold); opacity: 1; }
 :root[data-theme="dark"] .ms-selectbar { background: #e3d8c3; color: #17150f; }
 :root[data-theme="dark"] .ms-selectbar:hover { background: #f0e7d6; }
 :root[data-theme="dark"] .polish-col { background: #241f1a; border-color: rgba(236, 229, 212, .16); }
+
+/* ══ 字体分工 v1 ─────────────────────────────────────────────
+   界面走无衬线、内容留宋体，两套字体各自只在自己的舒适区里干活。
+   这一节只做三件事：手机输入不触发 iOS 缩放、数字对齐、无衬线标题的字距回调。 */
+
+/* 手机上的输入控件一律 16px：低于 16px 时 iOS Safari 会在聚焦瞬间放大整页。 */
+@media (max-width: 640px) {
+	input:not([type="checkbox"]):not([type="radio"]),
+	textarea,
+	select {
+		font-size: var(--fs-lg);
+	}
+}
+
+/* 数字要能对齐：计数、章号、字数、断言里的数值都走等宽数字。 */
+.pane-count,
+.chapter-item .ord,
+.chapter-item .cw,
+.beam-stats,
+.mat-group-head .count,
+.note-scope-count,
+.record-stats,
+.pool-count {
+	font-variant-numeric: tabular-nums;
+}
+
+/* 无衬线标题不需要宋体那么大的字距；栏头、页签、卡片标题各收一档。 */
+.pane-head h3 { letter-spacing: 0.02em; }
+.bible-tab { letter-spacing: 0.02em; }
+.card h4, .card.record h4, .card.mat h4, .bible .card h4 { letter-spacing: 0.01em; }
+.stage-bar .tab span { letter-spacing: 0.04em; }
+.settings-dialog .settings-head h3 { letter-spacing: 0.02em; }
