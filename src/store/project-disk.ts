@@ -663,11 +663,22 @@ export class ProjectStore implements ProjectStorePort {
 				return;
 			}
 			const trash = path.join(this.dir, TRASH_DIR, id);
-			if (await stat(trash).then(() => true, () => false)) {
+			// 只看回收站里有没有真正的工程文件：上一次删除半途失败会留下一个空目录，
+			// 那不该挡住作者再点一次删除。
+			const trashedFile = path.join(trash, "project.json");
+			if (await stat(trashedFile).then(() => true, () => false)) {
 				throw new Error("回收站中已存在工程 " + id + "，未执行删除");
 			}
 			await mkdir(trash, { recursive: true });
-			await rename(path.join(this.dir, id + ".json"), path.join(trash, "project.json"));
+			// 主文件可能已经不在磁盘上：进程里还留着这份工程（例如上一次删除把文件移走了、
+			// 内存没清干净，或部署重启时文件没来得及落盘）。这种情况下把它当成「删除失败」
+			// 会让案头上留一张永远删不掉的卡 —— 反过来把内存里这份写进回收站就好。
+			const mainFile = path.join(this.dir, id + ".json");
+			if (await stat(mainFile).then(() => true, () => false)) {
+				await rename(mainFile, path.join(trash, "project.json"));
+			} else {
+				await writeFile(path.join(trash, "project.json"), JSON.stringify(project, null, "\t"), "utf8");
+			}
 			const drafts = path.join(this.dir, DRAFTS_DIR, id);
 			const snapshots = path.join(this.dir, SNAPSHOTS_DIR, id);
 			if (await stat(drafts).then(() => true, () => false)) {
