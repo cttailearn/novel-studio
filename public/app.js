@@ -461,7 +461,11 @@ async function api(path, options = {}) {
 		throw failure;
 	}
 	const data = await res.json().catch(() => ({}));
-	if (!res.ok) throw new Error(data.error || "请求失败 (" + res.status + ")");
+	if (!res.ok) {
+		const failure = new Error(data.error || "请求失败 (" + res.status + ")");
+		failure.status = res.status;
+		throw failure;
+	}
 	return data;
 }
 
@@ -2313,7 +2317,34 @@ async function deleteProject(project) {
 	try {
 		await api("/api/projects/" + project.id, { method: "DELETE" });
 	} catch (error) {
-		toast("删除失败：" + error.message, "error");
+		// 案头那张卡可能是旧的：作品在别处删掉了，这一页还留着。
+		// 先把名单拉新的，确认它真的不在了就从案头移走，而不是报一句看不懂的「工程不存在」。
+		await reloadProjects().catch(() => {});
+		const stillThere = state.projects.some((entry) => entry.id === project.id);
+		if (!stillThere) {
+			if (state.projectId === project.id) {
+				invalidateAllStreams();
+				clearEditorState();
+				state.editing = false;
+				state.projectId = null;
+				state.project = null;
+				state.stats = null;
+				state.chapterId = null;
+				clearWriteRecord({ rerender: false });
+				resetProjectSessions();
+				state.uploads = [];
+				$(PANES.material.stream).replaceChildren();
+				$(PANES.writing.stream).replaceChildren();
+				localStorage.removeItem("novel-studio/project");
+			}
+			state.mode = "home";
+			writeStored(MODE_KEY, "home");
+			applyMode();
+			renderView();
+			toast("这部作品已经不在了，已从案头移走。", "ok", 2200);
+			return;
+		}
+		toast("删除失败：" + (error.message || String(error)), "error");
 		return;
 	}
 	await reloadProjects();
@@ -3144,6 +3175,22 @@ function wirePolish() {
 	dialog.addEventListener("close", () => {
 		stopPolishRun();
 	});
+	// 回到这一页时顺手对一下名单：别的窗口删掉的作品，不该还挂在案头。
+	const refreshHomeIfStale = async () => {
+		if (state.mode !== "home" || state.view !== "home" || document.visibilityState === "hidden") return;
+		const before = state.projects.map((project) => project.id).join(",");
+		try {
+			await reloadProjects();
+		} catch {
+			return;
+		}
+		const after = state.projects.map((project) => project.id).join(",");
+		if (before !== after && state.mode === "home") renderHomeBench();
+	};
+	document.addEventListener("visibilitychange", () => {
+		if (document.visibilityState === "visible") void refreshHomeIfStale();
+	});
+	window.addEventListener("focus", () => void refreshHomeIfStale());
 }
 
 /** 作罢：先让服务端别再算了，再断本地这条流。 */
