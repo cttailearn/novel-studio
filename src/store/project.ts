@@ -254,6 +254,12 @@ export interface OutlineChapter {
 	notes: string;
 	/** 本章装配清单。写作智能体会拿到这些素材的全文。 */
 	materialIds: string[];
+	/**
+	 * 这一章是谁立的。
+	 * - 缺省 = 作者亲手立（或从旧版本升级来的，不追认）。
+	 * - "agent" = 设定官用 update_outline 顺手立下的空壳，作者可以一键撤掉。
+	 */
+	source?: "agent";
 }
 
 export interface DraftRevision {
@@ -573,6 +579,8 @@ export function normalizeProject(raw: unknown): Project {
 			materialIds: Array.isArray(chapter.materialIds)
 				? chapter.materialIds.filter((value: unknown): value is string => typeof value === "string")
 				: [],
+			// 来源只用来标记"这一章是设定官顺手立下的"，好让作者认出并撤掉。
+			...(chapter.source === "agent" ? { source: "agent" as const } : {}),
 		}))
 		: [];
 

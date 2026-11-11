@@ -678,11 +678,12 @@ function updateOutlineTool(deps: NovelToolDeps): AgentTool<any> {
 		name: "update_outline",
 		label: "维护大纲",
 		description:
-			"新建或整体更新大纲。每个章节用 id 标识；已存在的 id 会被更新，新 id 则追加。" +
-			"chapterIds 是本章打算用的素材 id 列表：传了就整体替换该章的装料，不传则保持原样（只改标题不必重复传）。" +
+			"新建章节，或给已有章节改装料。每个章节用 id 标识：**新 id 才会新增**；已存在的 id 只接受 chapterIds" +
+			"（给这一章换装料），标题、要点、卷属、状态一律保持作者原样 —— 那些是作者的定稿，你改不动。" +
+			"chapterIds 是本章打算用的素材 id 列表：传了就整体替换该章的装料，不传则保持原样。" +
 			"之后想单独增删就用 attach_materials。" +
 			"卷是可选的：可以先用 volumes 立几卷（卷名、卷要略、卷目标字数），再在章上用 volume 写卷名把章挂进去；" +
-			"卷名在章上第一次出现时也会自动立卷。不传 volume 的章保持原来的卷，volume 传空串等于把这一章摘到不分卷。",
+			"卷名在章上第一次出现时也会自动立卷。新立的章会标上「设定官立」，作者可以一键撤掉。",
 		parameters: Type.Object(
 			{
 				volumes: Type.Optional(
@@ -735,6 +736,8 @@ function updateOutlineTool(deps: NovelToolDeps): AgentTool<any> {
 		),
 		execute: async (_toolCallId, params) => {
 			const known = new Set(getProject(deps).materials.map((m) => m.id));
+			// 命中已存在章节时把标题记下来：回话里要如实说「只改了装料，没改题」。
+			const untouched: string[] = [];
 			const saved = deps.store.mutate(deps.projectId, (p) => {
 				// 先立卷：章上的 volume 写的是卷名，得先有这一卷才挂得上。
 				for (const item of params.volumes ?? []) {
@@ -774,26 +777,18 @@ function updateOutlineTool(deps: NovelToolDeps): AgentTool<any> {
 					return id;
 				};
 				for (const chapter of params.chapters) {
-					const volumeId = typeof chapter.volume === "string" ? volumeForTitle(chapter.volume) : undefined;
 					const index = p.outline.findIndex((item) => item.id === chapter.id);
 					if (index >= 0) {
-						const merged = {
-							...p.outline[index]!,
-							id: chapter.id,
-							title: chapter.title,
-							summary: chapter.summary,
-							...(chapter.pov !== undefined ? { pov: chapter.pov } : {}),
-							...(chapter.status !== undefined ? { status: chapter.status } : {}),
-							...(chapter.targetWords !== undefined ? { targetWords: chapter.targetWords } : {}),
-							...(chapter.notes !== undefined ? { notes: chapter.notes } : {}),
-						};
-						// 只有显式传了 chapterIds 才动装配清单：
-						// 改个标题不该把这一章的料抖掉。
-						if (chapter.chapterIds) merged.materialIds = chapter.chapterIds.filter((id) => known.has(id));
-						// 卷同理：不传就保持原样。
-						if (volumeId !== undefined) merged.volumeId = volumeId;
-						p.outline[index] = merged;
+						// 已存在的章只接受装料清单。标题、要点、卷属、状态都是作者的定稿，
+						// 智能体「顺手整理一下大纲」会把人家改好的东西无声覆盖掉 —— 一律不认。
+						const target = p.outline[index]!;
+						if (chapter.chapterIds) {
+							target.materialIds = chapter.chapterIds.filter((id) => known.has(id));
+						}
+						untouched.push(target.title);
 					} else {
+						const volumeId =
+							typeof chapter.volume === "string" ? volumeForTitle(chapter.volume) : undefined;
 						p.outline.push({
 							id: chapter.id,
 							title: chapter.title,
@@ -804,6 +799,8 @@ function updateOutlineTool(deps: NovelToolDeps): AgentTool<any> {
 							notes: chapter.notes ?? "",
 							volumeId: volumeId ?? "",
 							materialIds: (chapter.chapterIds ?? []).filter((id) => known.has(id)),
+							// 标上来源：作者在右案看到「设定官立」，可一键撤掉这枚空壳。
+							source: "agent" as const,
 						});
 					}
 					// 反向同步素材的 chapterIds，让索引与素材卡上的"已装入"不说谎。
@@ -838,7 +835,11 @@ function updateOutlineTool(deps: NovelToolDeps): AgentTool<any> {
 							);
 						}),
 					) +
-					(missing.length > 0 ? "\n\n以下素材 id 不存在，未装入（先 upsert_material 确认 id）：" + missing.join("、") : ""),
+					(missing.length > 0 ? "\n\n以下素材 id 不存在，未装入（先 upsert_material 确认 id）：" + missing.join("、") : "") +
+					(untouched.length > 0
+						? "\n\n这些章已经存在，只按 chapterIds 改了装料；标题、要点、卷属仍按作者写的原样，不要当成改写成功：\n" +
+							lines(untouched.map((title) => "- " + title))
+						: ""),
 				{ outline: saved.outline, volumes: saved.volumes },
 			);
 		},

@@ -5826,6 +5826,20 @@ function renderBible() {
 			if (words) meta.push(fmt(words) + " 字");
 			meta.push("装料 " + chapter.materialIds.length + " 条");
 			card.append(el("div", "tagline", meta.filter(Boolean).join(" · ")));
+			// 设定官顺手立的章：标出来，空壳还给一枚撤销。作者自己立的不打标。
+			if (chapter.source === "agent") {
+				const bar = el("div", "outline-actions");
+				bar.append(el("span", "outline-badge", words > 0 ? "设定官立" : "设定官立 · 还没落笔"));
+				if (words === 0) {
+					bar.append(
+						button("撤销这一章", "btn btn-quiet btn-xs", (event) => {
+							event.stopPropagation();
+							void dropChapter(chapter);
+						}),
+					);
+				}
+				card.append(bar);
+			}
 			card.style.cursor = "pointer";
 			const open = () => openChapter(chapter.id);
 			card.addEventListener("click", open);
@@ -5961,6 +5975,26 @@ async function deleteNote(note) {
 		toast("已删掉这条待办。", "ok", 1600);
 	} catch (error) {
 		toast("没能删这条待办：" + error.message, "error");
+	}
+}
+
+/** 撤掉一章设定官顺手立下的空壳。有正文的章服务端会拒绝，这里只做前置确认。 */
+async function dropChapter(chapter) {
+	if (!state.projectId) return;
+	if (!window.confirm("撤掉「" + chapter.title + "」？这一章还没有正文，撤掉不影响别的章。")) return;
+	try {
+		const data = await api(
+			"/api/projects/" + state.projectId + "/outline/" + encodeURIComponent(chapter.id),
+			{ method: "DELETE" },
+		);
+		if (state.chapterId === chapter.id) {
+			state.chapterId = null;
+			localStorage.removeItem("novel-studio/chapter/" + state.projectId);
+		}
+		adoptProjectUpdate(data);
+		toast("已撤掉这一章。", "ok", 1800);
+	} catch (error) {
+		toast("没能撤这一章：" + error.message, "error");
 	}
 }
 

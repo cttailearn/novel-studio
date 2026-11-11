@@ -1572,6 +1572,34 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 		return json(sink, 200, { chapter, stats: store.stats(saved) });
 	}
 
+	// 撤掉一章。只给「设定官顺手立下的空壳」用：已经有草稿的一律不许删，
+	// 免得正文、版本历史、素材索引三处对不上（也防止删掉的章号被复用后旧稿复活）。
+	if (outlineMatch && req.method === "DELETE") {
+		const projectId = outlineMatch[1]!;
+		const project = store.get(projectId);
+		if (!project) return json(sink, 404, { error: "工程不存在" });
+		const chapterId = decodeURIComponent(outlineMatch[2]!);
+		if (!project.outline.some((chapter) => chapter.id === chapterId)) {
+			return json(sink, 404, { error: "章节不存在" });
+		}
+		const meta = project.drafts[chapterId];
+		if (meta && (meta.words > 0 || meta.hasDraft || meta.revision > 0)) {
+			return json(sink, 409, { error: "这一章已经动过笔了，不能整章撤掉；要留着标题改就别用撤销。" });
+		}
+		const saved = store.mutate(projectId, (draft) => {
+			draft.outline = draft.outline.filter((item) => item.id !== chapterId);
+			if (draft.drafts[chapterId]) delete draft.drafts[chapterId];
+			// 素材卡上的「已装入」索引也要摘干净，否则会指向一个不存在的章。
+			for (const material of draft.materials) {
+				if (material.chapterIds.includes(chapterId)) {
+					material.chapterIds = material.chapterIds.filter((id) => id !== chapterId);
+				}
+			}
+		});
+		await store.flush();
+		return json(sink, 200, { ok: true, project: saved, stats: store.stats(saved) });
+	}
+
 	// 保存章节正文（稿件视图的直接编辑）
 	const chapterMatch = pathname.match(/^\/api\/projects\/([\w-]+)\/chapters\/([^/]+)$/);
 	if (chapterMatch && req.method === "PATCH") {
