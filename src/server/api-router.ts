@@ -3316,23 +3316,41 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 		const before = content.slice(Math.max(0, start - POLISH_WINDOW), start);
 		const after = content.slice(end, Math.min(content.length, end + POLISH_WINDOW));
 
+		// 这一轮也登记成一次「运行」：连接断了只是少一个看客，改写到一半不会白跑，
+		// 客户端可以用 /api/runs/:id/stream?since= 接回来继续看。
+		const live = ctx.live.create({
+			id: randomUUID(),
+			kind: "polish",
+			projectId,
+			chapterId,
+			role: "writing",
+			model: modelRef,
+			label: "局部改写",
+		});
+		const emit = (event: Record<string, unknown>) => live.publish(event);
 		sink.writeHead(200, {
 			"content-type": "application/x-ndjson; charset=utf-8",
 			"cache-control": "no-store",
 			"x-accel-buffering": "no",
+			"x-run": live.id,
 		});
-		const emit = (event: unknown) => {
-			if (sink.ended || sink.destroyed) return;
-			sink.write(JSON.stringify(event) + "\n");
-		};
-		emit({ type: "run", model: modelRef });
-
-		let closed = false;
-		sink.onClose(() => {
-			closed = true;
-		});
+		const offSub = live.subscribe(
+			{
+				write: (chunk: string) => {
+					if (sink.ended || sink.destroyed) return;
+					sink.write(chunk);
+				},
+				end: () => {
+					if (!sink.ended && !sink.destroyed) sink.end();
+				},
+			},
+			0,
+		);
+		emit({ type: "run", id: live.id, model: modelRef });
+		sink.onClose(() => offSub());
 		let active: Agent | null = null;
-
+		live.setAbort(() => active?.abort());
+		let failure = "";
 		try {
 			let last = "";
 			let verdict = checkPolish(selected, selected, characters);
@@ -3374,18 +3392,26 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 					off();
 					active = null;
 				}
-				if (closed) return;
+				// 看客走了也照常跑完：产物留在轮次缓冲里，接回来还能看。
+				if (live.abortReason) break;
 				last = sanitizePolish(text);
 				verdict = checkPolish(selected, last, characters);
 				emit({ type: "checks", checks: verdict.checks });
 				if (!verdict.hard) break;
 			}
-			emit({ type: "done", text: last, checks: verdict.checks, hard: verdict.hard });
+			if (!live.abortReason) {
+				emit({ type: "done", text: last, checks: verdict.checks, hard: verdict.hard });
+			}
 		} catch (error) {
-			emit({ type: "error", message: "这一轮没改完：" + (error instanceof Error ? error.message : String(error)) });
+			failure = error instanceof Error ? error.message : String(error);
+			emit({ type: "error", message: "这一轮没改完：" + failure });
 		} finally {
 			active?.abort();
+			const status: RunStatus = live.abortReason ? "aborted" : failure ? "failed" : "done";
+			live.finish(status, failure || (live.abortReason ? "作者叫停" : ""));
+			ctx.live.report(live);
 			if (!sink.ended && !sink.destroyed) sink.end();
+			offSub();
 		}
 		return;
 	}

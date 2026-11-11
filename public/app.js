@@ -233,6 +233,7 @@ const state = {
 	/** 这一轮改写的产物：采用时才落盘。 */
 	polishResult: null,
 	polishBusy: false,
+	polishRunId: null,
 	/** 刚采用的那一版：留一条「撤销这次改写」的窄路。 */
 	polishUndo: null,
 	/** 生文工作台「库中可装」的检索词与分类。 */
@@ -2892,6 +2893,7 @@ async function runPolish(instructionOverride) {
 	polishAbort = controller;
 	state.polishBusy = true;
 	state.polishResult = null;
+	state.polishRunId = null;
 	$("polish-error").textContent = "";
 	$("polish-result").hidden = false;
 	$("polish-new").textContent = "";
@@ -2900,70 +2902,112 @@ async function runPolish(instructionOverride) {
 	$("polish-retry").hidden = true;
 	$("polish-run").textContent = "改着…";
 	let text = "";
+	let lastSeq = 0;
+	let finished = false;
 	try {
-		const res = await fetch(
-			"/api/projects/" + state.projectId + "/chapters/" + encodeURIComponent(state.chapterId) + "/polish",
-			{
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify({
-					start: selection.start,
-					end: selection.end,
-					text: selection.text,
-					instruction,
-					keep,
-				}),
-				signal: controller.signal,
-			},
-		);
-		if (!res.ok) {
-			const data = await res.json().catch(() => ({}));
-			throw new Error(data.error || "改写没能开始（" + res.status + "）");
-		}
-		const reader = res.body.getReader();
-		const decoder = new TextDecoder();
-		let buffer = "";
-		for (;;) {
-			const { value, done } = await reader.read();
-			if (done) break;
-			buffer += decoder.decode(value, { stream: true });
-			let index = buffer.indexOf("\n");
-			while (index >= 0) {
-				const line = buffer.slice(0, index).trim();
-				buffer = buffer.slice(index + 1);
-				index = buffer.indexOf("\n");
-				if (!line) continue;
-				let event;
+		// 第一趟发起改写；之后若连接断了，就用轮次号把这一趟接回来，
+		// 服务端不会因为看客走了就停笔。
+		for (let attempt = 0; attempt < 4 && !finished; attempt += 1) {
+			if (attempt > 0) {
+				const wait = [700, 1600, 3200][Math.min(attempt - 1, 2)];
+				await new Promise((resolve) => setTimeout(resolve, wait));
+				if (controller.signal.aborted) return;
+				$("polish-run").textContent = "接回来…";
+			}
+			const reattach = attempt > 0;
+			const target = reattach
+				? "/api/runs/" + encodeURIComponent(state.polishRunId) + "/stream?since=" + lastSeq
+				: "/api/projects/" + state.projectId + "/chapters/" + encodeURIComponent(state.chapterId) + "/polish";
+			let res;
+			try {
+				res = await fetch(target, {
+					method: reattach ? "GET" : "POST",
+					headers: reattach ? {} : { "content-type": "application/json" },
+					body: reattach
+						? undefined
+						: JSON.stringify({
+								start: selection.start,
+								end: selection.end,
+								text: selection.text,
+								instruction,
+								keep,
+							}),
+					signal: controller.signal,
+				});
+			} catch (error) {
+				if (controller.signal.aborted) throw error;
+				if (reattach && attempt < 3) continue;
+				throw error;
+			}
+			if (!res.ok) {
+				const data = await res.json().catch(() => ({}));
+				// 接不回来多半是轮次已经结束并被回收了，这时不再重试。
+				if (reattach) break;
+				throw new Error(data.error || "改写没能开始（" + res.status + "）");
+			}
+			const reader = res.body.getReader();
+			const decoder = new TextDecoder();
+			let buffer = "";
+			let dropped = false;
+			for (;;) {
+				let chunk;
 				try {
-					event = JSON.parse(line);
-				} catch {
-					continue;
+					chunk = await reader.read();
+				} catch (error) {
+					if (controller.signal.aborted) throw error;
+					dropped = true;
+					break;
 				}
-				if (event.type === "text") {
-					text += event.delta;
-					$("polish-new").textContent = text;
-				} else if (event.type === "retry") {
-					text = "";
-					$("polish-new").textContent = "（这一版没通过检查，正在重写…）";
-				} else if (event.type === "checks") {
-					renderPolishChecks(event.checks);
-				} else if (event.type === "done") {
-					text = event.text || text;
-					$("polish-new").textContent = text;
-					state.polishResult = {
-						start: selection.start,
-						end: selection.end,
-						text: selection.text,
-						replacement: text,
-						hard: Boolean(event.hard),
-					};
-					$("polish-apply").disabled = Boolean(event.hard) || !text.trim();
-					$("polish-retry").hidden = false;
-					if (event.hard) $("polish-error").textContent = "这一版没通过检查，可以再改一版，也可以作罢。";
-				} else if (event.type === "error") {
-					throw new Error(event.message || "这一轮没改完。");
+				if (chunk.done) break;
+				buffer += decoder.decode(chunk.value, { stream: true });
+				let index = buffer.indexOf("\n");
+				while (index >= 0) {
+					const line = buffer.slice(0, index).trim();
+					buffer = buffer.slice(index + 1);
+					index = buffer.indexOf("\n");
+					if (!line) continue;
+					let event;
+					try {
+						event = JSON.parse(line);
+					} catch {
+						continue;
+					}
+					if (typeof event.seq === "number") lastSeq = Math.max(lastSeq, event.seq);
+					if (event.type === "run") {
+						if (event.id) state.polishRunId = event.id;
+					} else if (event.type === "text") {
+						text += event.delta;
+						$("polish-new").textContent = text;
+					} else if (event.type === "retry") {
+						text = "";
+						$("polish-new").textContent = "（这一版没通过检查，正在重写…）";
+					} else if (event.type === "checks") {
+						renderPolishChecks(event.checks);
+					} else if (event.type === "done") {
+						finished = true;
+						text = event.text || text;
+						$("polish-new").textContent = text;
+						state.polishResult = {
+							start: selection.start,
+							end: selection.end,
+							text: selection.text,
+							replacement: text,
+							hard: Boolean(event.hard),
+						};
+						$("polish-apply").disabled = Boolean(event.hard) || !text.trim();
+						$("polish-retry").hidden = false;
+						if (event.hard) $("polish-error").textContent = "这一版没通过检查，可以再改一版，也可以作罢。";
+					} else if (event.type === "error") {
+						finished = true;
+						throw new Error(event.message || "这一轮没改完。");
+					}
 				}
 			}
+			if (finished) break;
+			if (dropped || state.polishRunId) continue;
+		}
+		if (!finished && !controller.signal.aborted) {
+			$("polish-error").textContent = "这一趟没接上。改写可能还在服务器上跑，过一会儿再点一次；或者把要求写短些，重来一遍。";
 		}
 	} catch (error) {
 		if (error.name !== "AbortError") $("polish-error").textContent = error.message || String(error);
@@ -3094,12 +3138,21 @@ function wirePolish() {
 	});
 	$("polish-apply").addEventListener("click", () => void applyPolish());
 	$("polish-cancel").addEventListener("click", () => {
-		polishAbort?.abort();
+		stopPolishRun();
 		closeDialog(dialog);
 	});
 	dialog.addEventListener("close", () => {
-		polishAbort?.abort();
+		stopPolishRun();
 	});
+}
+
+/** 作罢：先让服务端别再算了，再断本地这条流。 */
+function stopPolishRun() {
+	const runId = state.polishRunId;
+	polishAbort?.abort();
+	state.polishRunId = null;
+	if (!runId) return;
+	void fetch("/api/runs/" + encodeURIComponent(runId) + "/abort", { method: "POST" }).catch(() => {});
 }
 
 function navButton(id, label) {

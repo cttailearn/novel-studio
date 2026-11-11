@@ -17,7 +17,7 @@
 export type RunStatus = "running" | "done" | "aborted" | "failed";
 
 /** 谁发起的：一次性成文，还是对议里的一问一答。 */
-export type RunKind = "write" | "session";
+export type RunKind = "write" | "session" | "polish";
 
 export interface RunInit {
 	id: string;
