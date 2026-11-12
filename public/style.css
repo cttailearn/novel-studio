@@ -8081,3 +8081,10 @@ textarea::placeholder { color: var(--ink-hold); opacity: 1; }
 .card h4, .card.record h4, .card.mat h4, .bible .card h4 { letter-spacing: 0.01em; }
 .stage-bar .tab span { letter-spacing: 0.04em; }
 .settings-dialog .settings-head h3 { letter-spacing: 0.02em; }
+
+/* 检查项只作提示时的那句话：与检查签同排，字号比它们小半档。 */
+.polish-checks .polish-note {
+	font-size: var(--fs-xs);
+	color: var(--ink-3);
+	line-height: 1.6;
+}

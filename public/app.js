@@ -3027,7 +3027,17 @@ async function runPolish(instructionOverride) {
 						};
 						$("polish-apply").disabled = Boolean(event.hard) || !text.trim();
 						$("polish-retry").hidden = false;
-						if (event.hard) $("polish-error").textContent = "这一版没通过检查，可以再改一版，也可以作罢。";
+						if (event.hard) {
+							$("polish-error").textContent = "这一版没通过检查，可以再改一版，也可以作罢。";
+						} else {
+							const warnCount = (event.checks || []).filter((check) => !check.ok).length;
+							if (warnCount > 0) {
+								const note = document.createElement("span");
+								note.className = "polish-note";
+								note.textContent = "这几项只作提示：要的就是这个效果，直接采用。";
+								$("polish-checks").append(note);
+							}
+						}
 					} else if (event.type === "error") {
 						finished = true;
 						throw new Error(event.message || "这一轮没改完。");

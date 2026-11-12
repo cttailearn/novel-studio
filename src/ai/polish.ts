@@ -37,7 +37,7 @@ export const POLISH_SYSTEM_PROMPT = `你是一位只做局部改写的中文小�
 2. 只改这一段。不要顺手改前后文，也不要把这一段扩写成新情节。
 3. 不改事实：人名、地名、数字、时间、称呼、物件、因果，必须与原文一致；原文没有的人与物不要凭空出现。
 4. 保持叙述人称与语感，与给出的「上文」「下文」接得上：第一句要能承接上文，最后一句要能接住下文。
-5. 长度控制在原文的 0.7–1.4 倍；段落数不增加，除非作者明确要求拆段。
+5. 篇幅与段落按作者的要求来：作者要扩写就扩写、要删就删、要拆段就拆段；作者没提，就尽量贴近原文的长度与分段。段落之间空一行。
 6. 作者写进「别动」的东西，一个字都不要碰。
 7. 要求与原文事实冲突时，按原文写，不要编新设定。
 8. 不要写「以下是修改后的段落」这类前言，第一句就是正文。`;
@@ -123,8 +123,9 @@ export function sanitizePolish(raw: string): string {
 /**
  * 确定性校验：模型说自己「只改了这一段」不算数，这里按字面查。
  *
- * 三条硬伤（长度、段数、数字）不过就回灌重写；人名被改掉只提示，不拦 ——
- * 作者的改写要求有时就是要拿掉某个称呼。
+ * 四项都只是**提示**，不拦落盘 —— 作者的要求本身就可能要改字数、拆段、
+ * 删数字、换称呼，代码不该替作者做这个决定。检查的意义是让他一眼看到
+ * 「这一版跟原文差在哪」，而不是替他挡住。
  */
 export function checkPolish(original: string, next: string, characters: string[]): PolishVerdict {
 	const checks: PolishCheck[] = [];
@@ -138,8 +139,8 @@ export function checkPolish(original: string, next: string, characters: string[]
 		ok: lengthOk,
 		detail: lengthOk
 			? "约为原文的 " + Math.round(ratio * 100) + "%"
-			: "长度为原文的 " + Math.round(ratio * 100) + "%，改动过大或过小",
-		hard: !lengthOk,
+			: "为原文的 " + Math.round(ratio * 100) + "%" + (ratio > 1.7 ? "，长了不少" : "，短了不少") + "；要的就是这个长度可忽略",
+		hard: false,
 	});
 
 	const hadBlocks = blocksOf(original);
@@ -152,8 +153,8 @@ export function checkPolish(original: string, next: string, characters: string[]
 		ok: paragraphOk,
 		detail: paragraphOk
 			? nowBlocks.length + " 段"
-			: "从 " + hadBlocks.length + " 段变成了 " + nowBlocks.length + " 段",
-		hard: !paragraphOk,
+			: "从 " + hadBlocks.length + " 段变成 " + nowBlocks.length + " 段，是有意拆段可忽略",
+		hard: false,
 	});
 
 	const before = numbersOf(original);
@@ -163,8 +164,8 @@ export function checkPolish(original: string, next: string, characters: string[]
 		id: "numbers",
 		label: "数字",
 		ok: lost.length === 0,
-		detail: lost.length === 0 ? (before.length > 0 ? "原文数字都还在" : "原文不含数字，不涉及") : "丢了数字 " + lost.join("、"),
-		hard: lost.length > 0,
+		detail: lost.length === 0 ? (before.length > 0 ? "原文数字都还在" : "原文不含数字，不涉及") : "少了数字 " + lost.join("、") + "，是有意删改可忽略",
+		hard: false,
 	});
 
 	const dropped = characters.filter(
