@@ -139,6 +139,15 @@ assert.match(functionBody("submitAdapt"), /adaptCursorId\(project\)/);
 assert.match(app, /\/adaptation\/cursor/);
 assert.match(css, /\.adapt-lock-note\s*\{/);
 assert.match(css, /\.adapt-chapter-item\.is-locked \.adapt-chapter-name/);
+// 已经改过的章还能回手再改一版：游标只挡「还没轮到的章」，不挡回头修；
+// 回头改不算确认下一章，进度得原地不动，否则改一次第一章就把后面几章的确认抹回去了。
+assert.match(functionBody("adaptEditable"), /project\.drafts\?\.\[chapter\.id\]\?\.hasDraft/);
+assert.match(functionBody("submitAdapt"), /reopened/);
+assert.match(app, /已确认 · 改完存下就是新版，进度不倒退/);
+assert.match(app, /可回改 · 进度不动/);
+assert.match(app, /const ADAPT_REVISE_HINT = /);
+assert.match(app, /if \(wasWaiting\) advanceAdaptCursor\(chapterId\);/);
+assert.match(functionBody("renderAdaptChapterList"), /waiting \|\| adapted \? "" : " is-locked"/);
 // 改编稿不用再点「手改」：稿子落在 contenteditable 里，生成完直接就能改；
 // 改过的句子用 <mark> 就地标出来，可以关掉。所以编辑器不能再是 textarea。
 assert.match(html, /id="adapt-editor"[^>]*contenteditable="true"/);

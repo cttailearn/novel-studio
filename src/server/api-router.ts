@@ -2451,9 +2451,11 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 		if (!project.outline.some((chapter) => chapter.id === chapterId)) {
 			return json(sink, 404, { error: "章节 " + chapterId + " 不存在" });
 		}
-		// 改编只往下走：别的一律只读只查，免得改到第十章才发现主角在第三章就死了。
+		// 改编往下走，但不封死回头路：还没轮到的章不许抢跑（改到第十章才发现主角
+		// 在第三章就死了），已经改过的章随时能回手再改一版 —— 作者回头修一章是常事。
 		const cursorId = adaptCursorChapterId(project);
-		if (cursorId !== chapterId) {
+		const reopened = Boolean(project.drafts[chapterId]?.hasDraft);
+		if (cursorId !== chapterId && !reopened) {
 			return json(sink, 409, { error: adaptSequenceError(project, cursorId), cursor: cursorId });
 		}
 
@@ -2696,9 +2698,11 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 						);
 					}
 				}
-				// 落盘即确认：不是游标那一章就不许写，免得回头改的章把后面几章的设定搅乱。
+				// 落盘即确认：没轮到的章不许抢跑（回头改一章把后面几章的设定搅乱）。
+				// 已经改过的章是例外 —— 作者回头修自己确认过的章，本来就是该做的事。
 				const cursorId = adaptCursorChapterId(latest);
-				if (cursorId !== chapterId) throw new HttpError(409, adaptSequenceError(latest, cursorId));
+				const reopened = Boolean(latest.drafts[chapterId]?.hasDraft);
+				if (cursorId !== chapterId && !reopened) throw new HttpError(409, adaptSequenceError(latest, cursorId));
 				// 作者手改那一版前端不带小结：留上一版的小结，后面几章要靠它认这一章。
 				const keptSummary = summary || latest.drafts[chapterId]?.summary || "";
 				const beforeContent = (await store.readDraftBody(projectId, chapterId))?.content ?? "";
@@ -2745,7 +2749,9 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 					const target = draft.outline.find((chapter) => chapter.id === chapterId);
 					if (target) target.status = "drafted";
 					// 确认一章，笔就落到下一章：这一章从此只可读、可查。
-					draft.adaptation.cursor = nextAdaptChapterId(draft, chapterId);
+					// 回头修老章不算"确认下一章"，进度原地不动 —— 不然改一次第一章，
+					// 后面几章的确认就统统被抹回去了。
+					if (cursorId === chapterId) draft.adaptation.cursor = nextAdaptChapterId(draft, chapterId);
 				});
 			});
 		} catch (error) {

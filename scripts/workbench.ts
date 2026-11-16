@@ -1534,8 +1534,16 @@ try {
 		confirmedSecond.status === 200 && confirmedSecond.data.adaptation?.cursor === "ch003",
 		String(confirmedSecond.status) + " " + JSON.stringify(confirmedSecond.data?.adaptation?.cursor),
 	);
+	// 回头改已经确认过的章：游标不拦，进度也不倒退 —— 作者回头修一章是常事，
+	// 但"修第一章"不等于"后面几章的确认作废"。
 	const rewriteDone = await req("POST", `/api/projects/${adaptId}/chapters/ch001/adapt/apply`, { content: ADAPT_BODY });
-	check("改完的章只能看、不能回手再改", rewriteDone.status === 409, String(rewriteDone.status) + " " + JSON.stringify(rewriteDone.data));
+	check("已经改过的章还能回手再改一版", rewriteDone.status === 200, String(rewriteDone.status) + " " + JSON.stringify(rewriteDone.data));
+	const afterRewrite = await req("GET", `/api/projects/${adaptId}`);
+	check(
+		"回头改老章不倒退进度",
+		afterRewrite.data.project?.adaptation?.cursor === "ch003",
+		JSON.stringify(afterRewrite.data.project?.adaptation?.cursor),
+	);
 
 	const lastRun = await streamPost(`/api/projects/${adaptId}/chapters/ch003/adapt`, {
 		modelRef: "mock/mock",
@@ -1556,8 +1564,8 @@ try {
 		requestId: "workbench-adapt-0006",
 	});
 	check(
-		"改到底之后不再开新的一轮",
-		afterAll.status === 409 && String(afterAll.data?.error ?? "").includes("改到底"),
+		"改到底之后已改过的章还能再开一轮",
+		afterAll.status === 200,
 		String(afterAll.status) + " " + JSON.stringify(afterAll.data),
 	);
 	const reopenLast = await req("POST", `/api/projects/${adaptId}/adaptation/cursor`, {});

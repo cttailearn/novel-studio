@@ -6048,6 +6048,8 @@ function adaptKindLabel(kind) {
 
 // 交代框的常态提示：轮不到的章会换成一句「先看」的话，这里留着原话好换回来。
 const ADAPT_INPUT_HINT = "交代怎么改这一章：改谁、留什么、加哪一段……（Enter 呈上，Shift+Enter 换行）";
+// 已经确认过的章还能再改一版：提示里得说清楚这回是"回头修"，不占进度。
+const ADAPT_REVISE_HINT = "这一章确认过了，还能再改一版：交代一句，或者直接在右边动手；存下就是新版，进度不动。";
 
 /** 改编按钮：与 button 一样，只是要能一开门就是灰的。 */
 function adaptButton(label, className, onClick, disabled = false) {
@@ -6109,10 +6111,16 @@ function adaptCursorId(project) {
 	return next?.id ?? "";
 }
 
-/** 这一章此刻能不能落笔：只有游标那一章可以，别的章只读、只查。 */
+/**
+ * 这一章此刻能不能落笔。
+ *
+ * 轮到的章当然能写；已经改过的章也可以回手再改一版 —— 游标只挡"还没轮到的章"，
+ * 不挡回头修。回头改不会让进度倒退，服务端那边也是这么判的。
+ */
 function adaptEditable(project, chapter) {
 	if (!project?.adaptation || !chapter) return false;
-	return adaptCursorId(project) === chapter.id;
+	if (adaptCursorId(project) === chapter.id) return true;
+	return Boolean(project.drafts?.[chapter.id]?.hasDraft);
 }
 
 /**
@@ -6296,10 +6304,13 @@ function renderAdaptChapterList(project) {
 		const meta = project.drafts[item.id];
 		const adapted = Boolean(meta?.hasDraft);
 		const waiting = item.id === cursorId;
-		// 轮不到的章打上 is-locked：颜色压下去，一眼看得出这儿的笔是收着的。
+		// 轮不到、又还没改过的章打上 is-locked：颜色压下去，一眼看得出这儿的笔是收着的。
+		// 已经改过的章不上这个类 —— 它是"确认了但随时能回手改"，不是"动不了"。
 		const li = el(
 			"li",
-			"adapt-chapter-item" + (item.id === state.chapterId ? " is-on" : "") + (waiting ? "" : " is-locked"),
+			"adapt-chapter-item" +
+				(item.id === state.chapterId ? " is-on" : "") +
+				(waiting || adapted ? "" : " is-locked"),
 		);
 		const row = el("button", "adapt-chapter-btn");
 		row.type = "button";
@@ -6309,7 +6320,7 @@ function renderAdaptChapterList(project) {
 		const bits = [];
 		if (item.pov) bits.push("视角 " + item.pov);
 		if (waiting) bits.push(adapted ? "接着改 · 第 " + meta.revision + " 稿" : "轮到这一章");
-		else bits.push(adapted ? "已确认 · 第 " + meta.revision + " 稿" : "只看");
+		else bits.push(adapted ? "已确认 · 第 " + meta.revision + " 稿 · 可回改" : "只看");
 		bits.push(fmt(adapted ? meta.words : 0) + " 字");
 		middle.append(el("span", "adapt-chapter-state", bits.join(" · ")));
 		row.append(middle);
@@ -6387,9 +6398,31 @@ function renderAdaptActions(project) {
 	if (!chapter) return;
 	const cursorId = adaptCursorId(project);
 	const cursorIndex = cursorId ? project.outline.findIndex((item) => item.id === cursorId) : -1;
-	// 轮不到这一章：只读。能翻、能查台账、能看版本，笔收着 —— 前面那一章的设定还没定下来，
-	// 这一章写下去的多半是要返工的。
+	// 没轮到这一章。已经改过的章不算"动不了"：稿子摊开着，改完存下就是新版，
+	// 只是不再往后推 —— 回头修一章，不该把后面几章的确认抹回去。
 	if (cursorId !== chapter.id) {
+		if (project.drafts[chapter.id]?.hasDraft) {
+			box.append(el("span", "adapt-lock-note", "已确认 · 改完存下就是新版，进度不倒退"));
+			if (a.proposal) {
+				box.append(adaptButton("采用这一版", "btn btn-ink btn-sm", () => void adoptAdaptProposal(), busy));
+				box.append(adaptButton("弃掉这版", "btn btn-quiet btn-sm", () => void discardAdaptProposal(), busy));
+			} else {
+				box.append(
+					adaptButton("存下这一章", "btn btn-ink btn-sm", () => void saveAdaptDraft(), !a.draftDirty || busy),
+				);
+				box.append(
+					button("让改编者再改一遍", "btn btn-quiet btn-sm", () => focusAdaptInput("接着这一章再改：")),
+				);
+			}
+			if (cursorId) {
+				box.append(button(`去改第 ${cursorIndex + 1} 章`, "btn btn-quiet btn-sm", () => setAdaptChapter(cursorId)));
+			} else {
+				box.append(button("回到末章再改一版", "btn btn-quiet btn-sm", () => void reopenLastAdaptChapter()));
+			}
+			box.append(button("版本", "btn btn-quiet btn-sm", () => openHistoryDialog(chapter.id)));
+			return;
+		}
+		// 还没轮到、也还没写过：只读。能翻、能查台账，笔收着。
 		box.append(
 			el(
 				"span",
@@ -6403,9 +6436,6 @@ function renderAdaptActions(project) {
 			box.append(button(`去改第 ${cursorIndex + 1} 章`, "btn btn-ink btn-sm", () => setAdaptChapter(cursorId)));
 		} else {
 			box.append(button("回到末章再改一版", "btn btn-quiet btn-sm", () => void reopenLastAdaptChapter()));
-		}
-		if (project.drafts[chapter.id]?.hasDraft) {
-			box.append(button("版本", "btn btn-quiet btn-sm", () => openHistoryDialog(chapter.id)));
 		}
 		return;
 	}
@@ -6438,7 +6468,9 @@ function renderAdaptMeta() {
 	const proposal = a.proposal;
 	const adopted = a.adopted;
 	const busy = streamBusy("adapt") || a.saving;
+	const waiting = Boolean(chapter) && adaptCursorId(project) === chapter?.id;
 	// 右栏那一行只回答一件事：这一栏的字现在是哪一步的东西。
+	// 已经确认过的章也能改，所以这里说"可回改，进度不动"，不再说"只看"。
 	$("adapt-adapted-meta").textContent = busy
 		? "改编者在写……"
 		: !adaptEditable(project, chapter)
@@ -6450,7 +6482,7 @@ function renderAdaptMeta() {
 				: proposal
 					? `改编者交稿 · ${fmt(countWords(proposal.content))} 字 · 可直接改`
 					: adopted
-						? `第 ${adopted.revision} 稿 · ${fmt(countWords(adopted.content))} 字 · 可直接改`
+						? `第 ${adopted.revision} 稿 · ${fmt(countWords(adopted.content))} 字 · ${waiting ? "可直接改" : "可回改 · 进度不动"}`
 						: chapter
 							? "尚未改编 · 可直接写"
 							: "";
@@ -6591,15 +6623,17 @@ function renderAdaptView() {
 	}
 	fillAdaptText($("adapt-original"), a.original?.content ?? "", a.error ? "原文载入失败：" + a.error : "原文还没载入。");
 	const editable = adaptEditable(project, chapter);
-	// 轮不到这一章就把话收住：输入框留着只会让人白等一轮，还把「呈上」按出 409。
+	const waiting = adaptCursorId(project) === chapter.id;
+	// 没轮到、也没改过的章才把话收住：输入框留着只会让人白等一轮，还把「呈上」按出 409。
+	// 已经确认过的章照常能交代，只是提示里说清楚"进度不动"。
 	const composer = $("adapt-input");
 	if (composer) {
 		composer.disabled = !editable;
 		composer.placeholder = editable
-			? ADAPT_INPUT_HINT
-			: chapter.status === "drafted"
-				? "这一章已经确认过了，只可读、可查；轮到它才能再改一版。"
-				: "轮到这一章才能交代改编者：前一章确认了就轮到它。";
+			? waiting || !chapter.status.startsWith("drafted")
+				? ADAPT_INPUT_HINT
+				: ADAPT_REVISE_HINT
+			: "轮到这一章才能交代改编者：前一章确认了就轮到它。";
 	}
 	const send = $("adapt-composer")?.querySelector('button[type="submit"]');
 	if (send) send.disabled = !editable;
@@ -6767,9 +6801,11 @@ function submitAdapt(text) {
 		toast("先在章目里点开一章。", "warn");
 		return;
 	}
-	// 一章一章往下走：轮不到的章能翻能查，但不许把笔递过去。
+	// 一章一章往下走，但不封死回头路：没轮到的章不许把笔递过去，
+	// 已经改过的章随时能再交代一句、再改一版。
 	const cursorId = adaptCursorId(project);
-	if (cursorId !== chapterId) {
+	const reopened = Boolean(project.drafts?.[chapterId]?.hasDraft);
+	if (cursorId !== chapterId && !reopened) {
 		toast(
 			cursorId
 				? `改编是一章一章往下走的：现在轮到第 ${project.outline.findIndex((item) => item.id === cursorId) + 1} 章。`
@@ -6792,7 +6828,8 @@ function submitAdapt(text) {
 /**
  * 采用这一版：把双栏里的稿子（提案或作者改过的）写进正文，并把改动记进台账。
  *
- * 这是「确认」这个动作：确认之后服务端把游标推到下一章，这一章从此只读。
+ * 这是「确认」这个动作：轮到的那一章确认之后，服务端把游标推到下一章；
+ * 回头改已经确认过的章，照样成版、照样记账，只是进度不动。
  */
 async function adoptAdaptProposal() {
 	const project = state.project;
@@ -6807,6 +6844,7 @@ async function adoptAdaptProposal() {
 	}
 	a.saving = true;
 	renderAdaptActions(project);
+	const wasWaiting = adaptCursorId(project) === chapterId;
 	try {
 		const data = await api(
 			"/api/projects/" + encodeURIComponent(project.id) + "/chapters/" + encodeURIComponent(chapterId) + "/adapt/apply",
@@ -6830,7 +6868,8 @@ async function adoptAdaptProposal() {
 		a.loadedFor = chapterId;
 		toast("已采用 · 第 " + a.adopted.revision + " 稿", "ok", 2600);
 		await reloadProject();
-		advanceAdaptCursor(chapterId);
+		if (wasWaiting) advanceAdaptCursor(chapterId);
+		else renderAdaptView();
 	} catch (error) {
 		toast("采用失败：" + error.message, "error", 5200);
 	} finally {
@@ -6885,6 +6924,8 @@ async function saveAdaptDraft() {
 	}
 	a.saving = true;
 	renderAdaptActions(project);
+	// 回头改老章：存下照样是新版，但进度不动 —— 不然改一次第一章，后面几章的确认就白做了。
+	const wasWaiting = adaptCursorId(project) === chapterId;
 	try {
 		const data = await api(
 			"/api/projects/" + encodeURIComponent(project.id) + "/chapters/" + encodeURIComponent(chapterId) + "/adapt/apply",
@@ -6899,7 +6940,8 @@ async function saveAdaptDraft() {
 		a.loadedFor = chapterId;
 		toast("已存下 · 第 " + a.adopted.revision + " 稿", "ok", 2400);
 		await reloadProject();
-		advanceAdaptCursor(chapterId);
+		if (wasWaiting) advanceAdaptCursor(chapterId);
+		else renderAdaptView();
 	} catch (error) {
 		toast("存稿失败：" + error.message, "error", 5200);
 	} finally {
