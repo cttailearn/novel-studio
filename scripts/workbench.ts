@@ -103,6 +103,8 @@ const ADAPT_BODY = [
 	"青禾发现船底有洞。",
 	"青禾游回了岸。",
 ].join("\n\n");
+// 附言里出现这句话，假模型就先把章名改了再交稿：用来验证智能体改名这条路。
+const ADAPT_RENAME_NOTE = "顺带改个名";
 // 局部修改可以指向别的章（比如没装料的空渡章），所以目标由用例在发请求前设定。
 let patchTarget = { chapterId: "ch01", find: PATCH_FIND, replace: PATCH_REPLACE };
 const mockServer = createServer((req, res) => {
@@ -180,34 +182,33 @@ const mockServer = createServer((req, res) => {
 	}
 	if (mockMode === "adapt") {
 		// 改编也是两轮：第一轮交一版提案，作者侧看过之后才会采用（并不在这轮落盘）。
+		// 附言里提了"顺带改个名"时，第一轮先改章名（当场生效），第二轮才交提案 ——
+		// 真机上模型也这么排：先把题目定了，再照新题目交稿。
 		const chunks: Buffer[] = [];
 		req.on("data", (chunk: Buffer) => chunks.push(chunk));
 		req.on("end", () => {
 			const body = Buffer.concat(chunks).toString("utf8");
 			upstreamBodies.push(body);
 			res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", connection: "keep-alive" });
-			let hasToolResult = false;
+			let toolRounds = 0;
 			try {
 				const parsed = JSON.parse(body) as { messages?: { role?: string }[] };
-				hasToolResult = (parsed.messages ?? []).some((message) => message.role === "tool");
+				toolRounds = (parsed.messages ?? []).filter((message) => message.role === "tool").length;
 			} catch {
 				// 解析不出就当第一轮。
 			}
-			if (!hasToolResult) {
+			const renameFirst = body.includes(ADAPT_RENAME_NOTE);
+			if (renameFirst && toolRounds === 0) {
 				send({
 					role: "assistant",
 					tool_calls: [
 						{
 							index: 0,
-							id: "call_adapt_1",
+							id: "call_adapt_rename_1",
 							type: "function",
 							function: {
-								name: "propose_adaptation",
-								arguments: JSON.stringify({
-									content: ADAPT_BODY,
-									summary: "换了主角的名字，其余照原文。",
-									changes: [{ kind: "character", summary: "主角阿青改名青禾" }],
-								}),
+								name: "rename_chapter",
+								arguments: JSON.stringify({ title: "第2章 船底有洞", reason: "这一章讲的就是船底那个洞。" }),
 							},
 						},
 					],
@@ -215,9 +216,31 @@ const mockServer = createServer((req, res) => {
 				finish("tool_calls");
 				return;
 			}
-			send({ role: "assistant", content: "" });
-			send({ content: "这一版改了主角名，其余一字未动。" });
-			finish("stop");
+			if ((!renameFirst && toolRounds > 0) || (renameFirst && toolRounds > 1)) {
+				send({ role: "assistant", content: "" });
+				send({ content: renameFirst ? "章名换过了，这一版也交上了。" : "这一版改了主角名，其余一字未动。" });
+				finish("stop");
+				return;
+			}
+			send({
+				role: "assistant",
+				tool_calls: [
+					{
+						index: 0,
+						id: "call_adapt_1",
+						type: "function",
+						function: {
+							name: "propose_adaptation",
+							arguments: JSON.stringify({
+								content: ADAPT_BODY,
+								summary: "换了主角的名字，其余照原文。",
+								changes: [{ kind: "character", summary: "主角阿青改名青禾" }],
+							}),
+						},
+					},
+				],
+			});
+			finish("tool_calls");
 		});
 		return;
 	}
@@ -1418,6 +1441,24 @@ try {
 	check("采用后写进改动台账", ledger.length === 1 && ledger[0]?.chapterId === "ch001" && ledger[0]?.kind === "character", JSON.stringify(ledger));
 	check("台账带正文里看得见的说明", String(ledger[0]?.summary).includes("青禾"), String(ledger[0]?.summary));
 
+	// 章名两处都能改：作者手改走章目接口，改编者改走 rename_chapter。
+	// 两处都只动题目 —— 正文、稿次一律不碰，改编工程另记一条台账。
+	const renamed = await req("PATCH", `/api/projects/${adaptId}/outline/ch001`, { title: "渡口等船" });
+	check("作者能手改章名", renamed.status === 200 && renamed.data.chapter?.title === "渡口等船", JSON.stringify(renamed.data?.chapter?.title));
+	const renamedDraft = await req("GET", `/api/projects/${adaptId}/chapters/ch001/draft`);
+	check(
+		"改章名不动正文也不加稿次",
+		renamedDraft.data.chapter?.revision === 1 && renamedDraft.data.chapter?.content === ADAPT_BODY,
+		JSON.stringify([renamedDraft.data?.chapter?.revision, String(renamedDraft.data?.chapter?.content).slice(0, 20)]),
+	);
+	const renamedAdaptation = await req("GET", `/api/projects/${adaptId}/adaptation`);
+	const renameChanges = (renamedAdaptation.data.adaptation?.changes ?? []) as Record<string, any>[];
+	check(
+		"改编工程改章名也记进台账",
+		renameChanges.some((change) => change.kind === "title" && change.chapterId === "ch001" && String(change.summary).includes("渡口等船")),
+		JSON.stringify(renameChanges.map((change) => change.kind)),
+	);
+
 	const adoptAgain = await req("POST", `/api/projects/${adaptId}/chapters/ch001/adapt/apply`, { proposalId, content: ADAPT_BODY });
 	check("同一版提案不能采用两次", adoptAgain.status === 404, String(adoptAgain.status));
 
@@ -1436,6 +1477,132 @@ try {
 	const dropped = await req("DELETE", `/api/projects/${adaptId}/chapters/ch002/adapt`);
 	check("可以弃掉一版提案", dropped.status === 200 && dropped.data.ok === true, String(dropped.status));
 	check("弃掉之后提案为空", (await req("GET", `/api/projects/${adaptId}/chapters/ch002/adapt`)).data.proposal === null);
+
+	// 智能体改名：先改名再交稿。改名当场生效，稿次仍是手改那一版，台账里多一条"章名"。
+	const renameRun = await streamPost(`/api/projects/${adaptId}/chapters/ch002/adapt`, {
+		modelRef: "mock/mock",
+		requestId: "workbench-adapt-0003",
+		note: ADAPT_RENAME_NOTE,
+	});
+	check(
+		"改编者能改章名（流里有 rename_chapter）",
+		renameRun.status === 200 && renameRun.events.some((event) => event.type === "tool_call" && event.name === "rename_chapter"),
+		String(renameRun.status) + " " + JSON.stringify(renameRun.events.filter((event) => event.type === "tool_call").map((event) => event.name)),
+	);
+	check("智能体改名之后照样交出提案", Boolean(renameRun.events.find((event) => event.type === "proposal")?.proposal?.id));
+	const agentRenamed = await req("GET", `/api/projects/${adaptId}`);
+	const agentRenamedChapter = ((agentRenamed.data.project?.outline ?? []) as Record<string, any>[]).find((chapter) => chapter.id === "ch002");
+	check("智能体改的章名落进章目（编号前缀不留在题目里）", agentRenamedChapter?.title === "船底有洞", JSON.stringify(agentRenamedChapter?.title));
+	const agentRenamedDraft = await req("GET", `/api/projects/${adaptId}/chapters/ch002/draft`);
+	check("智能体改名不加稿次", agentRenamedDraft.data.chapter?.revision === 1, JSON.stringify(agentRenamedDraft.data?.chapter?.revision));
+	const agentRenamedChanges = ((await req("GET", `/api/projects/${adaptId}/adaptation`)).data.adaptation?.changes ?? []) as Record<string, any>[];
+	const agentRenameEntry = agentRenamedChanges.find((change) => change.kind === "title" && change.chapterId === "ch002");
+	check(
+		"智能体改名记进台账并留下理由",
+		Boolean(agentRenameEntry) && String(agentRenameEntry?.detail ?? "").includes("船底"),
+		JSON.stringify(agentRenameEntry),
+	);
+
+	// 一章一章往下走：游标只在「采用 / 存下」这种明确确认之后前移；
+	// 前移之前，后面几章只读、只查 —— 服务端两头（开篇与采用）都拦。
+	const cursorAfterFirst = await req("GET", `/api/projects/${adaptId}`);
+	check(
+		"采用第 1 章之后游标推到第 2 章",
+		cursorAfterFirst.data.project?.adaptation?.cursor === "ch002",
+		JSON.stringify(cursorAfterFirst.data.project?.adaptation?.cursor),
+	);
+	const skippedRun = await streamPost(`/api/projects/${adaptId}/chapters/ch003/adapt`, {
+		modelRef: "mock/mock",
+		requestId: "workbench-adapt-0004",
+	});
+	check("没轮到的章不给改", skippedRun.status === 409, String(skippedRun.status) + " " + JSON.stringify(skippedRun.data));
+	check(
+		"409 说清现在轮到第几章",
+		String(skippedRun.data?.error ?? "").includes("一章一章") && String(skippedRun.data?.error ?? "").includes("第 2 章"),
+		String(skippedRun.data?.error ?? ""),
+	);
+	const earlyBack = await req("POST", `/api/projects/${adaptId}/adaptation/cursor`, {});
+	check("没改到底不能回头再改一版", earlyBack.status === 409, String(earlyBack.status) + " " + JSON.stringify(earlyBack.data));
+
+	const renameProposalId = String(renameRun.events.find((event) => event.type === "proposal")?.proposal?.id ?? "");
+	const confirmedSecond = await req("POST", `/api/projects/${adaptId}/chapters/ch002/adapt/apply`, {
+		proposalId: renameProposalId,
+		content: ADAPT_BODY,
+	});
+	check(
+		"第 2 章采用之后游标推到第 3 章",
+		confirmedSecond.status === 200 && confirmedSecond.data.adaptation?.cursor === "ch003",
+		String(confirmedSecond.status) + " " + JSON.stringify(confirmedSecond.data?.adaptation?.cursor),
+	);
+	const rewriteDone = await req("POST", `/api/projects/${adaptId}/chapters/ch001/adapt/apply`, { content: ADAPT_BODY });
+	check("改完的章只能看、不能回手再改", rewriteDone.status === 409, String(rewriteDone.status) + " " + JSON.stringify(rewriteDone.data));
+
+	const lastRun = await streamPost(`/api/projects/${adaptId}/chapters/ch003/adapt`, {
+		modelRef: "mock/mock",
+		requestId: "workbench-adapt-0005",
+	});
+	const lastProposalId = String(lastRun.events.find((event) => event.type === "proposal")?.proposal?.id ?? "");
+	const confirmedLast = await req("POST", `/api/projects/${adaptId}/chapters/ch003/adapt/apply`, {
+		proposalId: lastProposalId,
+		content: ADAPT_BODY,
+	});
+	check(
+		"最后一章确认之后游标落到改到底",
+		confirmedLast.status === 200 && confirmedLast.data.adaptation?.cursor === "",
+		String(confirmedLast.status) + " " + JSON.stringify(confirmedLast.data?.adaptation?.cursor),
+	);
+	const afterAll = await streamPost(`/api/projects/${adaptId}/chapters/ch003/adapt`, {
+		modelRef: "mock/mock",
+		requestId: "workbench-adapt-0006",
+	});
+	check(
+		"改到底之后不再开新的一轮",
+		afterAll.status === 409 && String(afterAll.data?.error ?? "").includes("改到底"),
+		String(afterAll.status) + " " + JSON.stringify(afterAll.data),
+	);
+	const reopenLast = await req("POST", `/api/projects/${adaptId}/adaptation/cursor`, {});
+	check(
+		"到底之后能回到末章再改一版",
+		reopenLast.status === 200 && reopenLast.data.cursor === "ch003",
+		String(reopenLast.status) + " " + JSON.stringify(reopenLast.data),
+	);
+
+	// 作者自己写的那一版：改编稿摊开着直接改，存下就把游标推到下一章，不必等改编者交稿。
+	const handWritten = await req("POST", `/api/projects/${adaptId}/chapters/ch003/adapt/apply`, {
+		content: "阿青自己撑船回了岸。\n",
+	});
+	check(
+		"作者手写也能存下并往下走",
+		handWritten.status === 200 && handWritten.data.adaptation?.cursor === "",
+		String(handWritten.status) + " " + JSON.stringify(handWritten.data.adaptation?.cursor),
+	);
+	check(
+		"手写的那一版落进了正文",
+		(await req("GET", `/api/projects/${adaptId}/chapters/ch003/draft`)).data.chapter?.content?.includes("自己撑船回了岸") === true,
+	);
+	// 后文认前文靠台账：作者手写的这一版也得留一条，否则隔一章就看不见了。
+	const handLedger = await req("GET", `/api/projects/${adaptId}`);
+	const handEntry = (handLedger.data.project?.adaptation?.changes ?? []).find(
+		(change: { chapterId: string; kind: string; summary: string }) =>
+			change.chapterId === "ch003" && change.kind === "other" && change.summary.includes("作者手改了本章正文"),
+	);
+	check("作者手改也记进台账", Boolean(handEntry), JSON.stringify(handEntry ?? null));
+
+	// 台账、以及每条改动"原文怎么写、现在怎么改"的说明，都要真的进到送模型的提示词里 ——
+	// 后文接不接得住前章，全靠这一段；只存在工程文件里等于没有。
+	await req("POST", `/api/projects/${adaptId}/adaptation/cursor`, {});
+	const ledgerRun = await streamPost(`/api/projects/${adaptId}/chapters/ch003/adapt`, {
+		modelRef: "mock/mock",
+		requestId: "workbench-adapt-0007",
+	});
+	const ledgerPrompt = upstreamBodies[upstreamBodies.length - 1] ?? "";
+	check("回到末章之后还能再跑一轮", ledgerRun.status === 200, String(ledgerRun.status));
+	check(
+		"台账连同原文改法都进了提示词",
+		ledgerPrompt.includes("主角阿青改名青禾") && ledgerPrompt.includes("作者直接在改编台落笔"),
+		String(ledgerPrompt.length),
+	);
+	check("提示词里有前后章联动的交代", ledgerPrompt.includes("前后章的联动"));
 
 	// 改编的每一轮也进记录，作者能按记录接着改。
 	const adaptRecords = await req("GET", `/api/records?projectId=${adaptId}&role=adapt`);

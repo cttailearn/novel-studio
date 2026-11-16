@@ -585,7 +585,8 @@
 					<main class="adapt-main">
 						<header class="adapt-bar">
 							<div class="adapt-bar-main">
-								<h3 id="adapt-chapter-title" class="adapt-heading">改编</h3>
+								<h3 id="adapt-chapter-title" class="adapt-heading" title="双击改章名">改编</h3>
+								<button type="button" id="adapt-rename" class="btn btn-quiet btn-xs adapt-rename" title="改这一章的章名（双击标题也一样）">改名</button>
 								<span id="adapt-status" class="pane-note"></span>
 							</div>
 							<div id="adapt-actions" class="adapt-actions"></div>
@@ -604,11 +605,22 @@
 									<h4>改编稿</h4>
 									<span id="adapt-adapted-meta" class="pane-note"></span>
 									<div class="pane-tools">
+										<button type="button" id="adapt-mark" class="btn btn-quiet btn-xs" aria-pressed="true" title="在改编稿里标出改动过的地方">高亮</button>
 										<button type="button" id="adapt-talk-toggle" class="btn btn-quiet btn-xs" aria-expanded="false">改编者</button>
 									</div>
 								</header>
 								<div id="adapt-adapted" class="adapt-text" tabindex="0" aria-label="改编稿"></div>
-								<textarea id="adapt-editor" class="adapt-editor hidden" spellcheck="false" aria-label="手改改编稿"></textarea>
+								<!-- 轮到的这一章直接用这块改：不必先按一个「手改」，改过的地方就在字上标着。 -->
+								<div
+									id="adapt-editor"
+									class="adapt-editor hidden"
+									contenteditable="true"
+									spellcheck="false"
+									role="textbox"
+									aria-multiline="true"
+									aria-label="改编稿（可直接改）"
+									data-placeholder="这一章还空着：交代一句让改编者写，或者自己动笔。"
+								></div>
 							</article>
 						</div>
 
@@ -731,6 +743,29 @@
 					<p id="adapt-brief-error" class="form-error"></p>
 					<div class="dialog-actions">
 						<button type="button" id="adapt-brief-cancel" class="btn btn-quiet">作罢</button>
+						<button type="submit" class="btn btn-ink">存入</button>
+					</div>
+				</footer>
+			</form>
+		</dialog>
+
+		<!-- 改章名：只动题目，正文与稿次一概不碰；改编工程的改名会记进台账。 -->
+		<dialog id="adapt-rename-dialog" class="sheet sheet-form">
+			<form id="adapt-rename-form">
+				<header class="form-head">
+					<h3>改章名</h3>
+					<p class="form-hint" id="adapt-rename-hint">只改题目，正文与版本都不动。</p>
+				</header>
+				<div class="form-body">
+					<label class="field">
+						<span class="field-label">章名</span>
+						<input id="adapt-rename-input" maxlength="60" autocomplete="off" placeholder="例如：雪夜敲门" />
+					</label>
+				</div>
+				<footer class="form-foot">
+					<p id="adapt-rename-error" class="form-error"></p>
+					<div class="dialog-actions">
+						<button type="button" id="adapt-rename-cancel" class="btn btn-quiet">作罢</button>
 						<button type="submit" class="btn btn-ink">存入</button>
 					</div>
 				</footer>

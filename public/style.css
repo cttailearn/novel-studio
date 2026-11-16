@@ -8125,6 +8125,7 @@ textarea::placeholder { color: var(--ink-hold); opacity: 1; }
 	background: var(--paper-hi);
 }
 .adapt-bar-main { display: flex; align-items: baseline; gap: 12px; min-width: 0; flex: 1 1 auto; }
+.adapt-bar-main .adapt-rename { flex: none; align-self: center; }
 .adapt-heading {
 	margin: 0;
 	font-family: var(--serif);
@@ -8152,6 +8153,16 @@ textarea::placeholder { color: var(--ink-hold); opacity: 1; }
 	white-space: nowrap;
 }
 .adapt-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* 轮不到这一章时，动作栏先说明白「现在轮到哪一章」，再给一颗跳过去的按钮。 */
+.adapt-lock-note {
+	font-size: var(--fs-label);
+	color: var(--ink-3);
+	letter-spacing: 0.02em;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	max-width: 22em;
+}
 
 .adapt-grid { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 .adapt-col { position: relative; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
@@ -8195,26 +8206,67 @@ textarea::placeholder { color: var(--ink-hold); opacity: 1; }
 }
 .adapt-empty { margin: 0; color: var(--ink-4); font-size: var(--fs-sm); }
 
+/* 改编稿直接可改：这一块既是排版好的稿面，也是输入框。 */
 .adapt-editor {
 	flex: 1;
 	min-height: 0;
 	width: 100%;
+	overflow-y: auto;
 	padding: 6px 22px 26px;
 	border: 0;
 	outline: none;
-	resize: none;
 	background: transparent;
 	color: var(--ink);
 	font-family: var(--serif);
 	font-size: var(--fs-body);
 	line-height: 2;
+	/* 换行是稿子的一部分：pre-wrap 才让段落与空行原样站着。 */
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.adapt-editor:empty::before {
+	content: attr(data-placeholder);
+	display: block;
+	color: var(--ink-4);
+	font-size: var(--fs-sm);
+	line-height: 1.9;
+	white-space: normal;
 }
 .adapt-editor:focus-visible { background: var(--cinnabar-wash); }
+/* 改动过的那几截：底色压一压，再垫一道细红线，扫过去就看见该核哪里。 */
+.adapt-editor mark.adapt-mark {
+	background: var(--cinnabar-wash);
+	box-shadow: inset 0 -1px 0 var(--cinnabar);
+	color: inherit;
+	border-radius: 2px;
+}
+/* 关掉高亮只是不上色：字一个不少，光标也不动。 */
+.adapt-editor.is-plain mark.adapt-mark {
+	background: transparent;
+	box-shadow: none;
+}
+/* 只读的那一栏也要能标：没轮到这一章时看到的是已确认的稿子。 */
+.adapt-text mark.adapt-mark {
+	background: var(--cinnabar-wash);
+	box-shadow: inset 0 -1px 0 var(--cinnabar);
+	color: inherit;
+}
 
-#adapt-talk-toggle {
+/* 改编稿那一栏的抬头有两颗按钮（高亮 / 改编者）：整组钉在右上角，互相不错位。 */
+.adapt-col-adapted .pane-tools {
 	position: absolute;
 	top: 8px;
 	right: 18px;
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	margin-left: 0;
+}
+/* 抬头一行要留给「已存第 N 稿」这类说法：太长就截，不把按钮挤走。 */
+.adapt-col-head .pane-note { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+#adapt-talk-toggle,
+#adapt-mark {
 	padding: 2px 9px;
 	border: 1px solid var(--rule);
 	border-radius: 999px;
@@ -8222,7 +8274,10 @@ textarea::placeholder { color: var(--ink-hold); opacity: 1; }
 	color: var(--ink-3);
 	font-size: var(--fs-xs);
 }
-#adapt-talk-toggle:hover { color: var(--ink); border-color: var(--ink-4); }
+#adapt-talk-toggle:hover,
+#adapt-mark:hover { color: var(--ink); border-color: var(--ink-4); }
+/* 高亮关掉是虚线：写着「有这个功能」，只是这一会儿没上色。 */
+#adapt-mark[aria-pressed="false"] { color: var(--ink-4); border-style: dashed; }
 
 .adapt-dock {
 	flex: none;
@@ -8235,11 +8290,13 @@ textarea::placeholder { color: var(--ink-hold); opacity: 1; }
 	display: flex;
 	flex-wrap: wrap;
 	align-items: center;
-	gap: 6px 8px;
-	padding: 9px 20px;
-	max-height: 7.5em;
+	gap: 4px 8px;
+	padding: 6px 20px;
+	max-height: 3.4em;
 	overflow-y: auto;
 }
+/* 没有改动就整块不占地方：竖向空间留给原文与稿子。 */
+.adapt-changes.is-empty { display: none; }
 .adapt-changes-label { font-size: var(--fs-label); letter-spacing: 0.14em; color: var(--ink-4); }
 .adapt-changes-note { font-size: var(--fs-xs); color: var(--ink-4); }
 .adapt-change {
@@ -8271,8 +8328,16 @@ textarea::placeholder { color: var(--ink-hold); opacity: 1; }
 #adapt-talk summary::before { content: "▸"; font-size: 10px; color: var(--ink-4); }
 #adapt-talk[open] summary::before { content: "▾"; }
 #adapt-talk-count { font-size: var(--fs-xs); letter-spacing: 0.02em; color: var(--cinnabar); }
-#adapt-talk .stream { max-height: 32vh; padding: 12px 20px 4px; }
-.adapt-dock .composer { padding: 8px 20px 12px; }
+#adapt-talk .stream { max-height: 20vh; padding: 10px 20px 2px; }
+.adapt-dock .composer { padding: 6px 20px 10px; }
+/* 通用输入框是 92px 起（还给按钮留了 44px 底），改编台只要有交代的地方就够。 */
+.adapt-dock .composer textarea { min-height: 56px; padding: 9px 12px 10px; }
+/* 轮不到这一章时交代框是灰的：不是坏掉，是这一章的笔还没发下来。 */
+.adapt-dock .composer textarea:disabled {
+	color: var(--ink-3);
+	background: var(--paper-lo);
+	cursor: not-allowed;
+}
 
 /* 改编要求与台账两扇弹层 */
 #adapt-brief-source {
@@ -8296,6 +8361,8 @@ textarea::placeholder { color: var(--ink-hold); opacity: 1; }
 @media (max-width: 640px) {
 	.adapt-bar { padding: 6px 12px; }
 	.adapt-heading { display: none; }
+	/* 小屏让位给状态与动作：左手章目里那一小笔一样能改名。 */
+	.adapt-bar-main .adapt-rename { display: none; }
 	.adapt-status { flex: 1 1 100%; order: 3; }
 	.adapt-actions { order: 4; flex: 1 1 100%; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
 	.adapt-actions::-webkit-scrollbar { display: none; }
@@ -8305,9 +8372,9 @@ textarea::placeholder { color: var(--ink-hold); opacity: 1; }
 	.adapt-col-head { padding: 7px 14px 5px; gap: 8px; }
 	.adapt-col h4 { padding: 0; }
 	.adapt-text, .adapt-editor { padding: 4px 14px 14px; font-size: 15px; line-height: 1.95; }
-	#adapt-talk-toggle { top: 3px; right: 11px; }
-	.adapt-changes { padding: 7px 12px; max-height: 5.4em; }
-	#adapt-talk .stream { max-height: 26vh; padding-inline: 12px; }
+	.adapt-col-adapted .pane-tools { top: 3px; right: 11px; }
+	.adapt-changes { padding: 5px 12px; max-height: 3em; }
+	#adapt-talk .stream { max-height: 18vh; padding-inline: 12px; }
 	.adapt-dock .composer { padding-inline: 12px; }
 }
 
@@ -8413,7 +8480,8 @@ body.adapt-open {
 	padding: 2px 10px 12px;
 	overflow-y: auto;
 }
-.adapt-chapter-item { margin: 2px 0; }
+/* 一行两件：点开这一章的大按钮，加行尾那一小笔改名。 */
+.adapt-chapter-item { margin: 2px 0; display: flex; align-items: center; gap: 2px; }
 .adapt-chapter-btn {
 	width: 100%;
 	display: flex;
@@ -8456,6 +8524,36 @@ body.adapt-open {
 }
 .adapt-chapter-dot { flex: none; font-size: 9px; color: var(--ink-4); }
 .adapt-chapter-item.is-on .adapt-chapter-dot { color: var(--cinnabar); }
+/* 没轮到的章：字压淡一档。不是不能点 —— 点开照样能读原文、查台账，只是笔收着。 */
+.adapt-chapter-item.is-locked .adapt-chapter-name { font-weight: 500; color: var(--ink-3); }
+.adapt-chapter-item.is-locked .adapt-chapter-index { color: var(--ink-hold); }
+/* 章名可改：行尾留一小笔。指到这一行、或选中这一行时才浮出来，
+   否则一列章目看下来满眼都是笔，反倒把字挤窄了。 */
+.adapt-chapter-item > .adapt-chapter-btn { flex: 1 1 auto; min-width: 0; }
+.adapt-chapter-rename {
+	flex: none;
+	width: 22px;
+	align-self: stretch;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0;
+	border: 0;
+	border-radius: 7px;
+	background: transparent;
+	color: var(--ink-4);
+	font: inherit;
+	font-size: var(--fs-xs);
+	line-height: 1;
+	cursor: pointer;
+	opacity: 0;
+	transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+.adapt-chapter-item:hover .adapt-chapter-rename,
+.adapt-chapter-item.is-on .adapt-chapter-rename,
+.adapt-chapter-rename:focus-visible { opacity: 1; }
+.adapt-chapter-rename:hover { background: var(--paper-hi); color: var(--ink-2); }
+.adapt-chapter-rename:focus-visible { outline: 2px solid var(--cinnabar); outline-offset: 1px; }
 .adapt-rail-foot {
 	flex: none;
 	display: flex;

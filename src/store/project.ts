@@ -356,7 +356,15 @@ export interface ContinuityNote {
  * 「改主角」「加人设」这类交代，落到台账上要能一眼分清是哪一类，
  * 后面写下一章时提示词才好挑最相关的那几条塞进去。
  */
-export type AdaptationChangeKind = "character" | "persona" | "plot" | "pov" | "addition" | "style" | "other";
+export type AdaptationChangeKind =
+	| "character"
+	| "persona"
+	| "plot"
+	| "pov"
+	| "addition"
+	| "style"
+	| "title"
+	| "other";
 
 export const ADAPTATION_CHANGE_KINDS: readonly AdaptationChangeKind[] = [
 	"character",
@@ -365,6 +373,7 @@ export const ADAPTATION_CHANGE_KINDS: readonly AdaptationChangeKind[] = [
 	"pov",
 	"addition",
 	"style",
+	"title",
 	"other",
 ];
 
@@ -375,6 +384,7 @@ export const ADAPTATION_CHANGE_LABELS: Record<AdaptationChangeKind, string> = {
 	pov: "人称",
 	addition: "加料",
 	style: "文风",
+	title: "章名",
 	other: "其他",
 };
 
@@ -403,6 +413,13 @@ export interface AdaptationPlan {
 	sourceTitle: string;
 	/** 改编总要求：全书级别的方向，例如「主角改成女记者，保留原案骨架」。 */
 	brief: string;
+	/**
+	 * 改编走到的这一章：作者确认过的章不回头，一章一章往下。
+	 *
+	 * 空串表示全书改到底了；从没记过（老工程）时按「第一章还没有稿子的」现算，
+	 * 所以这个字段可以后加，不用迁移。
+	 */
+	cursor?: string;
 	changes: AdaptationChange[];
 	createdAt: number;
 	updatedAt: number;
@@ -534,6 +551,7 @@ function normalizeAdaptation(raw: unknown): AdaptationPlan | undefined {
 		sourceId,
 		sourceTitle: typeof input.sourceTitle === "string" ? input.sourceTitle : "",
 		brief: typeof input.brief === "string" ? input.brief : "",
+		...(typeof input.cursor === "string" ? { cursor: input.cursor } : {}),
 		changes,
 		createdAt: typeof input.createdAt === "number" ? input.createdAt : now,
 		updatedAt: typeof input.updatedAt === "number" ? input.updatedAt : now,
@@ -829,6 +847,51 @@ export function volumeById(project: Project, volumeId: string): Volume | undefin
 /** 卷名。分不清卷就返回空串，调用方据此决定要不要写卷名。 */
 export function volumeTitle(project: Project, volumeId: string): string {
 	return volumeById(project, volumeId)?.title ?? "";
+}
+
+/**
+ * 改一章的章名。
+ *
+ * 章名有两处落点：大纲（计划里的题目）与草稿元数据（稿子上印的题目）。
+ * 只改一处，稿页与章目就会各叫各的；而存稿每次都会自增版本号，
+ * 改个名字就凭空多出一版并不合理 —— 所以这里两处一起改，正文与版本号都不动。
+ *
+ * 返回改前的旧名；章节不在章目里时返回 undefined。
+ */
+export function renameChapterTitle(project: Project, chapterId: string, title: string): string | undefined {
+	const chapter = project.outline.find((item) => item.id === chapterId);
+	if (!chapter) return undefined;
+	const before = chapter.title;
+	chapter.title = title;
+	const meta = project.drafts[chapterId];
+	// 有成稿的章：稿子上的题目跟着走，下次存稿时 .meta.json 也照新名重写。
+	if (meta) meta.title = title;
+	return before;
+}
+
+/**
+ * 改编此刻该改哪一章。
+ *
+ * 改编只往下走：确认过一章，那一章就只剩「可读、可查」，笔要挪到下一章去。
+ * 记过游标就认游标 —— 作者在别处手改过正文不等于确认了这一章；
+ * 从没记过（老工程）就按「第一章还没有稿子的」现算。空串表示已经改到底。
+ */
+export function adaptCursorChapterId(project: Project): string {
+	const recorded = project.adaptation?.cursor;
+	if (typeof recorded === "string") {
+		if (!recorded) return "";
+		// 游标指向的章被删了就当场重算，免得整间改编台一章也点不动。
+		if (project.outline.some((chapter) => chapter.id === recorded)) return recorded;
+	}
+	const next = project.outline.find((chapter) => !project.drafts[chapter.id]?.hasDraft);
+	return next?.id ?? "";
+}
+
+/** 确认一章之后笔落到哪：它后面那一章；已经到了末章就是空串。 */
+export function nextAdaptChapterId(project: Project, chapterId: string): string {
+	const index = project.outline.findIndex((chapter) => chapter.id === chapterId);
+	if (index < 0) return adaptCursorChapterId(project);
+	return project.outline[index + 1]?.id ?? "";
 }
 
 /** 按种类分组，界面与提示词都用它。 */

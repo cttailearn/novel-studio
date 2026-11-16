@@ -9,6 +9,7 @@ import {
 	createAdaptTools,
 	type AdaptContext,
 	type AdaptProposalInput,
+	type AdaptRenameInput,
 } from "./adapt.ts";
 import {
 	buildContextDigest,
@@ -46,6 +47,8 @@ export interface NovelAgentOptions {
 	adaptation?: AdaptContext;
 	/** adapt 角色的唯一出口：模型交出改编提案时回调（由服务端登记）。 */
 	onAdaptProposal?: (input: AdaptProposalInput) => boolean;
+	/** adapt 角色：模型要改章名时回调（由服务端当场落地，作者马上能看到）。 */
+	onAdaptRename?: (input: AdaptRenameInput) => boolean;
 	/**
 	 * 库作用域：给了它就走通用素材库这一支，不碰工程。
 	 * 这一支下 projectId 可以是空串，工具集也换成只有素材读写的那两个。
@@ -251,6 +254,7 @@ export async function createNovelAgent(options: NovelAgentOptions): Promise<Agen
 					projectId,
 					context: adaptation,
 					onProposal: (input) => options.onAdaptProposal?.(input) ?? true,
+					onRename: (input) => options.onAdaptRename?.(input) ?? false,
 				}),
 			},
 			streamFn,
