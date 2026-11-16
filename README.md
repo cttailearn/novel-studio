@@ -10,11 +10,11 @@
 
 ## 下载
 
-当前版本 **v0.5.0**（云端账号版：服务端可以部署到服务器，Web / 桌面 / Android 三端登录同一账号读写同一份数据）：
+当前版本 **v0.5.1**（云端账号版：服务端可以部署到服务器，Web / 桌面 / Android 三端登录同一账号读写同一份数据）：
 
-- [Windows x64 安装版](https://github.com/cttailearn/novel-studio/releases/download/v0.5.0/novel-studio-v0.5.0-windows-x64-setup.exe)：NSIS 安装包，支持应用内检查与安装更新；未做 Authenticode 签名，SmartScreen 可能提示。
-- [Android arm64 APK](https://github.com/cttailearn/novel-studio/releases/download/v0.5.0/novel-studio-v0.5.0-android-arm64.apk)：Android 7.0+；release 优化版，使用测试签名，需允许安装未知来源应用；可在应用内「设置 → 关于」直接下载安装。
-- [发布说明](https://github.com/cttailearn/novel-studio/releases/tag/v0.5.0) · [更新日志](CHANGELOG.zh.md)
+- [Windows x64 安装版](https://github.com/cttailearn/novel-studio/releases/download/v0.5.1/novel-studio-v0.5.1-windows-x64-setup.exe)：NSIS 安装包，支持应用内检查与安装更新；未做 Authenticode 签名，SmartScreen 可能提示。
+- [Android arm64 APK](https://github.com/cttailearn/novel-studio/releases/download/v0.5.1/novel-studio-v0.5.1-android-arm64.apk)：Android 7.0+；release 优化版，使用测试签名，需允许安装未知来源应用；可在应用内「设置 → 关于」直接下载安装。
+- [发布说明](https://github.com/cttailearn/novel-studio/releases/tag/v0.5.1) · [更新日志](CHANGELOG.zh.md)
 
 > Windows 可在「设置 → 关于」手动检查更新，或开启启动时自动检查。Android 版可在应用内下载安装包，最后由系统安装器确认安装。
 > 想让同一账号在多台设备间同步作品，见 [云端账号版](#云端账号版可选)。

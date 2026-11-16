@@ -3937,7 +3937,9 @@ export function createApiRouter(deps: ApiRouterDeps): ApiRouter {
  * 或 3 以上；无论多少，同一章永远只有一轮（章锁在前面拦着）。
  */
 function runConcurrencyPerProject(): number {
-	const asked = Number(process.env.RUN_CONCURRENCY_PER_PROJECT ?? "");
+	// 这一层也打进浏览器包（本机 IndexedDB / Tauri 里跑），那里没有 process。
+	const env = typeof process === "undefined" ? undefined : process.env;
+	const asked = Number(env?.RUN_CONCURRENCY_PER_PROJECT ?? "");
 	if (!Number.isFinite(asked) || asked < 1) return 2;
 	return Math.min(Math.trunc(asked), 8);
 }

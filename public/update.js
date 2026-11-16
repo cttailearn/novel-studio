@@ -296,14 +296,14 @@ function sync() {
 	refs.download.hidden = kind === "desktop";
 	refs.progress.hidden = !state.installing;
 	if (state.installing) {
+		// 圆环留白：它是个转圈指示器，别把进度文字塞进去，否则字会跟着转。
 		const line = refs.progress.querySelector("span");
-		if (line) line.textContent = progressLine();
+		if (line) line.textContent = "";
 		const note = refs.progress.querySelector("p");
 		if (note) {
-			note.textContent =
-				state.stage === "installing"
-					? "安装包已下载并通过签名校验，正在交给系统安装器；应用会自动重启。"
-					: "正在下载并校验安装包，请保持网络连接…";
+			const hint =
+				state.stage === "installing" ? "安装包已通过签名校验。" : "下载完成后会自动校验签名。";
+			note.textContent = `${progressLine()} · ${hint}`;
 		}
 	}
 	if (available) {
