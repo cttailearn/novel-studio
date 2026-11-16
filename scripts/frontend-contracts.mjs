@@ -98,6 +98,15 @@ for (const view of ["manuscript", "materials", "writing"]) {
 	assert.match(html, new RegExp(`id="view-${view}"[^>]*role="tabpanel"[^>]*aria-labelledby="tab-${view}"`));
 }
 assert.match(html, /id="bible"[^>]*role="tabpanel"/);
+// 改编台是写作台之外独立的一间：没有第四个页签，不能与稿 / 料 / 文共用版面。
+assert.ok(!html.includes('id="tab-adapt"'));
+assert.ok(!html.includes('data-view="adapt"'));
+assert.match(html, /id="adapt-app"[^>]*role="region"/);
+assert.match(html, /id="adapt-chapters"/);
+assert.match(app, /function openAdaptApp\(/);
+assert.match(app, /function enterAdaptMode\(/);
+assert.match(app, /classList\.toggle\("adapt-open"/);
+assert.match(css, /body\.adapt-open \.desk > \.beam/);
 assert.match(app, /function bindTabKeyboard\(tablist, selector\)/);
 assert.match(app, /\["ArrowLeft", "ArrowRight", "Home", "End"\]/);
 assert.match(app, /tab\.tabIndex = on \? 0 : -1/g);

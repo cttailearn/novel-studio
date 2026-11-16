@@ -290,7 +290,6 @@
 						<button id="tab-manuscript" class="tab is-on" data-view="manuscript" role="tab" aria-selected="true" aria-controls="view-manuscript" tabindex="0"><b>稿</b><span>文稿</span></button>
 						<button id="tab-materials" class="tab" data-view="materials" role="tab" aria-selected="false" aria-controls="view-materials" tabindex="-1"><b>料</b><span>素材工作台</span></button>
 						<button id="tab-writing" class="tab" data-view="writing" role="tab" aria-selected="false" aria-controls="view-writing" tabindex="-1"><b>文</b><span>生文工作台</span></button>
-						<button id="tab-adapt" class="tab" data-view="adapt" role="tab" aria-selected="false" aria-controls="view-adapt" tabindex="-1"><b>改</b><span>改编工作台</span></button>
 					</div>
 					<!-- 手机上章目栏是抽屉，顶栏又只剩检索与⋯；这里给一个直接的入口 -->
 					<button id="stage-rail" class="btn btn-quiet btn-sm only-phone stage-rail-btn" title="章目" aria-label="打开章目" aria-controls="chapter-list" aria-expanded="false">章目</button>
@@ -508,17 +507,90 @@
 					</div>
 				</section>
 
-				<!-- 改编工作台：原文与改编稿双栏对照，改编者只交提案，作者点「采用」才落盘。 -->
-				<section id="view-adapt" class="view view-bench adapt-view" role="tabpanel" aria-labelledby="tab-adapt" aria-label="改编工作台">
-					<div class="adapt-stage">
+			</main>
+
+			<!-- 手机主导航：桌面不出现。案头 / 文稿 / 素材 / 生文 四个一级去处。 -->
+			<nav id="mobile-nav" class="mobile-nav" aria-label="主导航">
+				<button type="button" class="mobile-nav-item is-on" data-mobile-view="home" aria-current="page">
+					<span class="mobile-nav-label">案头</span>
+				</button>
+				<button type="button" class="mobile-nav-item" data-mobile-view="manuscript">
+					<span class="mobile-nav-label">文稿</span>
+				</button>
+				<button type="button" class="mobile-nav-item" data-mobile-view="materials">
+					<span class="mobile-nav-label">素材</span>
+				</button>
+				<button type="button" class="mobile-nav-item" data-mobile-view="writing">
+					<span class="mobile-nav-label">生文</span>
+				</button>
+			</nav>
+
+			<!-- ── 右案 ───────────────────────────────────────────── -->
+			<aside class="desk-right" id="desk-right">
+				<div class="bible-head">
+					<input id="bible-search" class="bible-search" type="search" placeholder="搜素材…" autocomplete="off" aria-label="搜右案" />
+					<button id="close-bible" class="btn btn-quiet btn-sm only-narrow icon-btn" title="收起右案" aria-label="收起右案">×</button>
+				</div>
+				<nav class="bible-tabs" id="bible-tabs" role="tablist" aria-label="右案">
+					<button id="bible-tab-materials" class="bible-tab is-on" data-tab="materials" role="tab" aria-selected="true" aria-controls="bible" tabindex="0">素材</button>
+					<button id="bible-tab-outline" class="bible-tab" data-tab="outline" role="tab" aria-selected="false" aria-controls="bible" tabindex="-1">大纲</button>
+					<button id="bible-tab-notes" class="bible-tab" data-tab="notes" role="tab" aria-selected="false" aria-controls="bible" tabindex="-1">待办</button>
+				</nav>
+				<div id="bible" class="bible" role="tabpanel" aria-labelledby="bible-tab-materials" tabindex="0"></div>
+			</aside>
+			<button id="bible-backdrop" class="bible-backdrop hidden" tabindex="-1" aria-label="收起右案"></button>
+			<!-- 章目抽屉的遮罩：与右案那一套同模，只是各管一边。 -->
+			<button id="rail-backdrop" class="rail-backdrop hidden" tabindex="-1" aria-label="收起章目"></button>
+
+			<!-- ── 改编工作台：另开一间，不与生文台的稿 / 料 / 文共用版面 ──
+			     它盖住整个写作台，自带左章目、顶栏与双栏对照；回案头由顶栏那道门。 -->
+			<div id="adapt-app" class="adapt-app hidden" role="region" aria-label="改编工作台">
+				<header class="adapt-top">
+					<div class="adapt-brand">
+						<span class="seal" aria-hidden="true">墨</span>
+						<div class="brand-text">
+							<h1>改编</h1>
+							<p>照底本，一章一章改</p>
+						</div>
+					</div>
+					<div class="adapt-top-mid">
+						<button id="adapt-leave" class="btn btn-quiet btn-sm">← 案头</button>
+						<span id="adapt-project-title" class="beam-title">未选择作品</span>
+						<span id="adapt-project-stats" class="beam-stats"></span>
+					</div>
+					<div class="adapt-top-tools">
+						<label class="adapt-pick"><span>模型</span><select id="adapt-model" aria-label="改编用的模型"></select></label>
+						<label class="adapt-pick"><span>档位</span><select id="adapt-thinking" aria-label="推理档位"></select></label>
+						<button id="adapt-theme" class="btn btn-quiet theme-toggle icon-btn" title="切换昼夜" aria-label="切换昼夜">
+							<span class="theme-glyph" aria-hidden="true"></span>
+						</button>
+						<button id="adapt-shortcuts" class="btn btn-quiet theme-toggle icon-btn" title="键盘快捷键" aria-label="键盘快捷键">?</button>
+					</div>
+				</header>
+
+				<div class="adapt-shell">
+					<aside class="adapt-rail" aria-label="章目与改动">
+						<div class="adapt-rail-head">
+							<h2>章目</h2>
+							<span id="adapt-progress" class="pane-count"></span>
+						</div>
+						<ol id="adapt-chapters" class="adapt-chapters"></ol>
+						<p id="adapt-empty" class="rail-note hidden">这一部还没有章目。</p>
+						<div class="adapt-rail-foot">
+							<button id="adapt-brief-open" class="btn btn-quiet btn-sm">改编总要求</button>
+							<button id="adapt-ledger-open" class="btn btn-quiet btn-sm">改动台账</button>
+						</div>
+					</aside>
+
+					<main class="adapt-main">
 						<header class="adapt-bar">
 							<div class="adapt-bar-main">
-								<h3 class="adapt-heading">改编</h3>
-								<select id="adapt-chapter" class="mode-select chapter-select" aria-label="要改编哪一章"></select>
+								<h3 id="adapt-chapter-title" class="adapt-heading">改编</h3>
 								<span id="adapt-status" class="pane-note"></span>
 							</div>
 							<div id="adapt-actions" class="adapt-actions"></div>
 						</header>
+
 						<div class="adapt-grid">
 							<article class="adapt-col adapt-col-original">
 								<header class="adapt-col-head">
@@ -539,6 +611,7 @@
 								<textarea id="adapt-editor" class="adapt-editor hidden" spellcheck="false" aria-label="手改改编稿"></textarea>
 							</article>
 						</div>
+
 						<div class="adapt-dock">
 							<div id="adapt-changes" class="adapt-changes"></div>
 							<details id="adapt-talk" class="adapt-talk">
@@ -553,45 +626,9 @@
 								</div>
 							</form>
 						</div>
-					</div>
-				</section>
-			</main>
-
-			<!-- 手机主导航：桌面不出现。案头 / 文稿 / 素材 / 生文 四个一级去处。 -->
-			<nav id="mobile-nav" class="mobile-nav" aria-label="主导航">
-				<button type="button" class="mobile-nav-item is-on" data-mobile-view="home" aria-current="page">
-					<span class="mobile-nav-label">案头</span>
-				</button>
-				<button type="button" class="mobile-nav-item" data-mobile-view="manuscript">
-					<span class="mobile-nav-label">文稿</span>
-				</button>
-				<button type="button" class="mobile-nav-item" data-mobile-view="materials">
-					<span class="mobile-nav-label">素材</span>
-				</button>
-				<button type="button" class="mobile-nav-item" data-mobile-view="writing">
-					<span class="mobile-nav-label">生文</span>
-				</button>
-				<button type="button" class="mobile-nav-item" data-mobile-view="adapt">
-					<span class="mobile-nav-label">改编</span>
-				</button>
-			</nav>
-
-			<!-- ── 右案 ───────────────────────────────────────────── -->
-			<aside class="desk-right" id="desk-right">
-				<div class="bible-head">
-					<input id="bible-search" class="bible-search" type="search" placeholder="搜素材…" autocomplete="off" aria-label="搜右案" />
-					<button id="close-bible" class="btn btn-quiet btn-sm only-narrow icon-btn" title="收起右案" aria-label="收起右案">×</button>
+					</main>
 				</div>
-				<nav class="bible-tabs" id="bible-tabs" role="tablist" aria-label="右案">
-					<button id="bible-tab-materials" class="bible-tab is-on" data-tab="materials" role="tab" aria-selected="true" aria-controls="bible" tabindex="0">素材</button>
-					<button id="bible-tab-outline" class="bible-tab" data-tab="outline" role="tab" aria-selected="false" aria-controls="bible" tabindex="-1">大纲</button>
-					<button id="bible-tab-notes" class="bible-tab" data-tab="notes" role="tab" aria-selected="false" aria-controls="bible" tabindex="-1">待办</button>
-				</nav>
-				<div id="bible" class="bible" role="tabpanel" aria-labelledby="bible-tab-materials" tabindex="0"></div>
-			</aside>
-			<button id="bible-backdrop" class="bible-backdrop hidden" tabindex="-1" aria-label="收起右案"></button>
-			<!-- 章目抽屉的遮罩：与右案那一套同模，只是各管一边。 -->
-			<button id="rail-backdrop" class="rail-backdrop hidden" tabindex="-1" aria-label="收起章目"></button>
+			</div>
 		</div>
 
 		<dialog id="mobile-tools-dialog" class="mobile-tools-dialog" tabindex="-1" aria-labelledby="mobile-tools-title">
@@ -1159,7 +1196,7 @@
 				<dl class="keys">
 					<div><dt><kbd>Ctrl</kbd><kbd>K</kbd></dt><dd>检索与跳转</dd></div>
 					<div><dt><kbd>Ctrl</kbd><kbd>S</kbd></dt><dd>立即存稿（改稿时）</dd></div>
-					<div><dt><kbd>Ctrl</kbd><kbd>1</kbd> / <kbd>2</kbd> / <kbd>3</kbd> / <kbd>4</kbd></dt><dd>切到 稿 / 料 / 文 / 改</dd></div>
+					<div><dt><kbd>Ctrl</kbd><kbd>1</kbd> / <kbd>2</kbd> / <kbd>3</kbd></dt><dd>切到 稿 / 料 / 文</dd></div>
 					<div><dt><kbd>Alt</kbd><kbd>↑</kbd> / <kbd>↓</kbd></dt><dd>上一章 / 下一章</dd></div>
 					<div><dt><kbd>↑</kbd> / <kbd>↓</kbd></dt><dd>稿页上下滚（读长章时不用摸鼠标）</dd></div>
 					<div><dt><kbd>Esc</kbd></dt><dd>退出专注模式 / 退出改稿 / 关闭弹窗</dd></div>

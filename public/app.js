@@ -1624,6 +1624,7 @@ async function bootstrap() {
 	state.kinds = Array.isArray(data.kinds) ? data.kinds : await fetchKinds();
 	renderModels(data.models, data.defaultModel);
 	renderThinkingLevels(data.defaultThinkingLevel);
+	syncAdaptModelPickers();
 
 	// 落盘状况：先问一次，再定期问。写稿是长时段的事，
 	// 磁盘在中间出问题也要让作者当场知道，而不是等下次开机。
@@ -1639,14 +1640,18 @@ async function bootstrap() {
 		return;
 	}
 
-	// 记住上次在写哪一部、以及是停在案头还是写作台。
+	// 记住上次在写哪一部、以及是停在案头、写作台还是改编台。
+	const storedMode = readStored(MODE_KEY, "home");
 	const remembered = state.projects.find((project) => project.id === readStored(PROJECT_KEY, ""));
 	await selectProject((remembered ?? state.projects[0]).id);
-	if (readStored(MODE_KEY, "home") === "workspace") {
+	if (storedMode === "workspace") {
 		state.mode = "workspace";
 		applyMode();
 		// 这里必须强制重绘：默认视图就是文稿，switchView 会认为「没换页」而早退。
 		switchViewNow("manuscript");
+	} else if (storedMode === "adapt" && state.project?.adaptation) {
+		if (!state.chapterId) state.chapterId = state.project.outline[0]?.id ?? null;
+		enterAdaptMode();
 	} else {
 		state.mode = "home";
 		applyMode();
@@ -1711,6 +1716,61 @@ function renderModels(models, defaultModel) {
 	}
 	const preferred = models.find((model) => model.id === defaultModel);
 	if (preferred) select.value = preferred.id;
+}
+
+/** 改编台自带笔墨：它不共用生文台顶栏那两枚下拉。 */
+function renderAdaptModels(models, preferred) {
+	const select = $("adapt-model");
+	if (!select) return;
+	select.replaceChildren();
+	if (models.length === 0) {
+		const option = el("option", "", "无可用模型");
+		option.value = "";
+		select.append(option);
+		select.disabled = true;
+		select.title = "请到设置中配置供应商";
+		return;
+	}
+	select.disabled = false;
+	select.title = "";
+	for (const model of models) {
+		const option = el("option", "", model.providerLabel + " · " + model.name);
+		option.value = model.id;
+		select.append(option);
+	}
+	const shared = $("model-select").value;
+	const next = models.some((model) => model.id === preferred)
+		? preferred
+		: models.some((model) => model.id === shared)
+			? shared
+			: models[0].id;
+	select.value = next;
+}
+
+function renderAdaptThinkingLevels(preferred) {
+	const select = $("adapt-thinking");
+	if (!select) return;
+	const model = state.models.find((item) => item.id === $("adapt-model").value);
+	const supported = new Set(model?.thinkingLevels ?? ["off"]);
+	let next = preferred ?? select.value;
+	select.replaceChildren();
+	for (const [value, label] of THINKING_LEVELS) {
+		if (!supported.has(value)) continue;
+		const option = el("option", "", levelText(value, label));
+		option.value = value;
+		select.append(option);
+	}
+	select.disabled = select.options.length === 0;
+	if (![...select.options].some((option) => option.value === next)) {
+		next = select.options[0]?.value ?? "off";
+	}
+	select.value = next;
+}
+
+/** 起手与设置改动后对齐改编台的下拉。 */
+function syncAdaptModelPickers() {
+	renderAdaptModels(state.models, $("model-select").value);
+	renderAdaptThinkingLevels($("thinking-select").value);
 }
 
 // ═══════════════════════════════════════════════════ 左卷
@@ -1847,7 +1907,6 @@ function switchViewNow(view) {
 	$("view-manuscript").classList.toggle("is-on", view === "manuscript");
 	$("view-materials").classList.toggle("is-on", view === "materials");
 	$("view-writing").classList.toggle("is-on", view === "writing");
-	$("view-adapt").classList.toggle("is-on", view === "adapt");
 	applyMode();
 	renderView();
 	// 新视图刚从 display:none 里出来，两栏这一帧才有宽度：补量一次窄栏类。
@@ -1860,8 +1919,19 @@ function renderView() {
 	mountStream("writing");
 	// 库面板挂在案头上，但它在 DOM 里始终存在，无条件挂载才能保住它的对话。
 	mountStream("library");
-	// 改编面板同样常驻：提案要跨章、跨视图留着。
+	// 改编面板同样常驻：提案要跨章、跨界面留着。
 	mountStream("adapt");
+
+	// 改编工作台是另一间：进了它就只画它，稿 / 料 / 文一概不碰。
+	if (state.mode === "adapt") {
+		if (!state.project?.adaptation) {
+			state.mode = "home";
+			writeStored(MODE_KEY, "home");
+			applyMode();
+			return renderHomeView();
+		}
+		return renderAdaptView();
+	}
 
 	// 案头不依赖某部作品，所以要在"没有作品"的早退之前处理。
 	if (state.mode === "home") return renderHomeView();
@@ -1879,7 +1949,6 @@ function renderView() {
 
 	if (state.view === "manuscript") renderManuscriptView();
 	else if (state.view === "materials") renderMaterialsBench();
-	else if (state.view === "adapt") renderAdaptView();
 	else renderWritingBench();
 	updateMobileNav();
 }
@@ -1941,9 +2010,7 @@ function showMobileView(view) {
 	}
 	if (!state.project) {
 		toast(
-			"先开一卷，再进" +
-				(view === "materials" ? "素材" : view === "writing" ? "生文" : view === "adapt" ? "改编" : "文稿") +
-				"。",
+			"先开一卷，再进" + (view === "materials" ? "素材" : view === "writing" ? "生文" : "文稿") + "。",
 			"info",
 			3000,
 		);
@@ -2012,11 +2079,14 @@ function renderHomeView() {
 /** 把模式落到 DOM：案头收起左卷与右案；写作台只留中台加左卷。 */
 function applyMode() {
 	const home = state.mode === "home";
+	const adapt = state.mode === "adapt";
 	const desk = document.querySelector(".desk");
 	desk.classList.toggle("is-home", home);
 	// 两个工作台自带列表，右案此时重复。
 	desk.classList.toggle("is-bench", !home && state.view !== "manuscript");
-	$("leave-workspace").classList.toggle("hidden", home);
+	document.body.classList.toggle("adapt-open", adapt);
+	$("adapt-app").classList.toggle("hidden", !adapt);
+	$("leave-workspace").classList.toggle("hidden", home || adapt);
 	$("view-home").classList.toggle("is-on", home);
 	if (home) {
 		for (const id of ["view-manuscript", "view-materials", "view-writing"]) {
@@ -2025,14 +2095,63 @@ function applyMode() {
 	}
 }
 
-/** 进卷：加载这部作品，然后进写作台。 */
+/** 进卷：改编工程进改编工作台，普通工程进写作台。 */
 async function enterProject(id) {
 	if (!(await flushEditor())) return;
 	if (id !== state.projectId) await selectProject(id);
+	if (state.project?.adaptation) {
+		enterAdaptMode();
+		return;
+	}
 	state.mode = "workspace";
 	writeStored(MODE_KEY, "workspace");
 	applyMode();
 	switchViewNow("manuscript");
+}
+
+/**
+ * 改编工作台是独立的一间：从案头进门，不经过生文台的稿 / 料 / 文，
+ * 回案头也只走它自己顶栏那道门。
+ */
+async function openAdaptApp(id) {
+	if (!(await flushEditor())) return;
+	if (id !== state.projectId) await selectProject(id);
+	if (!state.project?.adaptation) {
+		toast("这一部不是改编工程。到案头另起一卷，把原书选作底本。", "warn", 3200);
+		return;
+	}
+	if (!state.chapterId) state.chapterId = state.project.outline[0]?.id ?? null;
+	enterAdaptMode();
+	if (!state.transcripts.has(activeKey("adapt"))) {
+		const adaptation = state.project.adaptation;
+		const source = state.adapt.source?.title ?? adaptation.sourceTitle ?? "原书";
+		appendMessage(
+			"adapt",
+			"assistant",
+			"这一部按《" + source + "》改编，章目已照原书拆好。\n" +
+				"总要求：" + adaptation.brief + "\n" +
+				"左边是原文，右边是改稿；改完先给你看一版，你点头才落盘。交代这一章怎么改，或直接点「呈上」。",
+		);
+	}
+}
+
+function enterAdaptMode() {
+	state.mode = "adapt";
+	writeStored(MODE_KEY, "adapt");
+	applyMode();
+	renderView();
+}
+
+function leaveAdaptApp() {
+	if (streamBusy("adapt") && !window.confirm("改编者还在改这一章，现在回案头会中断这一笔。仍要回去？")) return;
+	if (state.adaptAbort) {
+		state.adaptAbort.abort();
+		state.adaptAbort = null;
+	}
+	state.mode = "home";
+	writeStored(MODE_KEY, "home");
+	applyMode();
+	renderView();
 }
 
 /** 回案头：作品仍留在案上，只是不进写作台。 */
@@ -2176,6 +2295,7 @@ function projectCard(project) {
 	const card = el("div", "card record" + (onDesk ? " is-on" : ""));
 	const head = el("div", "record-head");
 	head.append(el("h4", "", project.title));
+	if (project.adapted) head.append(el("span", "ok", "改编"));
 	if (onDesk) head.append(el("span", "ok", "案上"));
 	card.append(head);
 
@@ -2198,7 +2318,11 @@ function projectCard(project) {
 	if (project.updatedAt && !compact) card.append(el("div", "tagline", "最近动笔 " + fmtTime(project.updatedAt)));
 
 	const actions = el("div", "mat-actions");
-	actions.append(button(onDesk ? "继续写" : "开卷", "btn btn-ink btn-xs", () => void enterProject(project.id)));
+	actions.append(
+		project.adapted
+			? button(onDesk ? "继续改编" : "改编", "btn btn-ink btn-xs", () => void openAdaptApp(project.id))
+			: button(onDesk ? "继续写" : "开卷", "btn btn-ink btn-xs", () => void enterProject(project.id)),
+	);
 	// 快照管素材与大纲的误改；整部作品误删去回收站恢复。
 	actions.append(button("存照", "btn btn-quiet btn-xs", () => void openSnapshotDialog(project)));
 	actions.append(iconButton("改", "btn btn-quiet btn-xs act act-edit", () => openProjectDialog(project), "改作品信息"));
@@ -5955,33 +6079,32 @@ function populateAdaptSources() {
 	}
 }
 
-function renderAdaptChapterSelect(project) {
-	const select = $("adapt-chapter");
-	if (!select) return;
-	select.replaceChildren();
-	if (project.outline.length === 0) {
-		const option = el("option", "", "尚无章目");
-		option.value = "";
-		select.append(option);
-		select.disabled = true;
-		return;
-	}
-	select.disabled = false;
-	const placeholder = el("option", "", "选择章节…");
-	placeholder.value = "";
-	select.append(placeholder);
+/** 左栏章目：一章一行，点一行就换一章。改编是"一章一章改"，全貌得一直看得见。 */
+function renderAdaptChapterList(project) {
+	const list = $("adapt-chapters");
+	if (!list) return;
+	list.replaceChildren();
+	$("adapt-empty")?.classList.toggle("hidden", project.outline.length > 0);
 	project.outline.forEach((item, index) => {
-		const volume = volumeOf(item);
-		const adapted = project.drafts[item.id]?.hasDraft ? "已改" : "未改";
-		const option = el(
-			"option",
-			"",
-			`第${toCn(index + 1)}章 · ${item.title} · ${adapted}${volume ? " · " + volume.title : ""}`,
-		);
-		option.value = item.id;
-		select.append(option);
+		const meta = project.drafts[item.id];
+		const adapted = Boolean(meta?.hasDraft);
+		const li = el("li", "adapt-chapter-item" + (item.id === state.chapterId ? " is-on" : ""));
+		const row = el("button", "adapt-chapter-btn");
+		row.type = "button";
+		row.append(el("span", "adapt-chapter-index", String(index + 1).padStart(2, "0")));
+		const middle = el("span", "adapt-chapter-mid");
+		middle.append(el("span", "adapt-chapter-name", item.title));
+		const bits = [];
+		if (item.pov) bits.push("视角 " + item.pov);
+		bits.push(adapted ? "已改 · 第 " + meta.revision + " 稿" : "未改");
+		bits.push(fmt(adapted ? meta.words : 0) + " 字");
+		middle.append(el("span", "adapt-chapter-state", bits.join(" · ")));
+		row.append(middle);
+		row.append(el("span", "adapt-chapter-dot", adapted ? "●" : "○"));
+		row.addEventListener("click", () => setAdaptChapter(item.id));
+		li.append(row);
+		list.append(li);
 	});
-	select.value = state.chapterId ?? "";
 }
 
 function fillAdaptText(box, text, emptyText) {
@@ -6038,8 +6161,6 @@ function renderAdaptActions(project) {
 	const a = state.adapt;
 	const chapter = state.chapterId ? project.outline.find((item) => item.id === state.chapterId) : null;
 	const busy = streamBusy("adapt");
-	box.append(button("改编要求", "btn btn-quiet btn-sm", () => openAdaptBriefDialog()));
-	box.append(button("改动台账", "btn btn-quiet btn-sm", () => openAdaptLedgerDialog()));
 	if (!chapter) return;
 	if (a.editing) {
 		box.append(adaptButton("存下手改", "btn btn-ink btn-sm", () => void saveAdaptHandEdit(), !a.draftDirty || busy));
@@ -6158,17 +6279,31 @@ async function ensureAdaptChapter(chapterId) {
 		a.error = error.message;
 	} finally {
 		a.loadingFor = null;
-		if (state.projectId === projectId && state.chapterId === chapterId && state.view === "adapt") renderAdaptView();
+		if (state.projectId === projectId && state.chapterId === chapterId && state.mode === "adapt") renderAdaptView();
 	}
 }
 
-/** 改编工作台：左原文、右改编稿，底下一排改动与一扇对话。 */
+/** 底本章名常常自带「第一章」，再拼一次册号就重了；自带的直接用。 */
+function chapterHeading(chapter, index) {
+	const title = chapter.title.trim();
+	if (/^第[0-9０-９零〇一二三四五六七八九十百千万两]+[章节回]/.test(title)) return title;
+	return `第${toCn(index + 1)}章 · ${title}`;
+}
+
+/** 改编工作台：左章目、中双栏、底下一排改动与一扇对话。整间独立于生文台。 */
 function renderAdaptView() {
 	const project = state.project;
 	if (!project) return;
-	$("stage-actions").replaceChildren();
-	renderAdaptChapterSelect(project);
+	$("adapt-project-title").textContent = project.title;
+	$("adapt-project-stats").textContent = statsLine();
+	renderAdaptChapterList(project);
 	renderAdaptActions(project);
+	const chapterIndex = project.outline.findIndex((item) => item.id === state.chapterId);
+	const chapter = chapterIndex >= 0 ? project.outline[chapterIndex] : null;
+	$("adapt-chapter-title").textContent = chapter ? chapterHeading(chapter, chapterIndex) : "改编";
+	$("adapt-progress").textContent = project.outline.length
+		? `已改 ${state.stats?.draftedChapters ?? 0} / ${project.outline.length}`
+		: "";
 	if (!project.adaptation) {
 		state.adapt.brief = "";
 		state.adapt.source = null;
@@ -6184,7 +6319,6 @@ function renderAdaptView() {
 		return;
 	}
 	void ensureAdaptation();
-	const chapter = state.chapterId ? project.outline.find((item) => item.id === state.chapterId) : null;
 	const sourceTitle = state.adapt.source?.title ?? project.adaptation.sourceTitle ?? "原书";
 	const brief = state.adapt.brief || project.adaptation.brief;
 	$("adapt-status").textContent = chapter
@@ -6301,8 +6435,8 @@ async function runAdapt(note, options = {}) {
 				headers: { "content-type": "application/json" },
 				signal: state.adaptAbort.signal,
 				body: JSON.stringify({
-					modelRef: $("model-select").value,
-					thinkingLevel: $("thinking-select").value,
+					modelRef: $("adapt-model")?.value || $("model-select").value,
+					thinkingLevel: $("adapt-thinking")?.value || $("thinking-select").value,
 					requestId: newRequestId(),
 					...(note ? { note } : {}),
 					...(options.recordId ? { recordId: options.recordId } : {}),
@@ -6340,7 +6474,7 @@ async function runAdapt(note, options = {}) {
 				failed ? "这一笔没能收尾，章目与台账没能同步刷新" : "改编稿已交，但章目与台账没能同步刷新",
 				failed ? {} : { quiet: true },
 			);
-			if (state.view === "adapt") renderAdaptView();
+			if (state.mode === "adapt") renderAdaptView();
 		}
 	}
 	return true;
@@ -6413,7 +6547,7 @@ async function adoptAdaptProposal() {
 		state.adapt.loadedFor = chapterId;
 		toast("已采用 · 第 " + state.adapt.adopted.revision + " 稿", "ok", 2600);
 		await reloadProject();
-		if (state.view === "adapt") renderAdaptView();
+		if (state.mode === "adapt") renderAdaptView();
 	} catch (error) {
 		toast("采用失败：" + error.message, "error", 5200);
 	}
@@ -6494,7 +6628,7 @@ async function saveAdaptHandEdit() {
 		a.loadedFor = chapterId;
 		toast("已存稿 · 第 " + a.adopted.revision + " 稿", "ok", 2200);
 		await reloadProject();
-		if (state.view === "adapt") renderAdaptView();
+		if (state.mode === "adapt") renderAdaptView();
 	} catch (error) {
 		toast("存稿失败：" + error.message, "error", 5200);
 	}
@@ -6551,7 +6685,12 @@ function openAdaptLedgerDialog() {
 	openDialog($("adapt-ledger-dialog"), { focus: "#adapt-ledger-close" });
 }
 
-$("adapt-chapter")?.addEventListener("change", () => setAdaptChapter($("adapt-chapter").value));
+$("adapt-leave")?.addEventListener("click", leaveAdaptApp);
+$("adapt-brief-open")?.addEventListener("click", openAdaptBriefDialog);
+$("adapt-ledger-open")?.addEventListener("click", openAdaptLedgerDialog);
+$("adapt-theme")?.addEventListener("click", () => $("theme-toggle")?.click());
+$("adapt-shortcuts")?.addEventListener("click", openShortcutsDialog);
+$("adapt-model")?.addEventListener("change", () => renderAdaptThinkingLevels());
 $("adapt-editor")?.addEventListener("input", () => {
 	state.adapt.draft = $("adapt-editor").value;
 	state.adapt.draftDirty = true;
@@ -7401,26 +7540,15 @@ $("project-form").addEventListener("submit", async (event) => {
 			state.libraryPick = new Set();
 			closeDialog($("project-dialog"));
 			await reloadProjects();
-			// 改编工程立好就直接进写作台：章目已照原书拆开，第一步就是交代怎么改；
+			// 改编工程立好就直接进改编台：章目已照原书拆开，第一步就是交代怎么改；
 			// 普通新卷仍留在案头（作者通常还要先立卷、装料）。
 			if (result.project.adaptation) {
-				await enterProject(result.project.id);
+				await openAdaptApp(result.project.id);
 			} else {
 				await selectProject(result.project.id);
 			}
 			if (taken > 0) {
 				appendMessage("material", "assistant", "已从通用素材库取用 " + taken + " 条料，副本在这部作品的素材库里。");
-			}
-			// 把作者带到改编工作台：先看到第一章原文，才好交代怎么改。
-			if (result.project.adaptation) {
-				switchViewNow("adapt");
-				appendMessage(
-					"adapt",
-					"assistant",
-					"这一部按《" + (result.project.adaptation.sourceTitle ?? "原书") + "》改编，章目已照原书拆好。\n" +
-						"总要求：" + result.project.adaptation.brief + "\n" +
-						"选一章，交代这一章怎么改；我改完会交一版双栏对照稿，你点头才存。",
-				);
 			}
 		}
 	} catch (err) {
@@ -8528,7 +8656,7 @@ async function pumpStream(res, pane, epoch = streamSlot(pane).epoch, waiting = n
 					state.adapt.draft = "";
 					state.adapt.draftDirty = false;
 					state.adapt.loadedFor = state.chapterId;
-					if (state.view === "adapt") renderAdaptView();
+					if (state.mode === "adapt") renderAdaptView();
 					break;
 				}
 				case "run_end":
@@ -8824,7 +8952,13 @@ document.addEventListener("keydown", (event) => {
 	if (mod && ["1", "2", "3", "4"].includes(event.key) && !event.shiftKey) {
 		if (typing) return;
 		event.preventDefault();
-		switchView(["manuscript", "materials", "writing", "adapt"][Number(event.key) - 1]);
+		if (event.key === "4") {
+			// 改编是另一间：只有改编工程才开得了这扇门。
+			if (state.project?.adaptation) void openAdaptApp(state.project.id);
+			else toast("这一部不是改编工程，没有改编台可开。", "info", 2400);
+			return;
+		}
+		switchView(["manuscript", "materials", "writing"][Number(event.key) - 1]);
 		return;
 	}
 	if (event.altKey && (event.key === "ArrowUp" || event.key === "ArrowDown") && !typing) {
@@ -9073,6 +9207,8 @@ window.addEventListener("settings-changed", async () => {
 	if (data.models.some((model) => model.id === previous)) $("model-select").value = previous;
 	// 档位能力可能刚被改过（比如给模型勾上了思考），按新能力重列。
 	renderThinkingLevels(level);
+	// 改编台顶栏那两枚下拉也跟着换笔墨。
+	syncAdaptModelPickers();
 });
 
 $("material-view-close").addEventListener("click", () => closeDialog($("material-view")));
