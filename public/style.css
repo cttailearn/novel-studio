@@ -8111,7 +8111,8 @@ textarea::placeholder { color: var(--ink-hold); opacity: 1; }
 /* ═══════════════════════════════════════════════════ 改 · 改编工作台
    双栏对照：左原文、右改编稿；底下台面摆这一章的改动与一扇对话。
    两栏等高、各自滚动 —— 作者常要停在一处对着看，整页一起滚会看丢位置。 */
-#view-adapt { display: flex; flex-direction: column; min-height: 0; }
+/* 显示交给 .view / .view.is-on；这里只补它自己的排布，别抢 display。 */
+#view-adapt { min-height: 0; }
 
 .adapt-stage { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 

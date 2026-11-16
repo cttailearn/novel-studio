@@ -6245,6 +6245,9 @@ function setAdaptChapter(chapterId) {
 		state.adaptAbort.abort();
 		state.adaptAbort = null;
 	}
+	// 对话是按章记的：换了章，先把上一章这一轮收进它自己的快照，再换上新的这一章。
+	endStream("adapt");
+	mountStream("adapt");
 	renderChapters();
 	renderAdaptView();
 }
