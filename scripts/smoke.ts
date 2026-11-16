@@ -388,7 +388,12 @@ try {
 		store.get(project.id)!.outline.find((c) => c.id === "ch01")!.materialIds.length === 2,
 		String(store.get(project.id)!.outline.find((c) => c.id === "ch01")!.materialIds.length),
 	);
-	check("标题确实改了", store.get(project.id)!.outline.find((c) => c.id === "ch01")!.title === "第一章 雨夜（改）");
+	// 已有章标题是作者的定稿：智能体只许换装料，不许改题（见 tools.ts update_outline）。
+	check(
+		"已有章标题不被智能体改掉",
+		store.get(project.id)!.outline.find((c) => c.id === "ch01")!.title === "第一章 雨夜",
+		store.get(project.id)!.outline.find((c) => c.id === "ch01")!.title,
+	);
 	const partiallyMerged = store.get(project.id)!.outline.find((c) => c.id === "ch01")!;
 	check("已有章只合并显式字段", partiallyMerged.pov === "林晓" && partiallyMerged.notes === "保留这条批注" && partiallyMerged.targetWords === 3000 && partiallyMerged.status === "planned", JSON.stringify(partiallyMerged));
 	await call("update_outline", { chapters: [{ id: "ch-new", title: "新章", summary: "新章要略" }] });

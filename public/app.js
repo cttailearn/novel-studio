@@ -50,6 +50,8 @@ const PANES = {
 	writing: { stream: "writing-stream", input: "writing-input", assistant: "执笔者" },
 	// 案头上的设定官：不绑作品，直接往通用素材库里备料。
 	library: { stream: "library-stream", input: "library-input", assistant: "设定官" },
+	// 改编工作台：只交提案，作者点「采用」才落盘。
+	adapt: { stream: "adapt-stream", input: "adapt-input", assistant: "改编者" },
 };
 
 /** 素材陈列方式：grid=格子，cols=按列。全局一份，存本机。 */
@@ -126,7 +128,7 @@ const state = {
 	/** 每个会话的对话快照。切换章节时来回换，不丢上下文。 */
 	transcripts: new Map(),
 	/** 面板当前显示的会话键，用来判断该不该换内容。 */
-	streamKeys: { material: null, writing: null, library: null },
+	streamKeys: { material: null, writing: null, library: null, adapt: null },
 	/** 「另起一席」的二次确认：先记住哪个面板，再点一次才真弃。 */
 	pendingNewChat: null,
 	/**
@@ -152,7 +154,30 @@ const state = {
 		material: { epoch: 0, holder: null, waiting: null, busy: false },
 		writing: { epoch: 0, holder: null, waiting: null, busy: false },
 		library: { epoch: 0, holder: null, waiting: null, busy: false },
+		adapt: { epoch: 0, holder: null, waiting: null, busy: false },
 	},
+	/**
+	 * 改编工作台的当前状态：原书、本章原文、挂着的提案、已采用的稿子。
+	 *
+	 * 提案只活在服务端内存里（24 小时），这里存的是取回来的一份副本；
+	 * 作者手改时 draft 就是双栏里那一版的草稿，采用成功后才写回正文。
+	 */
+	adapt: {
+		metaLoadedFor: null,
+		loadedFor: null,
+		loadingFor: null,
+		brief: "",
+		source: null,
+		original: null,
+		adopted: null,
+		proposal: null,
+		editing: false,
+		draft: "",
+		draftDirty: false,
+		error: "",
+	},
+	/** 改编这一轮的 AbortController，让「止笔」对它也有效。 */
+	adaptAbort: null,
 	/**
 	 * 换笔时正撞上生成的那几席：先记下 sessionId → 它属于哪块面板，
 	 * 等那一轮收完再补发。服务端在生成途中换模型会回 409
@@ -168,6 +193,10 @@ const state = {
 	uploads: [],
 	/** 持久化原料库：普通资料 + 整本小说。 */
 	materialSources: [],
+	/** 原料库读过一次没有：新建卷宗那扇改编下拉据此决定要不要先取。 */
+	materialSourcesLoaded: false,
+	/** 新建卷宗时选中的底本 id。 */
+	adaptSourcePick: "",
 	/** 原料分组的展开状态；默认两类都展开。 */
 	materialGroupOpen: { document: true, novel: true },
 
@@ -1818,6 +1847,7 @@ function switchViewNow(view) {
 	$("view-manuscript").classList.toggle("is-on", view === "manuscript");
 	$("view-materials").classList.toggle("is-on", view === "materials");
 	$("view-writing").classList.toggle("is-on", view === "writing");
+	$("view-adapt").classList.toggle("is-on", view === "adapt");
 	applyMode();
 	renderView();
 	// 新视图刚从 display:none 里出来，两栏这一帧才有宽度：补量一次窄栏类。
@@ -1830,6 +1860,8 @@ function renderView() {
 	mountStream("writing");
 	// 库面板挂在案头上，但它在 DOM 里始终存在，无条件挂载才能保住它的对话。
 	mountStream("library");
+	// 改编面板同样常驻：提案要跨章、跨视图留着。
+	mountStream("adapt");
 
 	// 案头不依赖某部作品，所以要在"没有作品"的早退之前处理。
 	if (state.mode === "home") return renderHomeView();
@@ -1847,6 +1879,7 @@ function renderView() {
 
 	if (state.view === "manuscript") renderManuscriptView();
 	else if (state.view === "materials") renderMaterialsBench();
+	else if (state.view === "adapt") renderAdaptView();
 	else renderWritingBench();
 	updateMobileNav();
 }
@@ -1907,7 +1940,13 @@ function showMobileView(view) {
 		return;
 	}
 	if (!state.project) {
-		toast("先开一卷，再进" + (view === "materials" ? "素材" : view === "writing" ? "生文" : "文稿") + "。", "info", 3000);
+		toast(
+			"先开一卷，再进" +
+				(view === "materials" ? "素材" : view === "writing" ? "生文" : view === "adapt" ? "改编" : "文稿") +
+				"。",
+			"info",
+			3000,
+		);
 		return;
 	}
 	if (state.mode === "home") {
@@ -2447,6 +2486,7 @@ function openProjectDialog(project) {
 	state.editingProjectId = project ? project.id : null;
 	state.libraryPick = new Set();
 	state.libraryPickQuery = "";
+	state.adaptSourcePick = "";
 
 	const form = $("project-form");
 	form.reset();
@@ -2461,6 +2501,10 @@ function openProjectDialog(project) {
 	$("project-more").open = Boolean(project);
 	// 取用只在新建时有意义。
 	$("library-pick").closest(".field-grow").classList.toggle("hidden", Boolean(project));
+	// 改编只在新立卷时选：已经开好的卷宗不该半路改底本。
+	$("project-adapt-field").classList.toggle("hidden", Boolean(project));
+	$("project-adapt-brief").value = "";
+	if (!project) populateAdaptSources(project);
 
 	if (project) {
 		form.elements.title.value = project.title;
@@ -4410,6 +4454,8 @@ async function loadNovelSources(options = {}) {
 		state.materialSources = [];
 		if (options.loud) toast("原料库读取失败：" + error.message, "error");
 	}
+	// 读没读到都算「读过」：新建卷宗那扇改编下拉据此决定还替不替它再取一次。
+	state.materialSourcesLoaded = true;
 	renderMaterialSources();
 }
 
@@ -5851,6 +5897,706 @@ function submitWriting(text) {
 	void runWrite(mode, note, chapterId);
 }
 
+// ═══════════════════════════════════════════════════ 改 · 改编工作台
+
+const ADAPT_KIND_LABELS = {
+	character: "人物",
+	persona: "人设",
+	plot: "剧情",
+	pov: "人称",
+	addition: "加料",
+	style: "文风",
+	other: "其他",
+};
+
+function adaptKindLabel(kind) {
+	return ADAPT_KIND_LABELS[kind] ?? "其他";
+}
+
+/** 改编按钮：与 button 一样，只是要能一开门就是灰的。 */
+function adaptButton(label, className, onClick, disabled = false) {
+	const node = button(label, className, onClick);
+	node.disabled = disabled;
+	return node;
+}
+
+let adaptSourcesLoading = false;
+
+/** 新立卷时列出可分章的小说。原料库还没读过就先读一次，读完再补一遍选项。 */
+function populateAdaptSources() {
+	const select = $("project-adapt-source");
+	if (!select) return;
+	const picked = select.value;
+	select.replaceChildren();
+	const none = el("option", "", "—— 不改编，直接立卷 ——");
+	none.value = "";
+	select.append(none);
+	const sources = (state.materialSources ?? []).filter((source) => source.kind !== "document");
+	for (const source of sources) {
+		const option = el("option", "", `${source.title}（${source.chapterCount} 章 · ${fmt(source.totalChars)} 字）`);
+		option.value = source.id;
+		select.append(option);
+	}
+	if (sources.length === 0) {
+		const empty = el("option", "", adaptSourcesLoading ? "正在读原料库…" : "原料库里还没有整本小说（先到「料」上传）");
+		empty.value = "";
+		empty.disabled = true;
+		select.append(empty);
+	}
+	select.value = sources.some((source) => source.id === picked) ? picked : state.adaptSourcePick || "";
+	if (!state.materialSourcesLoaded && !adaptSourcesLoading) {
+		adaptSourcesLoading = true;
+		void loadNovelSources()
+			.catch(() => {})
+			.finally(() => {
+				adaptSourcesLoading = false;
+				if ($("project-dialog").open && !state.editingProjectId) populateAdaptSources();
+			});
+	}
+}
+
+function renderAdaptChapterSelect(project) {
+	const select = $("adapt-chapter");
+	if (!select) return;
+	select.replaceChildren();
+	if (project.outline.length === 0) {
+		const option = el("option", "", "尚无章目");
+		option.value = "";
+		select.append(option);
+		select.disabled = true;
+		return;
+	}
+	select.disabled = false;
+	const placeholder = el("option", "", "选择章节…");
+	placeholder.value = "";
+	select.append(placeholder);
+	project.outline.forEach((item, index) => {
+		const volume = volumeOf(item);
+		const adapted = project.drafts[item.id]?.hasDraft ? "已改" : "未改";
+		const option = el(
+			"option",
+			"",
+			`第${toCn(index + 1)}章 · ${item.title} · ${adapted}${volume ? " · " + volume.title : ""}`,
+		);
+		option.value = item.id;
+		select.append(option);
+	});
+	select.value = state.chapterId ?? "";
+}
+
+function fillAdaptText(box, text, emptyText) {
+	if (!box) return;
+	box.replaceChildren();
+	const body = String(text ?? "").trim();
+	box.classList.toggle("is-empty", !body);
+	if (!body) {
+		box.append(el("p", "adapt-empty", emptyText));
+		return;
+	}
+	for (const paragraph of body.split(/\n+/)) {
+		const line = paragraph.trim();
+		if (line) box.append(el("p", "", line));
+	}
+}
+
+function renderAdaptPlaceholder(title, note) {
+	$("adapt-original-meta").textContent = "";
+	$("adapt-adapted-meta").textContent = "";
+	fillAdaptText($("adapt-original"), "", title);
+	fillAdaptText($("adapt-adapted"), "", note);
+	renderAdaptChanges([]);
+}
+
+function renderAdaptChanges(changes) {
+	const box = $("adapt-changes");
+	if (!box) return;
+	box.replaceChildren();
+	const rows = Array.isArray(changes) ? changes : [];
+	if (rows.length === 0) {
+		box.append(el("span", "adapt-changes-note", "这一章还没有改动记录。"));
+		return;
+	}
+	box.append(el("span", "adapt-changes-label", "改动"));
+	for (const change of rows) {
+		const chip = el("span", "adapt-change");
+		chip.dataset.kind = change.kind ?? "other";
+		chip.append(el("span", "adapt-change-kind", adaptKindLabel(change.kind)));
+		chip.append(el("span", "adapt-change-text", change.summary));
+		if (change.detail) chip.title = change.detail;
+		box.append(chip);
+	}
+}
+
+function renderAdaptActions(project) {
+	const box = $("adapt-actions");
+	if (!box) return;
+	box.replaceChildren();
+	if (!project.adaptation) {
+		box.append(button("另起一卷改编", "btn btn-ink btn-sm", () => openProjectDialog(null)));
+		return;
+	}
+	const a = state.adapt;
+	const chapter = state.chapterId ? project.outline.find((item) => item.id === state.chapterId) : null;
+	const busy = streamBusy("adapt");
+	box.append(button("改编要求", "btn btn-quiet btn-sm", () => openAdaptBriefDialog()));
+	box.append(button("改动台账", "btn btn-quiet btn-sm", () => openAdaptLedgerDialog()));
+	if (!chapter) return;
+	if (a.editing) {
+		box.append(adaptButton("存下手改", "btn btn-ink btn-sm", () => void saveAdaptHandEdit(), !a.draftDirty || busy));
+		box.append(button("作罢", "btn btn-quiet btn-sm", () => cancelAdaptEdit()));
+		return;
+	}
+	if (a.proposal) {
+		box.append(adaptButton("采用这一版", "btn btn-ink btn-sm", () => void adoptAdaptProposal(), busy));
+		box.append(button("手改一稿", "btn btn-quiet btn-sm", () => startAdaptEdit()));
+		box.append(button("再改一遍", "btn btn-quiet btn-sm", () => focusAdaptInput("在这一版的基础上再改：")));
+		box.append(adaptButton("弃掉这版", "btn btn-quiet btn-sm", () => void discardAdaptProposal(), busy));
+		return;
+	}
+	box.append(button(a.adopted ? "手改此章" : "开始手改", "btn btn-quiet btn-sm", () => startAdaptEdit()));
+	if (project.drafts[chapter.id]?.hasDraft) {
+		box.append(button("版本", "btn btn-quiet btn-sm", () => openHistoryDialog(chapter.id)));
+	}
+}
+
+function renderAdaptMeta() {
+	const a = state.adapt;
+	const project = state.project;
+	if (!project) return;
+	const chapter = state.chapterId ? project.outline.find((item) => item.id === state.chapterId) : null;
+	const original = a.original;
+	$("adapt-original-meta").textContent = original
+		? `${original.index} · ${fmt(original.chars ?? original.content.length)} 字`
+		: a.error
+			? "原文未载入"
+			: chapter
+				? "……"
+				: "";
+	const proposal = a.proposal;
+	const adopted = a.adopted;
+	$("adapt-adapted-meta").textContent = a.editing
+		? "手改中 · 存下才生效"
+		: proposal
+			? `改编者交稿 · ${fmt(countWords(proposal.content))} 字 · 待采用`
+			: adopted
+				? `第 ${adopted.revision} 稿 · ${fmt(countWords(adopted.content))} 字`
+				: chapter
+					? "尚未改编"
+					: "";
+	const talkCount = $("adapt-talk-count");
+	if (talkCount) talkCount.textContent = proposal ? "有一版待采用" : "";
+}
+
+let adaptMetaPromise = null;
+
+/** 读这一部的底本与总要求。切工程后会重读；同一部只读一次。 */
+async function ensureAdaptation() {
+	const projectId = state.projectId;
+	if (!projectId || state.adapt.metaLoadedFor === projectId) return state.adapt;
+	if (adaptMetaPromise) return adaptMetaPromise;
+	const a = state.adapt;
+	adaptMetaPromise = (async () => {
+		try {
+			const data = await api("/api/projects/" + encodeURIComponent(projectId) + "/adaptation");
+			if (state.projectId !== projectId) return a;
+			a.brief = data.adaptation?.brief ?? "";
+			a.source = data.source ?? null;
+			a.error = "";
+		} catch (error) {
+			if (state.projectId !== projectId) return a;
+			a.error = error.message;
+			a.brief = "";
+			a.source = null;
+		} finally {
+			if (state.projectId === projectId) a.metaLoadedFor = projectId;
+			adaptMetaPromise = null;
+		}
+		return a;
+	})();
+	return adaptMetaPromise;
+}
+
+/** 取这一章的原文、待采用提案与已存改编稿。三者都不在时也要落到 loadedFor，免得反复重取。 */
+async function ensureAdaptChapter(chapterId) {
+	const projectId = state.projectId;
+	const project = state.project;
+	if (!projectId || !project || !chapterId) return;
+	const a = state.adapt;
+	if (a.loadedFor === chapterId || a.loadingFor === chapterId) return;
+	a.loadingFor = chapterId;
+	a.error = "";
+	try {
+		await ensureAdaptation();
+		const sourceId = a.source?.id ?? project.adaptation?.sourceId;
+		const chapterKey = encodeURIComponent(chapterId);
+		const [original, proposalData, draft] = await Promise.all([
+			sourceId
+				? api(`/api/material-sources/${encodeURIComponent(sourceId)}/chapters/${chapterKey}`).catch(() => null)
+				: Promise.resolve(null),
+			api(`/api/projects/${encodeURIComponent(projectId)}/chapters/${chapterKey}/adapt`).catch(() => ({ proposal: null })),
+			project.drafts[chapterId]?.hasDraft
+				? api(`/api/projects/${encodeURIComponent(projectId)}/chapters/${chapterKey}/draft`).catch(() => null)
+				: Promise.resolve(null),
+		]);
+		if (state.projectId !== projectId || state.chapterId !== chapterId) return;
+		a.original = original?.chapter ?? null;
+		a.proposal = proposalData?.proposal ?? null;
+		a.adopted = draft?.chapter?.content
+			? {
+					content: draft.chapter.content,
+					summary: draft.chapter.summary ?? "",
+					revision: draft.chapter.revision ?? 0,
+				}
+			: null;
+		if (!a.proposal) {
+			a.editing = false;
+			a.draft = "";
+			a.draftDirty = false;
+		}
+		a.loadedFor = chapterId;
+	} catch (error) {
+		a.error = error.message;
+	} finally {
+		a.loadingFor = null;
+		if (state.projectId === projectId && state.chapterId === chapterId && state.view === "adapt") renderAdaptView();
+	}
+}
+
+/** 改编工作台：左原文、右改编稿，底下一排改动与一扇对话。 */
+function renderAdaptView() {
+	const project = state.project;
+	if (!project) return;
+	$("stage-actions").replaceChildren();
+	renderAdaptChapterSelect(project);
+	renderAdaptActions(project);
+	if (!project.adaptation) {
+		state.adapt.brief = "";
+		state.adapt.source = null;
+		state.adapt.proposal = null;
+		state.adapt.adopted = null;
+		state.adapt.original = null;
+		$("adapt-status").textContent = "这一部不是改编工程";
+		$("adapt-status").title = "";
+		renderAdaptPlaceholder(
+			"这一部不是改编工程",
+			"从案头另起一卷时把原书选作底本，章目会照原书拆好，就能在这里一章一章改。",
+		);
+		return;
+	}
+	void ensureAdaptation();
+	const chapter = state.chapterId ? project.outline.find((item) => item.id === state.chapterId) : null;
+	const sourceTitle = state.adapt.source?.title ?? project.adaptation.sourceTitle ?? "原书";
+	const brief = state.adapt.brief || project.adaptation.brief;
+	$("adapt-status").textContent = chapter
+		? `底本《${sourceTitle}》 · ${state.adapt.adopted ? `已存第 ${state.adapt.adopted.revision} 稿` : "尚未存稿"}`
+		: `底本《${sourceTitle}》 · 共 ${project.outline.length} 章`;
+	$("adapt-status").title = brief ? "改编总要求：" + brief : "";
+	if (!chapter) {
+		// 初次进门直接把第一章请上来：改编是"一章一章改"，
+		// 让作者先点一次下拉再看到原文，等于白白多一步。
+		const first = project.outline[0];
+		if (first) {
+			setAdaptChapter(first.id);
+			return;
+		}
+		renderAdaptPlaceholder("这一部还没有章目", "从案头另起一卷时把原书选作底本，章目会照原书拆好。");
+		return;
+	}
+	void ensureAdaptChapter(chapter.id);
+	const a = state.adapt;
+	if (a.loadingFor === chapter.id && a.loadedFor !== chapter.id) {
+		renderAdaptPlaceholder("原文载入中……", "改编稿载入中……");
+		return;
+	}
+	fillAdaptText($("adapt-original"), a.original?.content ?? "", a.error ? "原文载入失败：" + a.error : "原文还没载入。");
+	const shown = a.proposal?.content ?? a.adopted?.content ?? "";
+	fillAdaptText(
+		$("adapt-adapted"),
+		shown,
+		a.proposal ? "改编者交的稿是空的。" : "这一章还没改过。交代一句，让改编者在原文上改。",
+	);
+	const editor = $("adapt-editor");
+	editor.classList.toggle("hidden", !a.editing);
+	$("adapt-adapted").classList.toggle("hidden", a.editing);
+	if (a.editing) {
+		if (editor.value !== a.draft) editor.value = a.draft;
+		fitEditor(editor);
+	}
+	// 提案优先展示这一版台账；没有提案时回落到已采用的那一版（采用后切回来仍看得见）。
+	const chapterChanges = (project.adaptation.changes ?? []).filter((change) => change.chapterId === chapter.id);
+	renderAdaptChanges(a.proposal?.changes ?? chapterChanges);
+	renderAdaptMeta();
+}
+
+function setAdaptChapter(chapterId) {
+	const next = chapterId || null;
+	if (next === state.chapterId) return;
+	state.chapterId = next;
+	state.adapt.loadedFor = null;
+	state.adapt.loadingFor = null;
+	state.adapt.original = null;
+	state.adapt.proposal = null;
+	state.adapt.adopted = null;
+	state.adapt.editing = false;
+	state.adapt.draft = "";
+	state.adapt.draftDirty = false;
+	state.adapt.error = "";
+	if (state.adaptAbort) {
+		state.adaptAbort.abort();
+		state.adaptAbort = null;
+	}
+	renderChapters();
+	renderAdaptView();
+}
+
+function setAdaptTalk(open) {
+	const talk = $("adapt-talk");
+	if (!talk) return;
+	talk.open = Boolean(open);
+	$("adapt-talk-toggle")?.setAttribute("aria-expanded", talk.open ? "true" : "false");
+}
+
+function focusAdaptInput(prefix = "") {
+	setAdaptTalk(true);
+	const input = $("adapt-input");
+	if (!input) return;
+	if (prefix && !input.value.trim()) input.value = prefix;
+	input.focus();
+	input.setSelectionRange(input.value.length, input.value.length);
+}
+
+function restoreAdaptComposer(text) {
+	restoreComposer("adapt", text);
+}
+
+/**
+ * 改编者「呈上」：把这一章的交代送进 /adapt。
+ *
+ * 交回来的是提案，不落盘 —— 双栏里看过了按「采用这一版」才写进正文。
+ */
+async function runAdapt(note, options = {}) {
+	const projectId = state.projectId;
+	const project = state.project;
+	const chapterId = options.chapterId ?? state.chapterId;
+	if (!project || !project.adaptation || !chapterId) return false;
+	if (streamBusy("adapt")) return false;
+	const chapter = project.outline.find((item) => item.id === chapterId);
+	if (!chapter) return false;
+	state.adaptAbort = new AbortController();
+	setAdaptTalk(true); // 交上去就张开对话：模型在写、能止笔，作者得看得见。
+	beginStream("adapt");
+	appendMessage("adapt", "user", (options.repeat ? "再改一遍" : "改编") + "《" + chapter.title + "》" + (note ? "：" + note : ""));
+	const waiting = showWaiting("adapt");
+	setStreaming("adapt");
+	const epoch = streamSlot("adapt").epoch;
+	let failed = false;
+	try {
+		const response = await fetch(
+			"/api/projects/" + encodeURIComponent(projectId) + "/chapters/" + encodeURIComponent(chapterId) + "/adapt",
+			{
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				signal: state.adaptAbort.signal,
+				body: JSON.stringify({
+					modelRef: $("model-select").value,
+					thinkingLevel: $("thinking-select").value,
+					requestId: newRequestId(),
+					...(note ? { note } : {}),
+					...(options.recordId ? { recordId: options.recordId } : {}),
+				}),
+			},
+		);
+		if (!response.ok || !response.body) {
+			const data = await response.json().catch(() => ({}));
+			throw new Error(data.error || "请求失败 (" + response.status + ")");
+		}
+		await pumpStream(response, "adapt", epoch, waiting, {
+			retry: () => retryAdapt(note, chapterId),
+			retryData: { kind: "retry-adapt", note, chapterId },
+		});
+	} catch (error) {
+		dismissWaiting("adapt", waiting);
+		if (error.name === "AbortError") {
+			if (!streamStale("adapt", epoch)) appendMessage("adapt", "assistant", "已止笔。", epoch);
+		} else if (!streamStale("adapt", epoch)) {
+			failed = true;
+			appendMessage("adapt", "error", describeFailure(error), epoch, {
+				actions: retryActions(() => retryAdapt(note, chapterId), { kind: "retry-adapt", note, chapterId }),
+			});
+			restoreAdaptComposer(note);
+		}
+	} finally {
+		dismissWaiting("adapt", waiting);
+		state.adaptAbort = null;
+		runHandles.delete("adapt");
+		if (!streamStale("adapt", epoch)) {
+			endStream("adapt");
+			setStreaming("adapt", false);
+			await reloadProjectSafely(
+				"adapt",
+				failed ? "这一笔没能收尾，章目与台账没能同步刷新" : "改编稿已交，但章目与台账没能同步刷新",
+				failed ? {} : { quiet: true },
+			);
+			if (state.view === "adapt") renderAdaptView();
+		}
+	}
+	return true;
+}
+
+function retryAdapt(note, chapterId) {
+	if (streamBusy("adapt")) {
+		toast("这一笔还没收完，稍等片刻再试。", "warn");
+		return false;
+	}
+	void runAdapt(note, { repeat: true, chapterId });
+	return true;
+}
+
+function submitAdapt(text) {
+	const note = String(text ?? "").trim();
+	const project = state.project;
+	const chapterId = state.chapterId;
+	if (!project || !project.adaptation) {
+		toast("这一部不是改编工程。到案头另起一卷，把原书选作底本。", "warn");
+		return;
+	}
+	if (!chapterId) {
+		toast("先在章目里点开一章。", "warn");
+		return;
+	}
+	if (streamBusy("adapt")) {
+		toast("改编者还在改，等它交稿再发。", "warn");
+		return;
+	}
+	const input = $("adapt-input");
+	input.value = "";
+	input.dispatchEvent(new Event("input", { bubbles: true }));
+	void runAdapt(note);
+}
+
+/** 采用这一版：把提案（或手改后的稿）写进正文，并把改动记进台账。 */
+async function adoptAdaptProposal() {
+	const project = state.project;
+	const proposal = state.adapt.proposal;
+	const chapterId = state.chapterId;
+	if (!project || !chapterId || streamBusy("adapt")) return;
+	const content = state.adapt.editing ? state.adapt.draft : proposal?.content ?? "";
+	if (!String(content ?? "").trim()) {
+		toast("改编稿是空的，采用不了。", "warn");
+		return;
+	}
+	try {
+		const data = await api(
+			"/api/projects/" + encodeURIComponent(project.id) + "/chapters/" + encodeURIComponent(chapterId) + "/adapt/apply",
+			{
+				method: "POST",
+				body: {
+					...(proposal ? { proposalId: proposal.id } : {}),
+					content,
+					summary: proposal?.summary ?? state.adapt.adopted?.summary ?? "",
+					changes: proposal?.changes ?? [],
+				},
+			},
+		);
+		state.adapt.adopted = {
+			content,
+			summary: data.chapter?.summary ?? proposal?.summary ?? "",
+			revision: data.chapter?.revision ?? (state.adapt.adopted?.revision ?? 0) + 1,
+		};
+		state.adapt.proposal = null;
+		state.adapt.editing = false;
+		state.adapt.draft = "";
+		state.adapt.draftDirty = false;
+		state.adapt.loadedFor = chapterId;
+		toast("已采用 · 第 " + state.adapt.adopted.revision + " 稿", "ok", 2600);
+		await reloadProject();
+		if (state.view === "adapt") renderAdaptView();
+	} catch (error) {
+		toast("采用失败：" + error.message, "error", 5200);
+	}
+}
+
+/** 弃掉尚未采用的提案：正文一个字都不动。 */
+async function discardAdaptProposal() {
+	const project = state.project;
+	const chapterId = state.chapterId;
+	if (!project || !chapterId) return;
+	try {
+		await api(
+			"/api/projects/" + encodeURIComponent(project.id) + "/chapters/" + encodeURIComponent(chapterId) + "/adapt",
+			{ method: "DELETE" },
+		);
+		state.adapt.proposal = null;
+		state.adapt.editing = false;
+		state.adapt.draft = "";
+		state.adapt.draftDirty = false;
+		renderAdaptView();
+		toast("这一版提案已弃掉，正文没动。", "info", 2200);
+	} catch (error) {
+		toast("弃掉失败：" + error.message, "error", 4200);
+	}
+}
+
+function startAdaptEdit() {
+	const a = state.adapt;
+	if (!state.project || !state.chapterId) return;
+	a.draft = a.proposal?.content ?? a.adopted?.content ?? "";
+	a.draftDirty = false;
+	a.editing = true;
+	renderAdaptView();
+	$("adapt-editor")?.focus();
+}
+
+function cancelAdaptEdit() {
+	const a = state.adapt;
+	a.editing = false;
+	a.draft = "";
+	a.draftDirty = false;
+	renderAdaptView();
+}
+
+/**
+ * 存下手改。
+ *
+ * 手改的是改编者的提案：存下即采用（改动清单沿用提案那一份）；
+ * 手改的是已存稿：走普通存稿，不往台账里添东西 —— 那是作者自己的笔。
+ */
+async function saveAdaptHandEdit() {
+	const project = state.project;
+	const chapterId = state.chapterId;
+	const a = state.adapt;
+	if (!project || !chapterId || !a.editing) return;
+	if (!a.draftDirty) {
+		toast("这一版和稿子一样，没什么可存的。", "info", 2000);
+		return;
+	}
+	if (a.proposal) {
+		a.proposal = { ...a.proposal, content: a.draft };
+		await adoptAdaptProposal();
+		return;
+	}
+	try {
+		const data = await api(
+			"/api/projects/" + encodeURIComponent(project.id) + "/chapters/" + encodeURIComponent(chapterId),
+			{ method: "PATCH", body: { content: a.draft } },
+		);
+		a.adopted = {
+			content: a.draft,
+			summary: data.chapter?.summary ?? a.adopted?.summary ?? "",
+			revision: data.chapter?.revision ?? (a.adopted?.revision ?? 0) + 1,
+		};
+		a.editing = false;
+		a.draft = "";
+		a.draftDirty = false;
+		a.loadedFor = chapterId;
+		toast("已存稿 · 第 " + a.adopted.revision + " 稿", "ok", 2200);
+		await reloadProject();
+		if (state.view === "adapt") renderAdaptView();
+	} catch (error) {
+		toast("存稿失败：" + error.message, "error", 5200);
+	}
+}
+
+function openAdaptBriefDialog() {
+	const project = state.project;
+	if (!project?.adaptation) return;
+	$("adapt-brief-source").textContent =
+		"底本《" + (state.adapt.source?.title ?? project.adaptation.sourceTitle ?? "原书") + "》";
+	$("adapt-brief-input").value = state.adapt.brief || project.adaptation.brief || "";
+	$("adapt-brief-error").textContent = "";
+	openDialog($("adapt-brief-dialog"), { focus: "#adapt-brief-input" });
+}
+
+function openAdaptLedgerDialog() {
+	const project = state.project;
+	if (!project?.adaptation) return;
+	const box = $("adapt-ledger-list");
+	box.replaceChildren();
+	const changes = project.adaptation.changes ?? [];
+	if (changes.length === 0) {
+		box.append(el("p", "adapt-empty", "还没有采用过任何改动。"));
+	} else {
+		const byChapter = new Map();
+		for (const change of changes) {
+			const rows = byChapter.get(change.chapterId) ?? [];
+			rows.push(change);
+			byChapter.set(change.chapterId, rows);
+		}
+		for (const [chapterId, rows] of byChapter) {
+			const index = project.outline.findIndex((item) => item.id === chapterId);
+			const chapter = project.outline[index];
+			const group = el("div", "adapt-ledger-group");
+			group.append(
+				el(
+					"div",
+					"adapt-ledger-head",
+					(chapter ? `第${toCn(index + 1)}章 · ${chapter.title}` : chapterId) + ` · ${rows.length} 条`,
+				),
+			);
+			const list = el("ul", "adapt-ledger-items");
+			for (const row of rows) {
+				const item = el("li", "adapt-ledger-item");
+				item.append(el("span", "adapt-change-kind", adaptKindLabel(row.kind)));
+				item.append(el("span", "adapt-change-text", row.summary));
+				if (row.detail) item.title = row.detail;
+				list.append(item);
+			}
+			group.append(list);
+			box.append(group);
+		}
+	}
+	openDialog($("adapt-ledger-dialog"), { focus: "#adapt-ledger-close" });
+}
+
+$("adapt-chapter")?.addEventListener("change", () => setAdaptChapter($("adapt-chapter").value));
+$("adapt-editor")?.addEventListener("input", () => {
+	state.adapt.draft = $("adapt-editor").value;
+	state.adapt.draftDirty = true;
+	fitEditor($("adapt-editor"));
+	renderAdaptActions(state.project);
+});
+$("adapt-talk-toggle")?.addEventListener("click", () => setAdaptTalk(!$("adapt-talk").open));
+$("adapt-talk")?.addEventListener("toggle", () => {
+	$("adapt-talk-toggle")?.setAttribute("aria-expanded", $("adapt-talk").open ? "true" : "false");
+});
+$("project-adapt-source")?.addEventListener("change", () => {
+	const select = $("project-adapt-source");
+	state.adaptSourcePick = select.value;
+	const source = (state.materialSources ?? []).find((item) => item.id === select.value);
+	const title = $("project-form").querySelector('[name="title"]');
+	if (source && title && !String(title.value ?? "").trim()) title.value = source.title + "（改编）";
+});
+$("adapt-brief-cancel")?.addEventListener("click", () => closeDialog($("adapt-brief-dialog")));
+$("adapt-brief-form")?.addEventListener("submit", async (event) => {
+	event.preventDefault();
+	const project = state.project;
+	if (!project?.adaptation) return;
+	const brief = $("adapt-brief-input").value.trim();
+	const error = $("adapt-brief-error");
+	if (!brief) {
+		error.textContent = "总要求不能空着：这一本往哪个方向改。";
+		return;
+	}
+	const submit = event.currentTarget.querySelector("button[type=submit]");
+	submit.disabled = true;
+	try {
+		const data = await api("/api/projects/" + encodeURIComponent(project.id) + "/adaptation", {
+			method: "PATCH",
+			body: { brief },
+		});
+		state.adapt.brief = brief;
+		project.adaptation = data.adaptation ?? project.adaptation;
+		closeDialog($("adapt-brief-dialog"));
+		renderAdaptView();
+		toast("改编总要求已存下", "ok", 2000);
+	} catch (error_) {
+		error.textContent = error_.message;
+	} finally {
+		submit.disabled = false;
+	}
+});
+$("adapt-ledger-close")?.addEventListener("click", () => closeDialog($("adapt-ledger-dialog")));
+
 // ═══════════════════════════════════════════════════ 生成记录
 
 /** 抽屉一次列多少条：与服务端 records.ts 的 RECORDS_KEEP 一致（再要也只留十条）。 */
@@ -6448,6 +7194,26 @@ async function selectProject(id) {
 	// 三块面板各拨一格代次 —— 从前是一个全局代次，现在一块一格，谁也不会漏。
 	invalidateAllStreams();
 	resetProjectSessions();
+	// 改编工作台整块复位：底本、提案、手改草稿都属于上一卷。
+	if (state.adaptAbort) {
+		state.adaptAbort.abort();
+		state.adaptAbort = null;
+	}
+	adaptMetaPromise = null;
+	state.adapt = {
+		metaLoadedFor: null,
+		loadedFor: null,
+		loadingFor: null,
+		brief: "",
+		source: null,
+		original: null,
+		adopted: null,
+		proposal: null,
+		editing: false,
+		draft: "",
+		draftDirty: false,
+		error: "",
+	};
 	state.chapterId = null;
 	// 换了卷，上一条「接着写」也就不作数了：它属于上一卷的某一章。
 	clearWriteRecord({ rerender: false });
@@ -6484,6 +7250,7 @@ async function selectProject(id) {
 	// 免得新卷底下还压着上一卷的半截。
 	$(PANES.material.stream).replaceChildren();
 	$(PANES.writing.stream).replaceChildren();
+	$(PANES.adapt.stream)?.replaceChildren();
 
 	await reloadProject();
 	// 期间又切了别的卷：这一轮的招呼话就不说了，说了也是对着别人案头说。
@@ -6510,7 +7277,7 @@ function resetProjectSessions() {
 	for (const key of [...state.transcripts.keys()]) {
 		if (key !== "library") state.transcripts.delete(key);
 	}
-	state.streamKeys = { ...state.streamKeys, material: null, writing: null };
+	state.streamKeys = { ...state.streamKeys, material: null, writing: null, adapt: null };
 }
 
 function syncBibleTabs() {
@@ -6595,6 +7362,8 @@ $("project-form").addEventListener("submit", async (event) => {
 	const form = event.currentTarget;
 	const error = $("project-form-error");
 	const values = Object.fromEntries(new FormData(form).entries());
+	const adaptSourceId = String(values.adaptSource ?? "").trim();
+	const adaptBrief = String(values.adaptBrief ?? "").trim();
 	const body = {
 		title: values.title,
 		genre: values.genre,
@@ -6602,6 +7371,13 @@ $("project-form").addEventListener("submit", async (event) => {
 		styleGuide: values.styleGuide,
 		targetWords: values.targetWords ? Number(values.targetWords) : 0,
 	};
+	if (!state.editingProjectId && adaptSourceId) {
+		if (!adaptBrief) {
+			error.textContent = "改编要写一句总要求：这一本往哪个方向改。";
+			return;
+		}
+		body.adaptation = { sourceId: adaptSourceId, brief: adaptBrief };
+	}
 	error.textContent = "";
 	const submit = form.querySelector("button[type=submit]");
 	submit.disabled = true;
@@ -6622,9 +7398,26 @@ $("project-form").addEventListener("submit", async (event) => {
 			state.libraryPick = new Set();
 			closeDialog($("project-dialog"));
 			await reloadProjects();
-			await selectProject(result.project.id);
+			// 改编工程立好就直接进写作台：章目已照原书拆开，第一步就是交代怎么改；
+			// 普通新卷仍留在案头（作者通常还要先立卷、装料）。
+			if (result.project.adaptation) {
+				await enterProject(result.project.id);
+			} else {
+				await selectProject(result.project.id);
+			}
 			if (taken > 0) {
 				appendMessage("material", "assistant", "已从通用素材库取用 " + taken + " 条料，副本在这部作品的素材库里。");
+			}
+			// 把作者带到改编工作台：先看到第一章原文，才好交代怎么改。
+			if (result.project.adaptation) {
+				switchViewNow("adapt");
+				appendMessage(
+					"adapt",
+					"assistant",
+					"这一部按《" + (result.project.adaptation.sourceTitle ?? "原书") + "》改编，章目已照原书拆好。\n" +
+						"总要求：" + result.project.adaptation.brief + "\n" +
+						"选一章，交代这一章怎么改；我改完会交一版双栏对照稿，你点头才存。",
+				);
 			}
 		}
 	} catch (err) {
@@ -6672,6 +7465,8 @@ $("promote-form").addEventListener("submit", async (event) => {
 function activeKey(pane) {
 	// 库面板只有一份对话：它不绑作品，切作品也不该换掉它。
 	if (pane === "library") return "library";
+	// 改编按章各留一份对话：同一章接着交代才接得上上下文。
+	if (pane === "adapt") return "adapt:" + (state.chapterId ?? "");
 	return pane === "writing" ? "writing:" + (state.chapterId ?? "") : "material";
 }
 
@@ -7119,7 +7914,8 @@ function dismissAllWaiting() {
 function setStreaming(pane, busy = true) {
 	const slot = streamSlot(pane);
 	slot.busy = busy;
-	const talk = $(PANES[pane].stream).closest(".bench-talk");
+	// 改编台的对话栏不在 .bench-talk 里（左右双栏下面单独一条 dock），一并认下。
+	const talk = $(PANES[pane].stream).closest(".bench-talk, .adapt-dock");
 	if (talk) {
 		const submit = talk.querySelector("button[type=submit]");
 		if (submit) {
@@ -7720,6 +8516,18 @@ async function pumpStream(res, pane, epoch = streamSlot(pane).epoch, waiting = n
 					closeQuestionCard(pane, event);
 					break;
 				}
+				case "proposal": {
+					// 改编者交稿：提案不落盘，摆进右栏等作者采用。
+					const proposal = event.proposal;
+					if (!proposal) break;
+					state.adapt.proposal = proposal;
+					state.adapt.editing = false;
+					state.adapt.draft = "";
+					state.adapt.draftDirty = false;
+					state.adapt.loadedFor = state.chapterId;
+					if (state.view === "adapt") renderAdaptView();
+					break;
+				}
 				case "run_end":
 					ended = true;
 					usage = event.usage;
@@ -7728,7 +8536,8 @@ async function pumpStream(res, pane, epoch = streamSlot(pane).epoch, waiting = n
 						message.wrap.classList.remove("is-writing");
 					}
 					if (event.error) appendMessage(pane, "error", event.error, epoch, { actions: retryActions(context.retry, context.retryData) });
-					if (event.saved === false && !event.aborted) appendMessage(pane, "error", "这一轮没有确认正文已保存；请不要覆盖旧稿，可点「再试一次」安全重试。", epoch, { actions: retryActions(context.retry, context.retryData) });
+					// 改编这一轮的交付物是提案，不是正文：「正文已保存」的说法对它不成立。
+					if (event.saved === false && !event.aborted && pane !== "adapt") appendMessage(pane, "error", "这一轮没有确认正文已保存；请不要覆盖旧稿，可点「再试一次」安全重试。", epoch, { actions: retryActions(context.retry, context.retryData) });
 					break;
 				case "error":
 					appendMessage(pane, "error", event.message, epoch, { actions: retryActions(context.retry, context.retryData) });
@@ -7843,6 +8652,7 @@ function paletteActions() {
 		{ group: "动作", label: "切到文稿", hint: "稿", run: () => switchView("manuscript") },
 		{ group: "动作", label: "切到素材工作台", hint: "料", run: () => switchView("materials") },
 		{ group: "动作", label: "切到生文工作台", hint: "文", run: () => switchView("writing") },
+		{ group: "动作", label: "切到改编工作台", hint: "改", run: () => switchView("adapt") },
 		{ group: "动作", label: "打开设置", hint: "模型与供应商", run: () => $("open-settings").click() },
 		{ group: "动作", label: "键盘快捷键", hint: "?", run: openShortcutsDialog },
 		{ group: "动作", label: "切换昼夜", hint: "主题", run: () => toggleTheme() },
@@ -8008,10 +8818,10 @@ document.addEventListener("keydown", (event) => {
 		}
 		return;
 	}
-	if (mod && ["1", "2", "3"].includes(event.key) && !event.shiftKey) {
+	if (mod && ["1", "2", "3", "4"].includes(event.key) && !event.shiftKey) {
 		if (typing) return;
 		event.preventDefault();
-		switchView(["manuscript", "materials", "writing"][Number(event.key) - 1]);
+		switchView(["manuscript", "materials", "writing", "adapt"][Number(event.key) - 1]);
 		return;
 	}
 	if (event.altKey && (event.key === "ArrowUp" || event.key === "ArrowDown") && !typing) {
@@ -8123,6 +8933,11 @@ for (const [pane, ids] of Object.entries(PANES)) {
 			submitWriting(text);
 			return;
 		}
+		// 改编者的「呈上」交的是这一章的改编交代：空着也算数，按总要求改一遍。
+		if (pane === "adapt") {
+			submitAdapt(text);
+			return;
+		}
 		// 库面板不绑作品，不能拿 projectId 当门槛 —— 那会让它在案头上永远发不出去。
 		const needsProject = pane !== "library";
 		if (!text || streamBusy(pane) || (needsProject && !state.projectId)) return;
@@ -8145,6 +8960,13 @@ for (const [pane, ids] of Object.entries(PANES)) {
 		// 判 pane 是必须的：这块是执笔者的一次性成文，别处的「止笔」不许把它掐掉。
 		if (pane === "writing" && state.writeAbort) {
 			state.writeAbort.abort();
+			dismissWaiting(pane);
+			toast("已止笔。", "info", 1800);
+			return;
+		}
+		// 改编也是一次性请求：掐断 fetch，服务端按断线处理，提案不会半截落盘。
+		if (pane === "adapt" && state.adaptAbort) {
+			state.adaptAbort.abort();
 			dismissWaiting(pane);
 			toast("已止笔。", "info", 1800);
 			return;

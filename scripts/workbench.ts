@@ -82,7 +82,7 @@ const base = `http://127.0.0.1:${port}`;
 const mockPort = await freePort();
 let upstreamHits = 0;
 const upstreamBodies: string[] = [];
-let mockMode: "stream" | "ask" | "write" | "patch" | "chat" = "stream";
+let mockMode: "stream" | "ask" | "write" | "patch" | "chat" | "adapt" = "stream";
 let resolveUpstreamClosed: () => void = () => undefined;
 const upstreamClosed = new Promise<void>((resolve) => {
 	resolveUpstreamClosed = resolve;
@@ -97,6 +97,12 @@ const WRITE_BODY = [
 ].join("\n\n");
 const PATCH_FIND = "数到第十九个就停了。";
 const PATCH_REPLACE = "数到第二十个才停。";
+// 改编提案的固定正文：与原文同样分三段，方便断言采用后落的是提案而不是原文。
+const ADAPT_BODY = [
+	"青禾在渡口等船。",
+	"青禾发现船底有洞。",
+	"青禾游回了岸。",
+].join("\n\n");
 // 局部修改可以指向别的章（比如没装料的空渡章），所以目标由用例在发请求前设定。
 let patchTarget = { chapterId: "ch01", find: PATCH_FIND, replace: PATCH_REPLACE };
 const mockServer = createServer((req, res) => {
@@ -168,6 +174,49 @@ const mockServer = createServer((req, res) => {
 			// 第二轮：作者已经回话，工具结果也回来了，收一句话把这一轮了结。
 			send({ role: "assistant", content: "" });
 			send({ content: "记下了，接着办。" });
+			finish("stop");
+		});
+		return;
+	}
+	if (mockMode === "adapt") {
+		// 改编也是两轮：第一轮交一版提案，作者侧看过之后才会采用（并不在这轮落盘）。
+		const chunks: Buffer[] = [];
+		req.on("data", (chunk: Buffer) => chunks.push(chunk));
+		req.on("end", () => {
+			const body = Buffer.concat(chunks).toString("utf8");
+			upstreamBodies.push(body);
+			res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", connection: "keep-alive" });
+			let hasToolResult = false;
+			try {
+				const parsed = JSON.parse(body) as { messages?: { role?: string }[] };
+				hasToolResult = (parsed.messages ?? []).some((message) => message.role === "tool");
+			} catch {
+				// 解析不出就当第一轮。
+			}
+			if (!hasToolResult) {
+				send({
+					role: "assistant",
+					tool_calls: [
+						{
+							index: 0,
+							id: "call_adapt_1",
+							type: "function",
+							function: {
+								name: "propose_adaptation",
+								arguments: JSON.stringify({
+									content: ADAPT_BODY,
+									summary: "换了主角的名字，其余照原文。",
+									changes: [{ kind: "character", summary: "主角阿青改名青禾" }],
+								}),
+							},
+						},
+					],
+				});
+				finish("tool_calls");
+				return;
+			}
+			send({ role: "assistant", content: "" });
+			send({ content: "这一版改了主角名，其余一字未动。" });
 			finish("stop");
 		});
 		return;
@@ -509,7 +558,15 @@ async function streamWrite(
 	chapterId: string,
 	body: Record<string, unknown>,
 ): Promise<{ status: number; events: Record<string, any>[]; data: Record<string, any> }> {
-	const res = await fetch(base + `/api/projects/${projectId}/chapters/${chapterId}/write`, {
+	return streamPost(`/api/projects/${projectId}/chapters/${chapterId}/write`, body);
+}
+
+/** 读完整条 NDJSON 流；失败时返回普通 JSON 的错误体。 */
+async function streamPost(
+	path: string,
+	body: Record<string, unknown>,
+): Promise<{ status: number; events: Record<string, any>[]; data: Record<string, any> }> {
+	const res = await fetch(base + path, {
 		method: "POST",
 		headers: { "content-type": "application/json" },
 		body: JSON.stringify(body),
@@ -1209,6 +1266,12 @@ try {
 	check("同章并发生成被互斥拦截", conflict.status === 409, JSON.stringify(conflict.data));
 	const slowResponse = await slowWrite;
 	await slowResponse.body?.cancel();
+	// 断线只是「不看了」，后台这一轮还在跑，章锁不会自己松开 ——
+	// 这正是生产里前端点「止笔」的那一步，测试里也显式叫停它。
+	await new Promise((resolve) => setTimeout(resolve, 300));
+	const liveRuns = await req("GET", `/api/runs?projectId=${seedId}`);
+	const stuck = ((liveRuns.data.runs ?? []) as Record<string, any>[]).find((run) => run.status === "running");
+	if (stuck) await req("POST", `/api/runs/${stuck.id}/abort`);
 	await new Promise((resolve) => setTimeout(resolve, 300));
 
 	mockMode = "write";
@@ -1286,6 +1349,100 @@ try {
 	// 后面的用例依赖假上游回到持续吐字模式。
 	mockMode = "stream";
 
+	// ---- 改编 ----
+	// 改编与写作的关键分别：一轮跑完只交提案，采用之后才落盘、才记台账。
+	console.log("\n改编");
+	const adaptNovel = await req(
+		"POST",
+		`/api/novel-sources?filename=${encodeURIComponent("改编底本.txt")}`,
+		undefined,
+		Buffer.from("第1章 开端\n阿青在渡口等船。\n第2章 转折\n阿青发现船底有洞。\n第3章 结局\n阿青游回了岸。", "utf8"),
+	);
+	const adaptSourceId = String(adaptNovel.data.source?.id ?? "");
+	check("改编用例有底本", adaptNovel.status === 201 && Boolean(adaptSourceId), JSON.stringify(adaptNovel.data));
+
+	const adaptCreated = await req("POST", "/api/projects", {
+		title: "改编测试",
+		adaptation: { sourceId: adaptSourceId, brief: "把主角换成青禾，水乡的冷味留住。" },
+	});
+	const adaptId = String(adaptCreated.data.project?.id ?? "");
+	check("可以按原书立一部改编工程", adaptCreated.status === 201 && Boolean(adaptId), JSON.stringify(adaptCreated.data));
+	check("改编工程记得底本与总要求", adaptCreated.data.project?.adaptation?.sourceId === adaptSourceId && String(adaptCreated.data.project?.adaptation?.brief).includes("青禾"));
+	const adaptOutline = (adaptCreated.data.project?.outline ?? []) as Record<string, any>[];
+	check("章目照原书拆好", adaptOutline.length === 3 && adaptOutline.every((chapter) => chapter.status === "planned"), JSON.stringify(adaptOutline.map((c) => [c.id, c.status])));
+	check("章名照原书", String(adaptOutline[0]?.title ?? "").includes("开端"), String(adaptOutline[0]?.title ?? ""));
+	const adaptSummary = await req("GET", "/api/projects");
+	check("案头能认出改编工程", Boolean(adaptSummary.data.projects.find((item: any) => item.id === adaptId)?.adapted));
+
+	const adaptMeta = await req("GET", `/api/projects/${adaptId}/adaptation`);
+	check("能取回改编设定与原书", adaptMeta.status === 200 && adaptMeta.data.source?.chapterCount === 3, JSON.stringify(adaptMeta.data?.source?.chapterCount));
+	const briefPatched = await req("PATCH", `/api/projects/${adaptId}/adaptation`, { brief: "主角换成青禾，结局要更冷一点。" });
+	check("总要求可以改", briefPatched.status === 200 && String(briefPatched.data.adaptation?.brief).includes("更冷"), JSON.stringify(briefPatched.data.adaptation));
+	const notAdapt = await req("GET", `/api/projects/${seedId}/adaptation`);
+	check("非改编工程取改编设定返回 404", notAdapt.status === 404, String(notAdapt.status));
+
+	// 第一轮：改编者交提案。此时正文还不该落盘 —— 采用之前，稿子只是"看过"。
+	mockMode = "adapt";
+	const adaptRun = await streamPost(`/api/projects/${adaptId}/chapters/ch001/adapt`, {
+		modelRef: "mock/mock",
+		requestId: "workbench-adapt-0001",
+	});
+	check(
+		"改编流正常收尾（有 run_end、没有 error）",
+		adaptRun.status === 200 && adaptRun.events.some((event) => event.type === "run_end") && !adaptRun.events.some((event) => event.type === "error"),
+		String(adaptRun.status) + " " + JSON.stringify(adaptRun.events.map((event) => event.type)),
+	);
+	const proposalEvent = adaptRun.events.find((event) => event.type === "proposal");
+	check("流里带回提案", Boolean(proposalEvent?.proposal?.id) && proposalEvent?.proposal?.content === ADAPT_BODY, JSON.stringify(proposalEvent?.proposal?.id));
+	check("提案带改动清单", proposalEvent?.proposal?.changes?.length === 1 && proposalEvent?.proposal?.changes?.[0]?.kind === "character");
+	const adoptPending = await req("GET", `/api/projects/${adaptId}/chapters/ch001/draft`);
+	check("采用之前不落盘", adoptPending.status === 404, String(adoptPending.status));
+
+	const proposalId = String(proposalEvent?.proposal?.id ?? "");
+	const pendingProposal = await req("GET", `/api/projects/${adaptId}/chapters/ch001/adapt`);
+	check("切走再回来还能取回提案", pendingProposal.data.proposal?.id === proposalId, JSON.stringify(pendingProposal.data.proposal?.id));
+
+	const adopted = await req("POST", `/api/projects/${adaptId}/chapters/ch001/adapt/apply`, {
+		proposalId,
+		content: ADAPT_BODY,
+		summary: "换了主角名，其余照原文。",
+		changes: [{ kind: "character", summary: "主角阿青改名青禾", detail: "全文替换" }],
+	});
+	check("采用后正文落盘", adopted.status === 200 && adopted.data.chapter?.revision === 1, JSON.stringify(adopted.data?.chapter?.revision));
+	const adoptedDraft = await req("GET", `/api/projects/${adaptId}/chapters/ch001/draft`);
+	check("读稿确认采用的是提案正文", adoptedDraft.data.chapter?.content === ADAPT_BODY, String(adoptedDraft.data.chapter?.content).slice(0, 40));
+	const adoptedProject = await req("GET", `/api/projects/${adaptId}`);
+	const adoptedChapter = ((adoptedProject.data.project?.outline ?? []) as Record<string, any>[]).find((chapter) => chapter.id === "ch001");
+	check("采用后章目状态推进", adoptedChapter?.status === "drafted", String(adoptedChapter?.status));
+	const ledger = (adopted.data.adaptation?.changes ?? []) as Record<string, any>[];
+	check("采用后写进改动台账", ledger.length === 1 && ledger[0]?.chapterId === "ch001" && ledger[0]?.kind === "character", JSON.stringify(ledger));
+	check("台账带正文里看得见的说明", String(ledger[0]?.summary).includes("青禾"), String(ledger[0]?.summary));
+
+	const adoptAgain = await req("POST", `/api/projects/${adaptId}/chapters/ch001/adapt/apply`, { proposalId, content: ADAPT_BODY });
+	check("同一版提案不能采用两次", adoptAgain.status === 404, String(adoptAgain.status));
+
+	// 看过稿之后正文又被改过：采用要拦下来，免得覆盖作者手改。
+	const secondRun = await streamPost(`/api/projects/${adaptId}/chapters/ch002/adapt`, {
+		modelRef: "mock/mock",
+		requestId: "workbench-adapt-0002",
+	});
+	const secondProposal = String(secondRun.events.find((event) => event.type === "proposal")?.proposal?.id ?? "");
+	const handEdit = await req("PATCH", `/api/projects/${adaptId}/chapters/ch002`, { content: "阿青发现船底有洞（作者手改）。" });
+	check("采用前作者可以先手改", handEdit.status === 200, String(handEdit.status));
+	const staleApply = await req("POST", `/api/projects/${adaptId}/chapters/ch002/adapt/apply`, { proposalId: secondProposal, content: ADAPT_BODY });
+	check("看稿之后改过正文：采用被拦下", staleApply.status === 409, String(staleApply.status) + " " + JSON.stringify(staleApply.data));
+	check("409 说清没有采用", String(staleApply.data?.error ?? "").includes("没有采用"), String(staleApply.data?.error ?? ""));
+
+	const dropped = await req("DELETE", `/api/projects/${adaptId}/chapters/ch002/adapt`);
+	check("可以弃掉一版提案", dropped.status === 200 && dropped.data.ok === true, String(dropped.status));
+	check("弃掉之后提案为空", (await req("GET", `/api/projects/${adaptId}/chapters/ch002/adapt`)).data.proposal === null);
+
+	// 改编的每一轮也进记录，作者能按记录接着改。
+	const adaptRecords = await req("GET", `/api/records?projectId=${adaptId}&role=adapt`);
+	check("改编轮次写进记录", adaptRecords.status === 200 && adaptRecords.data.records.length >= 2, String(adaptRecords.data.records?.length));
+
+	mockMode = "stream";
+
 	// ---- 会话 ----
 	console.log("\n会话");
 	const noProject = await req("POST", "/api/sessions", { role: "material" });
@@ -1325,7 +1482,14 @@ try {
 	const aborted = await Promise.race([upstreamClosed.then(() => true), timeout(8_000)]);
 	check("客户端断开后上游连接被中止", aborted, "上游连接未在超时内关闭");
 	check("中止后服务仍存活", (await req("GET", "/api/bootstrap")).status === 200);
-	const afterAbortSwitch = await req("POST", `/api/sessions/${streamSessionId}/model`, { modelRef: "mock/mock" });
+	// 上游先断、服务端收尾会后一步：给它一点时间把这一轮标成结束。
+	// 断线只是"不看了"，正在跑的那一轮要显式叫停 —— 与作者点「止笔」同一条路。
+	await req("POST", `/api/sessions/${streamSessionId}/abort`);
+	let afterAbortSwitch = await req("POST", `/api/sessions/${streamSessionId}/model`, { modelRef: "mock/mock" });
+	for (let attempt = 0; attempt < 12 && afterAbortSwitch.status === 409; attempt++) {
+		await new Promise((resolve) => setTimeout(resolve, 250));
+		afterAbortSwitch = await req("POST", `/api/sessions/${streamSessionId}/model`, { modelRef: "mock/mock" });
+	}
 	check(
 		"中止后可以换模型",
 		afterAbortSwitch.status === 200,
@@ -1864,6 +2028,8 @@ try {
 		"--fs-xs", "--fs-sm", "--fs-md", "--fs-lg", "--fs-xl",
 		// 版式阶梯与图标尺寸同样是尺度，不随昼夜变化；暗色块只覆盖颜色。
 		"--fs-2xl", "--fs-3xl", "--fs-title", "--fs-item", "--fs-body", "--fs-label", "--lh-body", "--track-label",
+		// 布局尺度（栏宽、栏高、圆角、行距）与配色无关，暗色下也不该重算。
+		"--r-4", "--r-sheet", "--beam-h", "--rail-w", "--right-w", "--nav-h", "--gutter", "--lh-ui", "--lh-read",
 		"--i-search", "--i-settings", "--i-more", "--i-plus", "--i-export", "--i-backup", "--i-edit",
 		"--i-trash", "--i-open", "--i-home", "--i-book", "--i-layers", "--i-pen", "--i-close",
 		"--i-chapter", "--i", "--i-send", "--i-upload",

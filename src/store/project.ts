@@ -350,6 +350,64 @@ export interface ContinuityNote {
 	updatedAt?: number;
 }
 
+/**
+ * 改编变动的类别。
+ *
+ * 「改主角」「加人设」这类交代，落到台账上要能一眼分清是哪一类，
+ * 后面写下一章时提示词才好挑最相关的那几条塞进去。
+ */
+export type AdaptationChangeKind = "character" | "persona" | "plot" | "pov" | "addition" | "style" | "other";
+
+export const ADAPTATION_CHANGE_KINDS: readonly AdaptationChangeKind[] = [
+	"character",
+	"persona",
+	"plot",
+	"pov",
+	"addition",
+	"style",
+	"other",
+];
+
+export const ADAPTATION_CHANGE_LABELS: Record<AdaptationChangeKind, string> = {
+	character: "人物",
+	persona: "人设",
+	plot: "剧情",
+	pov: "人称",
+	addition: "加料",
+	style: "文风",
+	other: "其他",
+};
+
+/** 一条已经采用的改编变动。台账只追加、不覆盖。 */
+export interface AdaptationChange {
+	id: string;
+	chapterId: string;
+	kind: AdaptationChangeKind;
+	/** 一句话说清改了什么，供后续章节检索。 */
+	summary: string;
+	/** 细说：原文怎么写的、现在怎么改的、为什么。可留空。 */
+	detail?: string;
+	createdAt: number;
+}
+
+/**
+ * 改编计划：原书从哪来、总体要求是什么、已经改过哪些。
+ *
+ * 存在骨架里而不是另开文件，是因为它必须与大纲/草稿一起原子落盘 ——
+ * 台账丢一条，后面几章的改编就可能照着旧的设定写下去。
+ */
+export interface AdaptationPlan {
+	/** 原料库里的那本书。 */
+	sourceId: string;
+	/** 书名的快照：原料被删掉时，界面还能说清这本书原本叫什么。 */
+	sourceTitle: string;
+	/** 改编总要求：全书级别的方向，例如「主角改成女记者，保留原案骨架」。 */
+	brief: string;
+	changes: AdaptationChange[];
+	createdAt: number;
+	updatedAt: number;
+}
+
 export interface Project {
 	id: string;
 	title: string;
@@ -358,6 +416,8 @@ export interface Project {
 	synopsis: string;
 	styleGuide: string;
 	targetWords: number;
+	/** 改编工程才有：绑定原书、总要求与已采用的变动台账。 */
+	adaptation?: AdaptationPlan;
 	/** 全部素材。人物、世界观、场景、桥段都在这里，靠 kind 区分。 */
 	materials: Material[];
 	/**
@@ -430,6 +490,53 @@ function normalizeNote(raw: unknown): ContinuityNote | undefined {
 		...(typeof input.chapterId === "string" && input.chapterId ? { chapterId: input.chapterId } : {}),
 		createdAt: typeof input.createdAt === "number" ? input.createdAt : now,
 		...(typeof input.updatedAt === "number" ? { updatedAt: input.updatedAt } : {}),
+	};
+}
+
+/**
+ * 归一化一条改编变动。
+ *
+ * 读老数据时它可能缺字段：丢掉会让台账与后续章节的设定对不上，
+ * 所以宁可补一个保守值也要留下（summary 空的那条除外 —— 没有内容就无从检索）。
+ */
+function normalizeAdaptationChange(raw: unknown): AdaptationChange | undefined {
+	if (!raw || typeof raw !== "object") return undefined;
+	const input = raw as Partial<AdaptationChange>;
+	if (typeof input.summary !== "string" || !input.summary.trim()) return undefined;
+	return {
+		id: typeof input.id === "string" && input.id ? input.id : newId(),
+		chapterId: typeof input.chapterId === "string" ? input.chapterId : "",
+		kind: ADAPTATION_CHANGE_KINDS.includes(input.kind as AdaptationChangeKind)
+			? (input.kind as AdaptationChangeKind)
+			: "other",
+		summary: input.summary.trim(),
+		...(typeof input.detail === "string" && input.detail.trim() ? { detail: input.detail.trim() } : {}),
+		createdAt: typeof input.createdAt === "number" ? input.createdAt : Date.now(),
+	};
+}
+
+/**
+ * 归一化改编计划。
+ *
+ * sourceId 是它唯一的硬依赖：没有原书就没有可改编的东西，
+ * 这种工程应当被当成普通工程打开（而不是变成一个点不动的空壳）。
+ */
+function normalizeAdaptation(raw: unknown): AdaptationPlan | undefined {
+	if (!raw || typeof raw !== "object") return undefined;
+	const input = raw as Partial<AdaptationPlan>;
+	const sourceId = typeof input.sourceId === "string" ? input.sourceId.trim() : "";
+	if (!sourceId) return undefined;
+	const changes = Array.isArray(input.changes)
+		? input.changes.map(normalizeAdaptationChange).filter((item): item is AdaptationChange => item !== undefined)
+		: [];
+	const now = Date.now();
+	return {
+		sourceId,
+		sourceTitle: typeof input.sourceTitle === "string" ? input.sourceTitle : "",
+		brief: typeof input.brief === "string" ? input.brief : "",
+		changes,
+		createdAt: typeof input.createdAt === "number" ? input.createdAt : now,
+		updatedAt: typeof input.updatedAt === "number" ? input.updatedAt : now,
 	};
 }
 
@@ -614,6 +721,8 @@ export function normalizeProject(raw: unknown): Project {
 		}
 	}
 
+	const adaptation = normalizeAdaptation(input.adaptation);
+
 	return {
 		...base,
 		id: typeof input.id === "string" ? input.id : base.id,
@@ -623,6 +732,7 @@ export function normalizeProject(raw: unknown): Project {
 		synopsis: typeof input.synopsis === "string" ? input.synopsis : "",
 		styleGuide: typeof input.styleGuide === "string" ? input.styleGuide : "",
 		targetWords: typeof input.targetWords === "number" && input.targetWords > 0 ? Math.floor(input.targetWords) : 0,
+		...(adaptation ? { adaptation } : {}),
 		materials: [...migrated, ...materials],
 		volumes,
 		outline,

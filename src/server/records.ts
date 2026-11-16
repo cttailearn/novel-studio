@@ -19,7 +19,7 @@ import type { RecordStorePort } from "../store/store-port.ts";
  * 每个面板（role + 作品 + 章节）只留最近 10 条：再多也没人翻，
  * 而 messages 里躺着整章正文与工具结果，攒一年能到几十兆。
  */
-export type RecordRole = "material" | "writing";
+export type RecordRole = "material" | "writing" | "adapt";
 
 /** 一块面板的留存条数。 */
 export const RECORDS_KEEP = 10;
@@ -75,7 +75,7 @@ export interface RecordsFile {
 }
 
 export function isRecordRole(value: unknown): value is RecordRole {
-	return value === "material" || value === "writing";
+	return value === "material" || value === "writing" || value === "adapt";
 }
 
 /** 从消息里摘一句能看懂的话，列表上用来认记录。 */

@@ -25,6 +25,14 @@ import {
 	sanitizePolish,
 } from "../ai/polish.ts";
 import type { ChapterWriteMode, WritingContext } from "../ai/prompts.ts";
+import {
+	adaptationChangeKind,
+	buildAdaptContext,
+	type AdaptContext,
+	type AdaptProposal,
+	type AdaptProposalChangeInput,
+	type AdaptProposalInput,
+} from "../ai/adapt.ts";
 // 注意：这里刻意不 import ../ai/models.ts。
 // 那个文件静态 import 了 42 个 pi-ai 内置 provider，连带 openai / @anthropic-ai/sdk /
 // @google/genai / @aws-sdk 四个 SDK，浏览器里一个都用不上。
@@ -376,6 +384,11 @@ interface RunAcceptance {
 	mode: ChapterWriteMode;
 	requiredTools?: string[];
 	beforeRevision: number;
+	/**
+	 * 改编轮次：本轮应登记的提案 id。
+	 * 改编的交付物是提案而不是正文，判定"跑成了"要换一把尺子。
+	 */
+	proposalId?: string;
 }
 
 interface WriteRun extends RunAcceptance {
@@ -403,6 +416,19 @@ interface WriteRunRegistry {
 	completedWriteRequests: Map<string, string>;
 }
 
+/** 提案放在内存里：进程重启后重新让改编者交一版即可，不值得为它建一套落盘。 */
+const ADAPT_PROPOSAL_TTL_MS = 24 * 60 * 60 * 1000;
+const ADAPT_PROPOSAL_MAX = 200;
+
+function sweepAdaptProposals(ctx: RouterContext): void {
+	const cutoff = Date.now() - ADAPT_PROPOSAL_TTL_MS;
+	for (const [id, proposal] of ctx.adaptProposals) {
+		if (proposal.createdAt < cutoff || ctx.adaptProposals.size > ADAPT_PROPOSAL_MAX) {
+			ctx.adaptProposals.delete(id);
+		}
+	}
+}
+
 /** 路由内部用的上下文：依赖 + 这一侧自己的登记表。 */
 interface RouterContext {
 	deps: ApiRouterDeps;
@@ -411,6 +437,11 @@ interface RouterContext {
 	live: LiveRunRegistry;
 	/** 同一部作品最多同时跑几轮。 */
 	limiter: ProjectLimiter;
+	/**
+	 * 改编提案：模型交上来的那一版还挂在这里，作者点「采用」才落盘。
+	 * 不写进工程骨架 —— 没被采用的稿子不该在磁盘上留下"已经改过"的痕迹。
+	 */
+	adaptProposals: Map<string, AdaptProposal>;
 }
 
 function writeRunKey(projectId: string, chapterId: string): string {
@@ -482,6 +513,9 @@ function recordTitleFor(ctx: RouterContext, input: {
 	if (input.role === "writing" && input.projectId && input.chapterId) {
 		const mode = input.mode ? " · " + WRITE_MODE_LABELS[input.mode] : "";
 		return "《" + chapterTitleOf(ctx, input.projectId, input.chapterId) + "》" + mode;
+	}
+	if (input.role === "adapt" && input.projectId && input.chapterId) {
+		return "《" + chapterTitleOf(ctx, input.projectId, input.chapterId) + "》 · 改编";
 	}
 	if (input.libraryScope) return "通用素材库的一席";
 	return "设定官的一席";
@@ -637,6 +671,21 @@ function writingInstruction(assembly: WritingContext, note?: string): string {
 					? "重写《" + assembly.chapter.title + "》。先 read_chapter 读旧稿，再整章重写。"
 					: "写出《" + assembly.chapter.title + "》本章。";
 	return note ? base + "\n\n作者另有交代：" + note : base;
+}
+
+/**
+ * 改编的首轮指令。
+ *
+ * 原文与台账都在系统提示词里了，这里只点明"这一章是哪一章、按什么改"。
+ * 不写"从零写起"之类的说法：改编者一旦当成新写，就会把底本丢了。
+ */
+function adaptInstruction(context: AdaptContext, note?: string): string {
+	const lines = [
+		`这一章：第 ${context.index + 1} 章《${context.chapter.title}》，原文 ${context.original.chars || context.original.content.length} 字。`,
+		"请按总要求与我的交代在原文上改编这一章；改完用 propose_adaptation 呈上完整稿与改动清单。",
+	];
+	if (note) lines.push("", "我这一轮的交代：", note);
+	return lines.join("\n");
 }
 
 /**
@@ -1022,6 +1071,7 @@ function projectSummary(ctx: RouterContext, project: Project) {
 		styleGuide: project.styleGuide,
 		targetWords: project.targetWords,
 		updatedAt: project.updatedAt,
+		adapted: Boolean(project.adaptation),
 		stats: ctx.deps.store.stats(project),
 	};
 }
@@ -1173,6 +1223,8 @@ function runAgentStream(
 	let savedRevision: number | undefined;
 	let writeFailed = false;
 	let terminalError = "";
+	/** 改编轮次：提案是否真的登记进来了。交付看这个，不看章节版本。 */
+	let proposalReady = false;
 	const requiredTools = acceptance?.requiredTools
 		? new Set(acceptance.requiredTools)
 		: acceptance?.mode === "patch"
@@ -1237,7 +1289,14 @@ function runAgentStream(
 			case "tool_execution_end":
 				if (acceptance && requiredTools.has(event.toolName)) {
 					if (event.isError) writeFailed = true;
-					else {
+					else if (acceptance.proposalId) {
+						// 改编的交付物是提案：工具跑成功、提案真的登记进来了，才算这一轮有结果。
+						const proposal = ctx.adaptProposals.get(acceptance.proposalId);
+						if (proposal) {
+							proposalReady = true;
+							emit({ type: "proposal", proposal });
+						}
+					} else {
 						const meta = ctx.deps.store.get(acceptance.projectId)?.drafts[acceptance.chapterId];
 						if (meta && meta.revision > acceptance.beforeRevision) savedRevision = meta.revision;
 					}
@@ -1271,19 +1330,35 @@ function runAgentStream(
 						message: terminalError,
 					});
 				}
-				if (acceptance && !aborted && !terminalError && (savedRevision === undefined || writeFailed)) {
-					terminalError = writeFailed
-						? "正文写入工具执行失败，这一轮不能算完成；请根据工具报错重试。"
-						: "这一轮没有成功保存正文，不能算完成；请重试，或要求执笔者实际调用写入工具。";
-					emit({ type: "error", message: terminalError });
+				if (acceptance && !aborted && !terminalError) {
+					if (acceptance.proposalId) {
+						if (!proposalReady || writeFailed) {
+							terminalError = writeFailed
+								? "改编提案没有交成（工具报错），这一轮不能算完成；请根据报错重试。"
+								: "这一轮没有呈上改编稿，不能算完成；请重试，或要求改编者调用 propose_adaptation。";
+							emit({ type: "error", message: terminalError });
+						}
+					} else if (savedRevision === undefined || writeFailed) {
+						terminalError = writeFailed
+							? "正文写入工具执行失败，这一轮不能算完成；请根据工具报错重试。"
+							: "这一轮没有成功保存正文，不能算完成；请重试，或要求执笔者实际调用写入工具。";
+						emit({ type: "error", message: terminalError });
+					}
 				}
 				const cost = modelCost(ctx, modelRef, usage);
 				emit({
 					type: "run_end",
 					runId: acceptance?.runId,
 					aborted,
-					saved: acceptance ? savedRevision !== undefined && !writeFailed && !terminalError : undefined,
+					saved: acceptance
+						? acceptance.proposalId
+							? proposalReady && !writeFailed && !terminalError
+							: savedRevision !== undefined && !writeFailed && !terminalError
+						: undefined,
 					savedRevision,
+					proposal: acceptance?.proposalId && proposalReady
+						? { id: acceptance.proposalId, revision: (ctx.deps.store.get(acceptance.projectId)?.drafts[acceptance.chapterId]?.revision ?? 0) + 1 }
+						: undefined,
 					usage: { ...usage, cacheRead: usage.cacheRead || undefined, cacheWrite: usage.cacheWrite || undefined },
 					cost,
 					error: undefined,
@@ -1395,7 +1470,13 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 	}
 
 	if (pathname === "/api/projects" && req.method === "POST") {
-		const body = await readJsonBody<ProjectCreateInput & { libraryIds?: string[] }>(req);
+		const body = await readJsonBody<
+			ProjectCreateInput & {
+				libraryIds?: string[];
+				/** 改编工程：绑定原料库里的一本原书，章目按原书章节一次立好。 */
+				adaptation?: { sourceId?: string; brief?: string };
+			}
+		>(req);
 		// 新建时可以从通用素材库取料。取用是复制：副本归这本书，之后的改动不回写库。
 		const libraryIds = Array.isArray(body.libraryIds)
 			? body.libraryIds.filter((value): value is string => typeof value === "string")
@@ -1404,7 +1485,49 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 			.map((id) => libraryStore.get(id))
 			.filter((entry): entry is LibraryMaterial => entry !== undefined);
 
-		let project = store.create(body);
+		// 改编工程要先确认原书还在：章目、每章标题、总字数都从它来。
+		const adaptationInput = body.adaptation;
+		const source =
+			adaptationInput && typeof adaptationInput.sourceId === "string"
+				? ctx.deps.novelStore?.get(adaptationInput.sourceId)
+				: undefined;
+		if (adaptationInput && typeof adaptationInput.sourceId === "string" && !ctx.deps.novelStore) {
+			return json(sink, 503, { error: "当前存储不支持原料库，无法建立改编工程" });
+		}
+		if (adaptationInput && typeof adaptationInput.sourceId === "string" && !source) {
+			return json(sink, 404, { error: "原书不在原料库里了；请重新导入原书再建改编工程" });
+		}
+
+		const now = Date.now();
+		let project = store.create(
+			source ? { ...body, title: body.title?.trim() || source.title } : body,
+		);
+		if (source) {
+			// 改编：章目按原书章节一次立好，之后不再增删章（章号必须与原文一一对应，
+			// 否则改编者读不到原文，作者也对不上号）。
+			project = store.mutate(project.id, (draft) => {
+				draft.adaptation = {
+					sourceId: source.id,
+					sourceTitle: source.title,
+					brief: adaptationInput?.brief?.trim() ?? "",
+					changes: [],
+					createdAt: now,
+					updatedAt: now,
+				};
+				draft.outline = source.chapters.map((chapter) => ({
+					id: chapter.id,
+					title: chapter.title,
+					summary: "",
+					pov: "",
+					volumeId: "",
+					status: "planned" as const,
+					targetWords: chapter.chars,
+					notes: "",
+					materialIds: [],
+				}));
+				if (!draft.genre) draft.genre = "改编";
+			});
+		}
 		if (taken.length > 0) {
 			project = store.mutate(project.id, (draft) => {
 				for (const entry of taken) draft.materials.push(materialFromLibrary(entry));
@@ -2222,6 +2345,308 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 		}
 	}
 
+	// ---------------------------------------------------------------- 改编
+	//
+	// 改编与写作最大的不同：一轮跑完**不落盘**。模型交上来的是一份提案，
+	// 作者在双栏里看过、改过、点「采用」之后才写进章节，并把改动记进台账。
+	// 这样"改坏了"最多是退回原文，而不是把上一版覆盖掉。
+
+	const adaptationMatch = pathname.match(/^\/api\/projects\/([\w-]+)\/adaptation$/);
+	if (adaptationMatch && req.method === "GET") {
+		const projectId = adaptationMatch[1]!;
+		const project = store.get(projectId);
+		if (!project) return json(sink, 404, { error: "工程不存在" });
+		if (!project.adaptation) return json(sink, 404, { error: "这一部不是改编工程" });
+		return json(sink, 200, { adaptation: project.adaptation, source: novelStore?.get(project.adaptation.sourceId) });
+	}
+
+	if (adaptationMatch && req.method === "PATCH") {
+		const projectId = adaptationMatch[1]!;
+		const project = store.get(projectId);
+		if (!project) return json(sink, 404, { error: "工程不存在" });
+		if (!project.adaptation) return json(sink, 404, { error: "这一部不是改编工程" });
+		const body = await readJsonBody<{ brief?: string }>(req);
+		const saved = store.mutate(projectId, (draft) => {
+			if (!draft.adaptation) return;
+			if (typeof body.brief === "string") draft.adaptation.brief = body.brief.trim();
+			draft.adaptation.updatedAt = Date.now();
+		});
+		await store.flushForProject(projectId);
+		return json(sink, 200, { adaptation: saved.adaptation, stats: store.stats(saved) });
+	}
+
+	const adaptMatch = pathname.match(/^\/api\/projects\/([\w-]+)\/chapters\/([^/]+)\/adapt$/);
+	if (adaptMatch && req.method === "POST") {
+		const projectId = adaptMatch[1]!;
+		const chapterId = decodeURIComponent(adaptMatch[2]!);
+		if (!store.get(projectId)) return json(sink, 404, { error: "工程不存在" });
+		if (!novelStore) return json(sink, 503, { error: "当前存储不支持原料库，无法改编" });
+
+		const body = await readJsonBody<{
+			modelRef?: string;
+			thinkingLevel?: ThinkingLevel;
+			note?: string;
+			recordId?: string;
+		}>(req);
+		sweepWriteRuns(ctx.runs);
+		sweepAdaptProposals(ctx);
+
+		const project = store.get(projectId)!;
+		if (!project.adaptation) return json(sink, 409, { error: "这一部不是改编工程" });
+		if (!project.outline.some((chapter) => chapter.id === chapterId)) {
+			return json(sink, 404, { error: "章节 " + chapterId + " 不存在" });
+		}
+
+		let context: AdaptContext;
+		try {
+			context = await buildAdaptContext({ store, novelStore, project, chapterId });
+		} catch (error) {
+			return json(sink, 409, { error: (error as Error).message });
+		}
+
+		const modelRef = resolveDefaultModel(ctx, body.modelRef);
+		if (!modelRef) return json(sink, 400, { error: "请指定模型" });
+		let model: Model<any>;
+		try {
+			model = await resolveModel(modelRef);
+		} catch (error) {
+			const status = error instanceof ModelResolutionError ? 400 : 500;
+			return json(sink, status, {
+				error: (error as Error).message,
+				candidates: error instanceof ModelResolutionError ? error.candidates : [],
+			});
+		}
+
+		// 同一章不能一边写一边改：两种轮次会抢同一个章锁。
+		const runKey = writeRunKey(projectId, chapterId);
+		if (ctx.runs.activeWriteRuns.has(runKey)) {
+			return json(sink, 409, { error: "这一章正在生成或保存，请等这一轮结束再提交；不要重复点击。" });
+		}
+		const runId = randomUUID();
+		const live = ctx.live.create({
+			id: runId,
+			kind: "adapt",
+			projectId,
+			chapterId,
+			role: "adapt",
+			label: "改编",
+		});
+		ctx.runs.activeWriteRuns.set(runKey, runId);
+
+		const instruction = adaptInstruction(context, body.note?.trim());
+		const proposalId = randomUUID();
+		let submitted = false;
+		const onAdaptProposal = (input: AdaptProposalInput): boolean => {
+			if (submitted) return false;
+			submitted = true;
+			const latest = store.get(projectId);
+			ctx.adaptProposals.set(proposalId, {
+				id: proposalId,
+				projectId,
+				chapterId,
+				baseRevision: latest?.drafts[chapterId]?.revision ?? 0,
+				createdAt: Date.now(),
+				content: input.content,
+				summary: input.summary,
+				changes: input.changes,
+			});
+			return true;
+		};
+
+		try {
+			// 记录先认下来：接旧记录就沿用它的 id，否则这一轮自己开一条。
+			const resumed = body.recordId ? recordStore.get(body.recordId) : undefined;
+			if (body.recordId && !resumed) {
+				return json(sink, 404, { error: "这条记录不在了（可能已被删除）" });
+			}
+			if (resumed) {
+				if (resumed.role !== "adapt") return json(sink, 400, { error: "这条记录不属于改编者" });
+				if (resumed.projectId !== projectId || resumed.chapterId !== chapterId) {
+					return json(sink, 400, { error: "这条记录属于别的章节" });
+				}
+			}
+			const record =
+				resumed ??
+				(await recordStore.create({
+					role: "adapt",
+					projectId,
+					chapterId,
+					title: recordTitleFor(ctx, { role: "adapt", projectId, chapterId }),
+				}));
+
+			let agent: Agent;
+			try {
+				agent = await createNovelAgent({
+					store,
+					projectId,
+					model,
+					models: getModels(),
+					config,
+					sessionId: randomUUID(),
+					role: "adapt",
+					chapterId,
+					adaptation: context,
+					novelSources: ctx.deps.novelStore,
+					onAdaptProposal,
+					thinkingLevel: body.thinkingLevel ?? settingsStore.get().defaultThinkingLevel,
+				});
+			} catch (error) {
+				if (!resumed) await recordStore.remove(record.id);
+				return json(sink, 400, { error: (error as Error).message });
+			}
+			// 接着旧记录改：沿用那段对话，系统提示词按现在的原文与台账现算。
+			if (resumed && resumed.messages.length > 0) {
+				const head = agent.state.messages[0]?.role === "system" ? agent.state.messages.slice(0, 1) : [];
+				agent.state.messages = [...head, ...resumed.messages];
+			}
+			return await streamNdjson(
+				ctx,
+				sink,
+				agent,
+				`${model.provider}/${model.id}`,
+				instruction,
+				undefined,
+				roundRecorder(ctx, agent, record.id),
+				{
+					runId,
+					projectId,
+					chapterId,
+					mode: "rewrite",
+					requiredTools: ["propose_adaptation"],
+					proposalId,
+					beforeRevision: project.drafts[chapterId]?.revision ?? 0,
+				},
+				live,
+				projectId,
+			);
+		} finally {
+			if (ctx.runs.activeWriteRuns.get(runKey) === runId) ctx.runs.activeWriteRuns.delete(runKey);
+			if (live.status === "running") {
+				live.finish("failed", "这一轮没能开始");
+				ctx.live.report(live);
+			}
+		}
+	}
+
+	// 取回某一章挂着的提案：作者切走再切回来，稿子还在。
+	if (adaptMatch && req.method === "GET") {
+		const projectId = adaptMatch[1]!;
+		const chapterId = decodeURIComponent(adaptMatch[2]!);
+		if (!store.get(projectId)) return json(sink, 404, { error: "工程不存在" });
+		const proposal = [...ctx.adaptProposals.values()]
+			.filter((item) => item.projectId === projectId && item.chapterId === chapterId)
+			.sort((a, b) => b.createdAt - a.createdAt)[0];
+		return json(sink, 200, { proposal: proposal ?? null });
+	}
+
+	// 弃掉这一版的提案：正文一个字不动，只把挂在上面的那版撤下来。
+	if (adaptMatch && req.method === "DELETE") {
+		const projectId = adaptMatch[1]!;
+		const chapterId = decodeURIComponent(adaptMatch[2]!);
+		if (!store.get(projectId)) return json(sink, 404, { error: "工程不存在" });
+		let dropped = 0;
+		for (const [id, proposal] of ctx.adaptProposals) {
+			if (proposal.projectId === projectId && proposal.chapterId === chapterId) {
+				ctx.adaptProposals.delete(id);
+				dropped += 1;
+			}
+		}
+		return json(sink, 200, { ok: true, dropped });
+	}
+
+	const adaptApplyMatch = pathname.match(/^\/api\/projects\/([\w-]+)\/chapters\/([^/]+)\/adapt\/apply$/);
+	if (adaptApplyMatch && req.method === "POST") {
+		const projectId = adaptApplyMatch[1]!;
+		const chapterId = decodeURIComponent(adaptApplyMatch[2]!);
+		if (!store.get(projectId)) return json(sink, 404, { error: "工程不存在" });
+		if (!novelStore) return json(sink, 503, { error: "当前存储不支持原料库，无法改编" });
+
+		const body = await readJsonBody<{
+			proposalId?: string;
+			/** 作者在双栏里手改过的稿子；不传就用提案原文。 */
+			content?: string;
+			summary?: string;
+			changes?: AdaptProposalChangeInput[];
+		}>(req);
+		const proposal =
+			typeof body.proposalId === "string" ? ctx.adaptProposals.get(body.proposalId) : undefined;
+		if (!proposal || proposal.projectId !== projectId || proposal.chapterId !== chapterId) {
+			return json(sink, 404, { error: "这一版的提案不在了（可能已过期）；让改编者重新交一版再采用。" });
+		}
+		const content = (typeof body.content === "string" ? body.content : proposal.content).trim();
+		if (!content) return json(sink, 400, { error: "改编稿是空的，采用不了" });
+		const summary = (typeof body.summary === "string" ? body.summary : proposal.summary).trim();
+		const changes = (Array.isArray(body.changes) ? body.changes : proposal.changes)
+			.filter((change) => change && typeof change.summary === "string" && change.summary.trim())
+			.map((change) => ({
+				kind: adaptationChangeKind(String(change.kind)),
+				summary: change.summary.trim(),
+				...(change.detail && String(change.detail).trim() ? { detail: String(change.detail).trim() } : {}),
+			}));
+
+		try {
+			await store.withChapterLock(projectId, chapterId, async () => {
+				const latest = store.get(projectId);
+				if (!latest) throw new HttpError(404, "工程不存在");
+				if (!latest.adaptation) throw new HttpError(409, "这一部不是改编工程");
+				const planned = latest.outline.find((chapter) => chapter.id === chapterId);
+				if (!planned) throw new HttpError(404, "章节不存在");
+				// 作者看稿期间这一章又被改过：拿旧基线覆盖会静默吃掉别人的改动。
+				const baseRevision = latest.drafts[chapterId]?.revision ?? 0;
+				if (baseRevision !== proposal.baseRevision) {
+					throw new HttpError(
+						409,
+						"这一章在你看稿之后又改过一版。请刷新再看，或让改编者按现稿重交一版；这一次没有采用。",
+					);
+				}
+				await store.saveDraftBody(projectId, chapterId, {
+					title: planned.title,
+					content,
+					summary,
+					materialIds: latest.drafts[chapterId]?.materialIds ?? planned.materialIds,
+					mode: "adapt",
+					keepHistory: true,
+				});
+				const now = Date.now();
+				store.mutate(projectId, (draft) => {
+					if (!draft.adaptation) return;
+					// 一章的台账就是"这一章最新一版相对原文改了什么"：
+					// 换一版就替换这一章的条目，不叠成两套说法。
+					draft.adaptation.changes = draft.adaptation.changes.filter(
+						(change) => change.chapterId !== chapterId,
+					);
+					for (const change of changes) {
+						draft.adaptation.changes.push({
+							id: randomUUID(),
+							chapterId,
+							kind: change.kind,
+							summary: change.summary,
+							...(change.detail ? { detail: change.detail } : {}),
+							createdAt: now,
+						});
+					}
+					draft.adaptation.updatedAt = now;
+					const target = draft.outline.find((chapter) => chapter.id === chapterId);
+					if (target) target.status = "drafted";
+				});
+			});
+		} catch (error) {
+			if (error instanceof HttpError) return json(sink, error.status, { error: error.message });
+			throw error;
+		}
+
+		// 采用后提案即作废：同一份稿子不该被点两次，第二次的版本校验也过不去。
+		ctx.adaptProposals.delete(proposal.id);
+		await store.flushForProject(projectId);
+		const saved = store.get(projectId)!;
+		return json(sink, 200, {
+			ok: true,
+			chapter: saved.drafts[chapterId],
+			adaptation: saved.adaptation,
+			stats: store.stats(saved),
+		});
+	}
+
 	// ---------------------------------------------------------------- 生成记录
 	//
 	// 每轮落笔都留档：作者回头能翻到上一版是在哪一轮写的，也能从那一轮接着写。
@@ -2230,7 +2655,9 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 	if (pathname === "/api/records" && req.method === "GET") {
 		const filter: RecordFilter = {};
 		const roleParam = req.searchParams.get("role");
-		if (roleParam === "writing" || roleParam === "material") filter.role = roleParam as RecordRole;
+		if (roleParam === "writing" || roleParam === "material" || roleParam === "adapt") {
+			filter.role = roleParam as RecordRole;
+		}
 		const projectId = req.searchParams.get("projectId");
 		if (projectId) filter.projectId = projectId;
 		const chapterId = req.searchParams.get("chapterId");
@@ -3208,7 +3635,7 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 		const statusParam = req.searchParams.get("status");
 		const status = statusParam === "running" || statusParam === "done" || statusParam === "aborted" || statusParam === "failed" ? statusParam : undefined;
 		const kindParam = req.searchParams.get("kind");
-		const kind = kindParam === "write" || kindParam === "session" ? kindParam : undefined;
+		const kind = kindParam === "write" || kindParam === "session" || kindParam === "polish" || kindParam === "adapt" ? kindParam : undefined;
 		const runs = ctx.live.list({ projectId, status, kind }).map((run) => run.snapshot());
 		const projects = projectId ? ctx.limiter.stats(projectId) : undefined;
 		return json(sink, 200, { runs, projects });
@@ -3488,6 +3915,7 @@ export function createApiRouter(deps: ApiRouterDeps): ApiRouter {
 		},
 		live: new LiveRunRegistry((run) => logRun(run)),
 		limiter: new ProjectLimiter(runConcurrencyPerProject()),
+		adaptProposals: new Map<string, AdaptProposal>(),
 	};
 	return async (req: ApiRequest, sink: ApiSink): Promise<void> => {
 		try {

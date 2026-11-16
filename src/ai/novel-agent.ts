@@ -5,6 +5,12 @@ import { assembledMaterials, kindLabel, type ChapterDraft, type ChapterMeta, typ
 import type { NovelSourceStorePort, ProjectStorePort } from "../store/store-port.ts";
 import type { MaterialLibrary } from "../store/library.ts";
 import {
+	buildAdaptSystemPrompt,
+	createAdaptTools,
+	type AdaptContext,
+	type AdaptProposalInput,
+} from "./adapt.ts";
+import {
 	buildContextDigest,
 	buildLibrarySystemPrompt,
 	buildMaterialSystemPrompt,
@@ -20,8 +26,9 @@ import { createWebSearchTools, type WebSearchClient, type WebSearchConfig } from
  *
  * material = 设定官，产出素材条目，没有写正文的工具。
  * writing  = 执笔者，把已装配的素材组装成正文，读得到素材但改不了素材。
+ * adapt    = 改编者，在原书某一章的原文上改写；改动只交提案，采用由作者点。
  */
-export type AgentRole = "material" | "writing";
+export type AgentRole = "material" | "writing" | "adapt";
 
 export interface NovelAgentOptions {
 	store: ProjectStorePort;
@@ -35,6 +42,10 @@ export interface NovelAgentOptions {
 	chapterId?: string;
 	/** writing 角色可选：覆盖组装上下文（一次性写作时由服务端算好传入）。 */
 	writing?: WritingContext;
+	/** adapt 角色必填：本章原文、现有改编稿、上一章与改动台账。 */
+	adaptation?: AdaptContext;
+	/** adapt 角色的唯一出口：模型交出改编提案时回调（由服务端登记）。 */
+	onAdaptProposal?: (input: AdaptProposalInput) => boolean;
 	/**
 	 * 库作用域：给了它就走通用素材库这一支，不碰工程。
 	 * 这一支下 projectId 可以是空串，工具集也换成只有素材读写的那两个。
@@ -221,6 +232,43 @@ export async function createNovelAgent(options: NovelAgentOptions): Promise<Agen
 
 	const project = store.get(projectId);
 	if (!project) throw new Error(`工程 ${projectId} 不存在`);
+
+	// 改编者：工具集与另外两支不共享 —— 它读原文、查台账、交提案，
+	// 但没有任何直接写章的路径。落盘只能由作者点「采用」触发。
+	if (role === "adapt") {
+		const adaptation = options.adaptation;
+		if (!adaptation) throw new Error("改编角色缺少本章原文与改编台账");
+		const novelStore = options.novelSources;
+		if (!novelStore) throw new Error("当前存储不支持原料库，无法建立改编会话");
+		return new Agent({
+			initialState: {
+				systemPrompt: buildAdaptSystemPrompt(project, adaptation),
+				model,
+				thinkingLevel: options.thinkingLevel ?? config.defaultThinkingLevel,
+				tools: createAdaptTools({
+					store,
+					novelStore,
+					projectId,
+					context: adaptation,
+					onProposal: (input) => options.onAdaptProposal?.(input) ?? true,
+				}),
+			},
+			streamFn,
+			sessionId,
+			toolExecution: "sequential",
+			transformContext: async (messages: AgentMessage[]): Promise<AgentMessage[]> => {
+				const latest = store.get(projectId);
+				const digest: AgentMessage = {
+					role: "system",
+					content: `<工程状态更新>
+${latest ? buildContextDigest(latest, { scope: "adapt", chapterId: options.chapterId }) : "工程已删除"}
+</工程状态更新>`,
+					timestamp: Date.now(),
+				};
+				return trimConversation(messages, digest);
+			},
+		});
+	}
 
 	const writing = role === "writing" ? await writingContextOf(options, project) : undefined;
 	const deps = {

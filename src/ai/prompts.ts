@@ -1,4 +1,5 @@
 import {
+	ADAPTATION_CHANGE_LABELS,
 	assembledMaterials,
 	countWords,
 	kindLabel,
@@ -576,7 +577,7 @@ ${chapter.targetWords > 0 ? `- 字数：控制在 ${chapter.targetWords} 字左�
 
 // ═══════════════════════════════════════════════════════════ 上下文快照
 
-export type DigestScope = "material" | "writing";
+export type DigestScope = "material" | "writing" | "adapt";
 
 /**
  * 每次请求前注入的工程快照。
@@ -605,6 +606,42 @@ export function buildContextDigest(project: Project, options?: { scope?: DigestS
 		);
 		// 本章素材全文不进 digest：系统提示词里已经带了一份（materialBlock），
 		// 这里再塞一次就是同一段文字在一次请求里出现两遍，白白吃掉上下文预算。
+		const noteLines = noteDigest(project.notes);
+		if (noteLines) parts.push(section("待办", noteLines));
+		return wrap(parts, options?.maxChars);
+	}
+
+	if (scope === "adapt") {
+		const plan = project.adaptation;
+		const currentIndex = chapterId ? project.outline.findIndex((chapter) => chapter.id === chapterId) : -1;
+		const adapted = project.outline.filter((chapter) => project.drafts[chapter.id]?.hasDraft).length;
+		parts.push(
+			section(
+				"当前进度",
+				`- 原书《${plan?.sourceTitle ?? "未绑定"}》，共 ${project.outline.length} 章；已改编 ${adapted} 章` +
+					(currentIndex >= 0
+						? `\n- 本章：第 ${currentIndex + 1} 章《${project.outline[currentIndex]!.title}》（${chapterId}）`
+						: ""),
+			),
+		);
+		if (plan?.brief) parts.push(section("改编总要求", plan.brief));
+		// 只报最近的改动：台账会一部长一部地长，全量摊开每轮都要重读一遍。
+		// 更早的由 search_adaptation_changes 现查。
+		const recent = (plan?.changes ?? []).slice(-10);
+		if (recent.length > 0) {
+			parts.push(
+				section(
+					"最近已采用的改动",
+					recent
+						.map((change) => {
+							const at = project.outline.findIndex((chapter) => chapter.id === change.chapterId);
+							const where = at >= 0 ? `第 ${at + 1} 章` : "全书";
+							return `- ${where} · [${ADAPTATION_CHANGE_LABELS[change.kind] ?? "其他"}] ${change.summary}`;
+						})
+						.join("\n"),
+				),
+			);
+		}
 		const noteLines = noteDigest(project.notes);
 		if (noteLines) parts.push(section("待办", noteLines));
 		return wrap(parts, options?.maxChars);

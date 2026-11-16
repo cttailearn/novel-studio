@@ -290,6 +290,7 @@
 						<button id="tab-manuscript" class="tab is-on" data-view="manuscript" role="tab" aria-selected="true" aria-controls="view-manuscript" tabindex="0"><b>稿</b><span>文稿</span></button>
 						<button id="tab-materials" class="tab" data-view="materials" role="tab" aria-selected="false" aria-controls="view-materials" tabindex="-1"><b>料</b><span>素材工作台</span></button>
 						<button id="tab-writing" class="tab" data-view="writing" role="tab" aria-selected="false" aria-controls="view-writing" tabindex="-1"><b>文</b><span>生文工作台</span></button>
+						<button id="tab-adapt" class="tab" data-view="adapt" role="tab" aria-selected="false" aria-controls="view-adapt" tabindex="-1"><b>改</b><span>改编工作台</span></button>
 					</div>
 					<!-- 手机上章目栏是抽屉，顶栏又只剩检索与⋯；这里给一个直接的入口 -->
 					<button id="stage-rail" class="btn btn-quiet btn-sm only-phone stage-rail-btn" title="章目" aria-label="打开章目" aria-controls="chapter-list" aria-expanded="false">章目</button>
@@ -506,6 +507,54 @@
 						</div>
 					</div>
 				</section>
+
+				<!-- 改编工作台：原文与改编稿双栏对照，改编者只交提案，作者点「采用」才落盘。 -->
+				<section id="view-adapt" class="view view-bench adapt-view" role="tabpanel" aria-labelledby="tab-adapt" aria-label="改编工作台">
+					<div class="adapt-stage">
+						<header class="adapt-bar">
+							<div class="adapt-bar-main">
+								<h3 class="adapt-heading">改编</h3>
+								<select id="adapt-chapter" class="mode-select chapter-select" aria-label="要改编哪一章"></select>
+								<span id="adapt-status" class="pane-note"></span>
+							</div>
+							<div id="adapt-actions" class="adapt-actions"></div>
+						</header>
+						<div class="adapt-grid">
+							<article class="adapt-col adapt-col-original">
+								<header class="adapt-col-head">
+									<h4>原文</h4>
+									<span id="adapt-original-meta" class="pane-note"></span>
+								</header>
+								<div id="adapt-original" class="adapt-text" tabindex="0" aria-label="原文"></div>
+							</article>
+							<article class="adapt-col adapt-col-adapted">
+								<header class="adapt-col-head">
+									<h4>改编稿</h4>
+									<span id="adapt-adapted-meta" class="pane-note"></span>
+									<div class="pane-tools">
+										<button type="button" id="adapt-talk-toggle" class="btn btn-quiet btn-xs" aria-expanded="false">改编者</button>
+									</div>
+								</header>
+								<div id="adapt-adapted" class="adapt-text" tabindex="0" aria-label="改编稿"></div>
+								<textarea id="adapt-editor" class="adapt-editor hidden" spellcheck="false" aria-label="手改改编稿"></textarea>
+							</article>
+						</div>
+						<div class="adapt-dock">
+							<div id="adapt-changes" class="adapt-changes"></div>
+							<details id="adapt-talk" class="adapt-talk">
+								<summary>改编者对话 <span id="adapt-talk-count" class="pane-count"></span></summary>
+								<div id="adapt-stream" class="stream"></div>
+							</details>
+							<form id="adapt-composer" class="composer">
+								<textarea id="adapt-input" rows="2" placeholder="交代怎么改这一章：改谁、留什么、加哪一段……（Enter 呈上，Shift+Enter 换行）"></textarea>
+								<div class="composer-side">
+									<button type="submit" class="btn btn-ink">呈上</button>
+									<button type="button" class="btn btn-quiet hidden" data-abort="adapt">止笔</button>
+								</div>
+							</form>
+						</div>
+					</div>
+				</section>
 			</main>
 
 			<!-- 手机主导航：桌面不出现。案头 / 文稿 / 素材 / 生文 四个一级去处。 -->
@@ -521,6 +570,9 @@
 				</button>
 				<button type="button" class="mobile-nav-item" data-mobile-view="writing">
 					<span class="mobile-nav-label">生文</span>
+				</button>
+				<button type="button" class="mobile-nav-item" data-mobile-view="adapt">
+					<span class="mobile-nav-label">改编</span>
 				</button>
 			</nav>
 
@@ -588,7 +640,22 @@
 						</div>
 					</details>
 
-					<div class="field field-grow">
+					<div class="field field-grow" id="project-adapt-field">
+						<span class="field-label">从一部小说改编<em>选填</em></span>
+						<label class="field">
+							<span class="field-label">原书<em>原料库里的整本书</em></span>
+							<select id="project-adapt-source" name="adaptSource">
+								<option value="">—— 不改编，直接立卷 ——</option>
+							</select>
+						</label>
+						<label class="field">
+							<span class="field-label">改编总要求</span>
+							<textarea id="project-adapt-brief" name="adaptBrief" rows="4" placeholder="例如：把主角换成女性，加一位师兄；主线照旧，人称改成第一人称；感情戏加料但不改结局。"></textarea>
+						</label>
+						<p class="form-hint">选定原书后，章目照原书拆好；每一章由改编者在原文上改，交稿后你点「采用」才存。</p>
+					</div>
+
+					<div class="field field-grow" id="project-library-field">
 						<span class="field-label">从通用素材库取用<span id="library-pick-count" class="pick-count"></span></span>
 						<input id="library-pick-search" class="pick-search" placeholder="按标题、用途或标签筛选" />
 						<div id="library-pick" class="library-pick"></div>
@@ -603,6 +670,50 @@
 					</div>
 				</footer>
 			</form>
+		</dialog>
+
+		<!-- 改编总要求：定下整本书怎么改（主角、人设、人称、加料方向）。
+		     每一章改编时都会把它和已采用的改动台账一起交给改编者。 -->
+		<dialog id="adapt-brief-dialog" class="sheet sheet-form">
+			<form id="adapt-brief-form">
+				<header class="form-head">
+					<h3>改编总要求</h3>
+					<p class="form-hint" id="adapt-brief-hint">写给改编者看的整本书改编方向；每一章都会照着它改。</p>
+				</header>
+				<div class="form-body">
+					<label class="field">
+						<span class="field-label">原书</span>
+						<input id="adapt-brief-source" readonly />
+					</label>
+					<label class="field field-grow">
+						<span class="field-label">总要求</span>
+						<textarea id="adapt-brief-input" rows="6" placeholder="例如：主角换成女性，加一位师兄；主线照旧，人称改成第一人称。"></textarea>
+					</label>
+				</div>
+				<footer class="form-foot">
+					<p id="adapt-brief-error" class="form-error"></p>
+					<div class="dialog-actions">
+						<button type="button" id="adapt-brief-cancel" class="btn btn-quiet">作罢</button>
+						<button type="submit" class="btn btn-ink">存入</button>
+					</div>
+				</footer>
+			</form>
+		</dialog>
+
+		<!-- 已采用的改动台账：后续章节改编时据此保持一致。 -->
+		<dialog id="adapt-ledger-dialog" class="sheet sheet-wide sheet-form">
+			<div class="form-head">
+				<h3>改动台账</h3>
+				<p class="form-hint">每一章采用的那一版相对原文改了什么；改编下一章时会带上这些记录。</p>
+			</div>
+			<div class="form-body">
+				<div id="adapt-ledger-list" class="adapt-ledger-list"></div>
+			</div>
+			<footer class="form-foot">
+				<div class="dialog-actions">
+					<button type="button" id="adapt-ledger-close" class="btn btn-quiet">关闭</button>
+				</div>
+			</footer>
 		</dialog>
 
 		<!-- 把作品里的一条素材收进通用素材库。已有来源条目时可选更新还是另存。 -->
@@ -1048,7 +1159,7 @@
 				<dl class="keys">
 					<div><dt><kbd>Ctrl</kbd><kbd>K</kbd></dt><dd>检索与跳转</dd></div>
 					<div><dt><kbd>Ctrl</kbd><kbd>S</kbd></dt><dd>立即存稿（改稿时）</dd></div>
-					<div><dt><kbd>Ctrl</kbd><kbd>1</kbd> / <kbd>2</kbd> / <kbd>3</kbd></dt><dd>切到 稿 / 料 / 文</dd></div>
+					<div><dt><kbd>Ctrl</kbd><kbd>1</kbd> / <kbd>2</kbd> / <kbd>3</kbd> / <kbd>4</kbd></dt><dd>切到 稿 / 料 / 文 / 改</dd></div>
 					<div><dt><kbd>Alt</kbd><kbd>↑</kbd> / <kbd>↓</kbd></dt><dd>上一章 / 下一章</dd></div>
 					<div><dt><kbd>↑</kbd> / <kbd>↓</kbd></dt><dd>稿页上下滚（读长章时不用摸鼠标）</dd></div>
 					<div><dt><kbd>Esc</kbd></dt><dd>退出专注模式 / 退出改稿 / 关闭弹窗</dd></div>

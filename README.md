@@ -23,12 +23,13 @@
 
 | 开始 | 使用 | 参考 |
 |:--|:--|:--|
-| [为什么是素材](#为什么是素材) | [两个智能体](#两个智能体) | [界面](#界面) |
-| [快速开始](#快速开始) | [三块面板](#三块面板) | [存稿与容错](#存稿与容错) |
+| [为什么是素材](#为什么是素材) | [三支角色](#三支角色) | [界面](#界面) |
+| [快速开始](#快速开始) | [四块面板](#四块面板) | [存稿与容错](#存稿与容错) |
 | [测试](#测试) | [四种写法](#四种写法) | [模型配置](#模型配置) |
-| [项目结构](#项目结构) | [生成记录](#生成记录) | [安全](#安全) |
-| [License](#license) | [智能体也会提问](#智能体也会提问) | [HTTP API](#http-api) |
-| [Contributing](#contributing) | [云端账号版](#云端账号版可选) | [当前限制](#当前限制) |
+| [项目结构](#项目结构) | [改编：在原文上改一章](#改编在原文上改一章) | [安全](#安全) |
+| [License](#license) | [生成记录](#生成记录) | [HTTP API](#http-api) |
+| [Contributing](#contributing) | [智能体也会提问](#智能体也会提问) | [当前限制](#当前限制) |
+| [云端账号版](#云端账号版可选) | | |
 
 ## 为什么是素材
 
@@ -39,18 +40,19 @@
 
 三条硬规矩：**素材自包含**（每条料带种类、用法与关联章节）；**工具边界即职责边界**（设定官没有写正文的工具，执笔者不能改素材）；**不越章**（素材里没有的，记待办或问作者，不凭空发明）。
 
-## 两个智能体
+## 三支角色
 
-| 智能体 | role | 产出 | 专属工具 |
+| 角色 | role | 产出 | 专属工具 |
 |:--|:--|:--|:--|
 | 设定官 | `material` | `materials[]` | `update_outline`、`upsert_material`、`attach_materials` |
 | 执笔者 | `writing` | `drafts[chapterId]` | `write_chapter`、`revise_chapter` |
+| 改编者 | `adapt` | 提案（采用后写 `drafts[chapterId]` 与 `adaptation.changes[]`） | `read_original_chapter`、`read_adapted_chapter`、`search_adaptation_changes`、`propose_adaptation` |
 
-两边共享 8 件只读与辅助工具：`get_project_brief`、`list_chapters`、`read_chapter`、`list_materials`、`search_materials`、`add_note`、`list_notes`、`resolve_note`。有提问通道时再加 `ask_user`。
+共享 8 件只读与辅助工具：`get_project_brief`、`list_chapters`、`read_chapter`、`list_materials`、`search_materials`、`add_note`、`list_notes`、`resolve_note`。有提问通道时再加 `ask_user`；设定官另有四个原料库只读工具（见下节）。
 
-注入的上下文不同：设定官拿到全库索引（id、种类、标题、用法），执笔者拿到本章素材全文与上一章三样（要略、小结、最后 600 字）。差异在快照里，不在提示词里 —— 模型看不到自己不该看的东西。
+注入的上下文不同：设定官拿到全库索引（id、种类、标题、用法），执笔者拿到本章素材全文与上一章三样（要略、小结、最后 600 字），改编者拿到原书本章原文、改编总要求、已采用的改动台账与上一章接续。差异在快照里，不在提示词里 —— 模型看不到自己不该看的东西。
 
-`scripts/smoke.ts` 与 `scripts/agent-loop.ts` 有工具边界断言：设定官拿不到 `write_chapter`，执笔者拿不到 `upsert_material` / `attach_materials` / `update_outline`。改坏了，`pnpm test` 会红。
+`scripts/smoke.ts` 与 `scripts/agent-loop.ts` 有工具边界断言：设定官拿不到 `write_chapter`，执笔者拿不到 `upsert_material` / `attach_materials` / `update_outline` / `propose_adaptation`。改坏了，`pnpm test` 会红。
 
 ## 原料库：资料与小说
 
@@ -63,6 +65,16 @@
 - 兼容入口：旧客户端仍可调用 `/api/novel-sources`；新代码统一用 `/api/material-sources?kind=document|novel`。
 
 `pnpm test:novel` 覆盖编码、章节/定长拆解、磁盘与 IndexedDB、工具边界，并用一部 20MB、两千多章的小说做过真实导入。
+
+## 改编：在原文上改一章
+
+案头「另起一卷」时把原料库里的一部小说选作底本，再写一句改编总要求（换主角、加一条线、改人称、加料……），这一卷就是**改编工程**：章目照原书一章一章拆好，状态全是「未动」，进入「改」工作台逐章改编。
+
+- 改编是**在原文上改**，不是凭空重写：改编者拿到本章原文、总要求、已采用台账与上一章接续，改完必须用 `propose_adaptation` 交一版**提案**（完整稿 + 两三句小结 + 3-8 条改动条目）。
+- 提案**不落盘**：中栏左右两栏对照原文与改编稿，下方列出这一版的改动清单。作者看过之后点「采用这一版」才写入正文并记台账；也可以「手改一稿」在提案上直接改字再采用，或「弃掉这版」。
+- 台账（`adaptation.changes[]`）一章一条（记最新一版相对原文的改动），后续章节改编时按关键词/章节检索台账，人物、称呼、剧情走向才不会前后打架。
+- 连续改编同一章时，改编者会先读现有改编稿，再在它上面继续改；上一章没有改编稿时用原书那一章兜底。
+- 提案在内存里保留 24 小时，最多 200 条；切章、重启服务后旧提案可能不在了，重新交一版即可。采用时若正文在你看稿之后又改过，回 409（`stale`）而不覆盖。
 
 ## 快速开始
 
@@ -185,17 +197,18 @@ Tauri 里的模型请求走 Rust `proxy_stream`：只允许 HTTPS（本机 HTTP 
 拒绝私网/回环/云元数据、不跟随重定向，并限制请求体、响应体与超时。PWA 模式不受影响，
 仍然默认走 `/api/llm` 中继。
 
-## 三块面板
+## 四块面板
 
-三块面板各有各的一席，可以同时生成，互不打断：
+四块面板各有各的一席，可以同时生成，互不打断：
 
-| 面板 | 智能体 | 干什么 |
+| 面板 | 角色 | 干什么 |
 |:--|:--|:--|
 | 案头 · 通用素材库 | 设定官 | 跨作品备料；不写正文 |
 | 素材工作台 | 设定官 | 上传原料、拆料、装料 |
 | 生文工作台 | 执笔者 | 把本章素材组装成正文 |
+| 改编工作台 | 改编者 | 在原书章节上改，交提案给作者点头 |
 
-每块面板有自己的生成状态：代次、占位、忙闲。一块在写，另一块照样能发话；「止笔」只停自己那块。生成中换模型会被服务端拒（409）—— 界面先记下，等这一轮收笔后补发。换卷或删作品才会作废所有轮次。
+每块面板有自己的生成状态：代次、占位、忙闲。一块在写，另一块照样能发话；「止笔」只停自己那块。生成中换模型会被服务端拒（409）—— 界面先记下，等这一轮收笔后补发。换卷或删作品才会作废所有轮次。改编工作台只有改编工程才开席；普通卷宗进「改」会提示另起一卷时选底本。
 
 ## 四种写法
 
@@ -214,9 +227,11 @@ Tauri 里的模型请求走 Rust `proxy_stream`：只允许 HTTPS（本机 HTTP 
 
 换章时写法自动跟着章走：**有旧稿 = 整章重写，空白章 = 从零写起**。没装料时落笔会被挡住（`patch` 除外 —— 它需要的是已有正文），服务端同样回 409。装料是作者可以直接做的事，和 `attach_materials` 写的是同一份数据。
 
+改编工作台不用这四种写法：它只有「按原文改」，一轮一轮往下改；采用之后的稿子和普通正文一样，可以手改、局部修改、看版本。
+
 ## 生成记录
 
-设定官与执笔者的每一席生成都会留档，每跑完一轮更新一次；存在 `data/records.json`。面板头部有「记录」按钮，列出最近 10 条：设定官按作品计，执笔者按章计（同一章留 10 条）。记录带当轮对话与产出摘要，可以从某条记录接着写，也可以删除。
+设定官、执笔者与改编者的每一席生成都会留档，每跑完一轮更新一次；存在 `data/records.json`。面板头部有「记录」按钮，列出最近 10 条：设定官按作品计，执笔者与改编者按章计（同一章留 10 条）。记录带当轮对话与产出摘要，可以从某条记录接着写，也可以删除。
 
 - 续写时带上 `recordId`；记录已被删掉，服务端回 404「这条记录不在了（可能已被删除）」。
 - 会话在内存里：进程重启会丢对话，但记录留在磁盘上，可以从这里接回。
@@ -232,7 +247,7 @@ Tauri 里的模型请求走 Rust `proxy_stream`：只允许 HTTPS（本机 HTTP 
 
 ## 界面
 
-两级：**案头**管卷宗与通用素材库；**写作台**进卷才写。写作台左栏章目（字数、装料数、未写章的朱砂点、搜索），中栏「稿 / 料 / 文」，右案「素材 / 大纲 / 待办」；窄屏时右案变抽屉。
+两级：**案头**管卷宗与通用素材库；**写作台**进卷才写。写作台左栏章目（字数、装料数、未写章的朱砂点、搜索），中栏「稿 / 料 / 文 / 改」，右案「素材 / 大纲 / 待办」；窄屏时右案变抽屉。「改」是改编工作台：上面选章，左右双栏分别是原文与改编稿，下方是这一版的改动清单与改编者对话。
 
 | 稿面 | 行为 |
 |:--|:--|
@@ -246,7 +261,7 @@ Tauri 里的模型请求走 Rust `proxy_stream`：只允许 HTTPS（本机 HTTP 
 |:--|:--|
 | `Ctrl/Cmd+K` | 检索章目、素材与动作 |
 | `Ctrl/Cmd+S` | 存稿 |
-| `Ctrl/Cmd+1 / 2 / 3` | 稿 / 料 / 文 |
+| `Ctrl/Cmd+1 / 2 / 3 / 4` | 稿 / 料 / 文 / 改 |
 | `Alt+↑ / ↓` | 上一章 / 下一章 |
 | `?` | 键盘说明 |
 | `Esc` | 关弹层 / 退出专注 |
@@ -388,10 +403,14 @@ PATCH /api/providers/:id/models
 | `GET` | `/api/bootstrap` | 启动数据：设置、供应商、模型 |
 | `GET/PUT` | `/api/settings` | 界面与服务设置 |
 | `GET/POST` | `/api/providers` | 供应商列表 / 新建 |
-| `POST` | `/api/sessions` | 开一席（`role`: `material` / `writing`） |
+| `POST` | `/api/sessions` | 开一席（`role`: `material` / `writing` / `adapt`） |
 | `POST` | `/api/sessions/:id/messages` | 发一轮，NDJSON 流 |
 | `POST` | `/api/sessions/:id/abort` | 止笔 |
 | `POST` | `/api/projects/:id/chapters/:chapterId/write` | 一次性成文 |
+| `POST` | `/api/projects/:id/chapters/:chapterId/adapt` | 改编一章，交提案（NDJSON 流） |
+| `GET/DELETE` | `/api/projects/:id/chapters/:chapterId/adapt` | 取 / 弃这一章未采用的提案 |
+| `POST` | `/api/projects/:id/chapters/:chapterId/adapt/apply` | 采用提案，写正文并记台账 |
+| `GET/PATCH` | `/api/projects/:id/adaptation` | 读改编总要求与原书 / 改总要求 |
 | `POST` | `/api/questions/:id/answer` | 回答提问 |
 | `GET` | `/api/projects/:id` | 工程骨架 + 章元数据 |
 | `GET` | `/api/projects/:id/chapters/:chapterId/draft` | 取正文（`?history=1` 连版本） |
@@ -408,6 +427,7 @@ POST /api/projects/:id/chapters/:chapterId/write
 - 网络重试沿用同一个 `requestId`，服务端重放原结果而不重复调用模型或覆盖正文。每轮以真实保存后的 revision 验收，模型只说「写好了」但没有保存不算完成；`run_end` 带保存结果与模型成本。
 - 写作工具只能读、写当前章及其上一章；素材检索不会越过本章装配清单。
 - `PATCH /api/projects/:id/chapters/:chapterId` 的 body 是 `{ content, autosave?, summary? }`；`autosave: true` 只递增修订号、不占版本历史；`summary` 非空才覆盖。
+- 改编：建工程时 `POST /api/projects` 带 `{ adaptation: { sourceId, brief } }`，章目照原书拆好。`POST .../adapt` 的 body 是 `{ modelRef, thinkingLevel, requestId, note?, recordId? }`，流里会有一行 `{"type":"proposal", proposal:{ id, content, summary, changes }}`；`run_end.saved` 表示这一轮是否交上了提案。`POST .../adapt/apply` 的 body 是 `{ proposalId, content?, summary?, changes? }`：`content` 非空则以作者手改稿为准；提案已过期/已用过回 404，正文在你看稿后又改过回 409 `stale`。
 - 会话的 `/messages` 返回 NDJSON：文本增量、工具调用、提问、收尾各是一行；会话过期由前端自动重开。
 
 其余数据端点主要有 `/api/library`、`/api/kinds`、`/api/uploads`、`/api/projects/:id/volumes`、`/api/projects/:id/materials`、`/api/projects/:id/snapshots`、`/api/projects/:id/export`、`/api/storage`、`/api/novel/export`、`/api/novel/import`；完整路由见 `src/server/api-router.ts`。
@@ -416,7 +436,7 @@ POST /api/projects/:id/chapters/:chapterId/write
 
 ```
 src/
-  ai/          模型注册、提示词、工具、智能体、提问接口、浏览器用 LLM 客户端
+  ai/          模型注册、提示词、工具、智能体、改编（adapt.ts）、提问接口、浏览器用 LLM 客户端
   config/      环境、设置、凭据（* 每个都有 -disk 落盘版与纯逻辑版）
   server/      HTTP 路由（api-router 与传输无关）、Node 适配器、中继、会话、记录、上传解析
   store/       工程、素材库、素材种类（纯模型层 / -disk 落盘 / -idb 浏览器）、.novel 包
@@ -456,6 +476,8 @@ data/          运行时数据（git 忽略）：工程、正文、密钥、记�
 - 浏览器端产物（`public/browser/**`）需要 `pnpm build:browser` 生成，不是源码直接跑；本仓库里它是构建输出，不该手改。
 - 多用户模式的真实浏览器端到端尚未自动化（本机沙箱起不了 Chrome）；`pnpm test:local` 用真路由 + 假 IndexedDB 覆盖了同一批逻辑。
 - 不能删章、拖拽排序；卷也不能拖拽重排。
+- 改编提案放在内存里，保留 24 小时、最多 200 条；服务重启或过期后旧提案不在了，重新改编一版即可。台账随工程存盘。
+- 改编底本来自原料库，最长 3000 万字、最多 4000 章；原书章节标题识别不到时按固定字数切块，章名就是块序号。
 - 本地素材检索只在当前作品与通用素材库内，不跨作品全文检索；联网检索是设定官的可选工具，不代替本章素材检索。
 - 原料库支持 `.txt` / `.md` / `.html` / `.docx`；`pdf` / `epub` / `doc` 明确拒绝（415）。编码按 BOM 或严格 UTF-8 / GB18030 识别，识别失败会报错而不是显示乱码。
 - 旧的 `POST /api/uploads` 仍只按 UTF-8 解析并截断 20 万字，仅为兼容保留；素材工作台的新导入都走持久化原料库，不截断整本小说。
