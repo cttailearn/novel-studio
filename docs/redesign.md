@@ -64,3 +64,14 @@ npm run dev          # 本地单机，http://127.0.0.1:8787
 npm run build:web    # 出 dist/web（含浏览器端本地 API）
 npm run dev:tauri    # 桌面壳
 ```
+
+## 六、手机上的改编台
+
+窄屏（≤920px）不再把章目竖着铺满半屏：章目收成一行可以横滑的章条，正文拿走剩下的全部高度；≤620px 时工具条只留图标，主按钮保留短字，改编方向框占满整行。读稿台里的副驾 / 改编者是一张自下而上的半屏抽屉（平板 56vh、手机 46vh），打开时记住并恢复正文的滚动位置，不再把正在读的那一段顶走。案头（`#view-desk`）不显示底部导航，点进书里才出现。
+
+截图：`docs/screens/m-adapt.png`、`m-adapt-agent.png`、`t-adapt.png`、`m-desk.png`。
+
+## 七、线上
+
+- 网页版：<https://novel.cttai.art>（部署在腾讯云，`systemctl restart novel-studio` 后生效）
+- 安装包：<https://github.com/cttailearn/novel-studio/releases/tag/v0.6.0>（预发布；桌面自动更新要等签名后的 `latest.json`）
