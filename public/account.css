@@ -11,6 +11,7 @@
 html.auth-locked,
 html.auth-locked body { overflow: hidden; }
 html.auth-locked .desk,
+html.auth-locked #app,
 html.auth-locked #boot-skeleton { visibility: hidden; }
 
 .auth-gate {

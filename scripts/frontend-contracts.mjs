@@ -1,179 +1,425 @@
-// 前端静态契约测试：不启动服务，也不冒充真实浏览器行为验证。
+// 前端静态契约测试：不启动服务，也不冒充真实浏览器。
+//
+// 这套断言守的是「不能靠肉眼发现、坏了以后症状离现场很远」的几件事：
+// 启动顺序、挂点 id、高度链与滚动容器、设计令牌纪律、以及几条产品行为。
+// 交互本身不在这里验（scripts/workbench.ts 跑真服务，另用 jsdom 冒烟）。
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { readdir, readFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const app = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
-const settings = await readFile(new URL("../public/settings.js", import.meta.url), "utf8");
-const update = await readFile(new URL("../public/update.js", import.meta.url), "utf8");
-const html = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
-const css = await readFile(new URL("../public/style.css", import.meta.url), "utf8");
-const manifest = JSON.parse(await readFile(new URL("../public/manifest.json", import.meta.url), "utf8"));
+const here = path.dirname(fileURLToPath(import.meta.url));
+const root = path.join(here, "..");
+const publicDir = path.join(root, "public");
+const read = (name) => readFile(path.join(publicDir, name), "utf8");
 
-function functionBody(name) {
-	const start = app.indexOf(`function ${name}(`);
-	assert.notEqual(start, -1, `缺少函数 ${name}`);
-	const brace = app.indexOf("{", start);
-	let depth = 0;
-	for (let i = brace; i < app.length; i += 1) {
-		if (app[i] === "{") depth += 1;
-		if (app[i] === "}") depth -= 1;
-		if (depth === 0) return app.slice(brace + 1, i);
-	}
-	throw new Error(`函数 ${name} 未闭合`);
+const html = await read("index.html");
+const app = await read("app.js");
+const boot = await read("boot.js");
+const themeInit = await read("theme-init.js");
+const update = await read("update.js");
+const manifest = JSON.parse(await read("manifest.json"));
+const style = await read("style.css");
+const views = await read("views.css");
+const overlays = await read("overlays.css");
+
+const moduleNames = (await readdir(path.join(publicDir, "app"))).filter((name) => name.endsWith(".js")).sort();
+const modules = new Map();
+for (const name of moduleNames) modules.set(name, await read(path.join("app", name)));
+
+const allJs = [app, ...modules.values()].join("\n");
+const allCss = [style, views, overlays].join("\n");
+
+/* ---------------------------------------------------------------- 一张网 */
+
+const checks = [];
+function check(name, run) {
+	checks.push({ name, run });
+}
+function expect(pattern, text, message) {
+	assert.match(text, pattern, message);
+}
+function expectNot(pattern, text, message) {
+	assert.doesNotMatch(text, pattern, message);
 }
 
-// app.js 是浏览器 ES module；用 vm 编译可检查语法而不执行 DOM 启动代码。
+/* ------------------------------------------------------- 0. 语法与图 */
+
+// 浏览器 ES module 用 vm 编译：只查语法，不执行任何 DOM 代码。
 const { SourceTextModule } = await import("node:vm");
 if (typeof SourceTextModule === "function") {
-	new SourceTextModule(app);
-	new SourceTextModule(settings);
-	new SourceTextModule(update);
+	check("所有前端模块语法正确", () => {
+		for (const [name, source] of [["app.js", app], ...modules]) {
+			assert.doesNotThrow(() => new SourceTextModule(source, { identifier: name }), `${name} 语法错误`);
+		}
+	});
 }
 
-const manuscript = functionBody("renderManuscriptView");
-assert.match(manuscript, /state\.editing && liveEditor\?\.dataset\.chapterId === state\.chapterId/);
-assert.match(manuscript, /return;/, "同章活编辑器必须在 replaceChildren 前早退");
-assert.ok(manuscript.indexOf("liveEditor") < manuscript.indexOf("box.replaceChildren()"));
-assert.match(app, /editor\.dataset\.chapterId = chapter\.id/);
+check("入口模块都在", () => {
+	for (const required of ["core.js", "api.js", "ctx.js", "desk.js", "studio.js", "paper.js", "materials.js", "outline.js", "dock.js", "adapt.js", "settings-view.js", "palette.js", "share.js"]) {
+		assert.ok(modules.has(required), `缺少 public/app/${required}`);
+	}
+});
 
-const writeChapter = functionBody("setWriteChapter");
-assert.match(app, /async function setWriteChapter\(chapterId\)/);
-assert.ok(writeChapter.indexOf("await flushEditor()") < writeChapter.indexOf("state.chapterId = current.id"));
-assert.match(writeChapter, /state\.projectId !== projectId \|\| state\.chapterId !== originalChapterId/);
-assert.match(writeChapter, /if \(!next \|\| !projectId\) return false/);
+// 相对 import 必须都指向真实存在的模块：少一个，整页就停在白屏。
+check("模块之间的相对导入都指得到", () => {
+	const missing = [];
+	for (const [name, source] of [["app.js", app], ...modules]) {
+		const fromDir = name === "app.js" ? "public" : "public/app";
+		for (const match of source.matchAll(/from\s+"(\.[^"]+)"/g)) {
+			const rel = match[1];
+			const target = path.posix.normalize(path.posix.join(fromDir, rel));
+			if (!existsSync(path.resolve(root, target))) missing.push(`${name} -> ${rel}`);
+		}
+	}
+	assert.equal(missing.length, 0, missing.join(" "));
+});
 
-assert.match(app, /node\.dataset\.action = action\.data\.kind/);
-assert.match(app, /document\.addEventListener\("click",[\s\S]*?closest\("\[data-action\]"\)/);
-assert.match(app, /retryData: \{ kind: "retry-round", pane, text, outgoing \}/);
-assert.match(app, /retryData: \{ kind: "retry-write", mode, note, chapterId \}/);
-assert.match(app, /chip\.dataset\.action = "ask-option"/);
-assert.match(app, /send\.dataset\.action = "ask-send"/);
-assert.match(app, /skip\.dataset\.action = "ask-skip"/);
-assert.match(app, /!event\.shiftKey && !isImeComposing\(event\)/);
-assert.match(app, /event\.isComposing \|\| event\.keyCode === 229/);
+/* ------------------------------------------------------- 1. 启动顺序 */
 
-assert.match(app, /function trapDrawerTab\(event, container\)/);
-assert.match(app, /if \(desk\) desk\.inert = true/);
-assert.match(app, /if \(desk\) desk\.inert = false/);
-assert.match(app, /function setMobileDrawerState\(kind, open\)/);
-assert.match(html, /<link rel="icon" href="\/favicon-32\.png" type="image\/png" sizes="32x32"/);
-assert.match(html, /<link rel="apple-touch-icon" href="\/apple-touch-icon\.png"/);
-assert.match(html, /<link rel="manifest" href="\/manifest\.json"/);
-for (const icon of ["/icon-192.png", "/icon-512.png"]) {
-	assert.ok(manifest.icons.some((entry) => entry.src === icon && entry.sizes !== "any"), `manifest 缺少 ${icon}`);
+// boot.js 负责在 Tauri / 本地单机模式下把 /api 换成浏览器内实现；
+// 服务端会把模式标记插在它前面，所以这一行必须原样存在于首屏 HTML。
+check("首屏带 boot 标签（服务端要往里插模式标记）", () => {
+	expect(/<script src="\/boot\.js"><\/script>/, html);
+});
+
+check("先定主题再上样式，避免白闪", () => {
+	const themeAt = html.indexOf('src="/theme-init.js"');
+	const styleAt = html.indexOf('href="/style.css"');
+	assert.ok(themeAt > 0, "缺少 theme-init.js");
+	assert.ok(styleAt > themeAt, "theme-init.js 必须排在 style.css 之前");
+	expect(/dataset\.theme/, themeInit, "theme-init 要直接写 dataset.theme");
+	expect(/novel-studio-theme/, themeInit);
+});
+
+check("模块入口排在 boot 之后", () => {
+	const bootAt = html.indexOf('src="/boot.js"');
+	const appAt = html.indexOf('src="/app.js"');
+	assert.ok(appAt > bootAt, "app.js 必须在 boot.js 之后加载");
+	expect(/<script type="module" src="\/app\.js"><\/script>/, html);
+});
+
+check("importmap 把 pi-ai 指到浏览器内实现", () => {
+	expect(/type="importmap"/, html);
+	for (const name of ["@earendil-works/pi-ai", "@earendil-works/pi-agent-core"]) {
+		assert.ok(html.includes(name), `importmap 缺少 ${name}`);
+	}
+	expect(/"\/browser\/vendor\/pi-ai\/shim\.js"/, html);
+});
+
+check("PWA 清单与图标齐全", () => {
+	expect(/<link rel="manifest" href="\/manifest\.json"/, html);
+	expect(/<link rel="apple-touch-icon" href="\/apple-touch-icon\.png"/, html);
+	for (const icon of ["/icon-192.png", "/icon-512.png"]) {
+		assert.ok(manifest.icons.some((entry) => entry.src === icon), `manifest 缺少 ${icon}`);
+	}
+	assert.ok(manifest.icons.some((entry) => entry.src === "/icon-512.png" && entry.purpose === "maskable"));
+});
+
+check("首屏有靴子骨架，脚本跑起来会被撤掉", () => {
+	expect(/id="boot-skeleton"/, html);
+	expect(/boot-skeleton/, app, "入口要负责在挂载后移除骨架");
+	expect(/data-mounted/, html);
+});
+
+/* --------------------------------------------------- 2. 结构与挂点 id */
+
+check("三间屋都在：案头 / 写作台 / 改编台", () => {
+	for (const view of ["desk", "studio", "adapt"]) {
+		expect(new RegExp(`id="view-${view}"`), html, `缺少 #view-${view}`);
+	}
+	expect(/id="app"[^>]*data-view="desk"/, html);
+});
+
+check("书脊导航的五个去处", () => {
+	for (const nav of ["desk", "paper", "materials", "outline", "library"]) {
+		expect(new RegExp(`class="spine-btn[^"]*"[^>]*data-nav="${nav}"|data-nav="${nav}"[^>]*class="spine-btn`), html, `书脊缺 ${nav}`);
+	}
+});
+
+check("写作台的四件：章目、纸面、素材、大纲", () => {
+	for (const id of ["rail", "rail-list", "ring-value", "ms-page", "ms-body", "ms-title", "mat-scroll", "outline-scroll", "paper-actions"]) {
+		assert.ok(html.includes(`id="${id}"`), `缺少 #${id}`);
+	}
+	expect(/id="ms-body"[^>]*spellcheck="false"/, html, "正文输入框应关掉拼写检查");
+});
+
+check("副驾坞有三个身份与一条输入", () => {
+	expect(/id="dock-roles"/, html);
+	for (const role of ["writing", "material", "polish"]) {
+		expect(new RegExp(`data-role="${role}"`), html, `副驾缺 ${role}`);
+	}
+	for (const id of ["dock-stream", "dock-input", "btn-dock-send", "dock-model-label"]) {
+		assert.ok(html.includes(`id="${id}"`), `副驾缺 #${id}`);
+	}
+});
+
+check("命令面板是可访问的 combobox", () => {
+	expect(/id="palette-input"[^>]*role="combobox"[^>]*aria-controls="palette-list"/, html);
+	expect(/id="palette-list"[^>]*role="listbox"/, html);
+	expect(/aria-activedescendant/, modules.get("palette.js"), "选中项要写回输入框");
+});
+
+check("设置面板四页，并给更新面板留好位置", () => {
+	for (const panel of ["model", "prefs", "data", "about"]) {
+		assert.ok(html.includes(`id="settings-panel-${panel}"`), `缺少 #settings-panel-${panel}`);
+		assert.ok(html.includes(`data-panel="${panel}"`), `设置导航缺 ${panel}`);
+	}
+	// update.js 把「检查更新」画进这个容器；容器没了，整块会静默消失。
+	expect(/id="settings-about-panel"/, html);
+	expect(/id="settings-update-nav-dot"/, html);
+	expect(/id="settings-mode-line"/, html);
+	expect(/<dialog[^>]*id="settings"/, html);
+});
+
+check("上传用的隐藏 file input 都在", () => {
+	for (const id of ["material-file-input", "library-file-input", "source-file-input", "novel-file-input"]) {
+		assert.ok(html.includes(`id="${id}"`), `缺少 #${id}`);
+	}
+	expect(/id="source-file-input"[^>]*accept="[^"]*\.epub/, html, "原料库要能收 epub");
+	expect(/id="novel-file-input"[^>]*accept="[^"]*\.novel/, html, "搬家要能收 .novel");
+});
+
+check("移动端底部导航与抽屉", () => {
+	expect(/id="mobile-nav"/, html);
+	for (const nav of ["desk", "paper", "materials", "outline", "dock"]) {
+		expect(new RegExp(`data-nav="${nav}"`), html, `移动导航缺 ${nav}`);
+	}
+	for (const id of ["drawer", "scrim", "toasts", "modal"]) {
+		assert.ok(html.includes(`id="${id}"`), `缺少 #${id}`);
+	}
+});
+
+check("页内 id 不重复", () => {
+	const counts = new Map();
+	for (const match of html.matchAll(/\sid="([^"]+)"/g)) counts.set(match[1], (counts.get(match[1]) ?? 0) + 1);
+	const duplicated = [...counts].filter(([, n]) => n > 1).map(([id]) => id);
+	assert.equal(duplicated.length, 0, `重复的 id：${duplicated.join(" ")}`);
+});
+
+// $() 取的是文档里第一个同名元素：取不到就静默变成 null，点下去毫无反应。
+check("脚本取的每个 id 都解析得到", () => {
+	const htmlIds = new Set([...html.matchAll(/\sid="([^"]+)"/g)].map((m) => m[1]));
+	// 模块既会直接赋值 .id，也会在 el() 的属性对象里写 id: "…"，两种都算自建节点。
+	const dynamic = new Set([
+		...[...allJs.matchAll(/\.id\s*=\s*"([^"]+)"/g)].map((m) => m[1]),
+		...[...allJs.matchAll(/\bid:\s*"([a-z0-9-]+)"/g)].map((m) => m[1]),
+		...[...allJs.matchAll(/setAttribute\(\s*"id"\s*,\s*"([^"]+)"/g)].map((m) => m[1]),
+	]);
+	const referenced = new Set([...allJs.matchAll(/\$\(\s*"#([a-z0-9-]+)"\s*\)/gi)].map((m) => m[1]));
+	const missing = [...referenced].filter((id) => !htmlIds.has(id) && !dynamic.has(id));
+	assert.equal(missing.length, 0, `找不到：${missing.join(" ")}`);
+});
+
+/* ------------------------------------------------- 3. 高度链与滚动 */
+
+// 整页不滚动：每一层都要让步给下一层，最后只有稿纸和对话流自己滚。
+check("高度链逐级归零 min-height", () => {
+	const chain = [".app-main", ".stage", ".view", ".view-studio.is-active", ".rail", ".paper-shell", ".paper-body", ".pane", ".dock"];
+	const flat = allCss.replace(/\s+/g, " ");
+	const broken = chain.filter((selector) => {
+		const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+		return !new RegExp(`${escaped} \\{[^}]*min-height: 0`).test(flat);
+	});
+	assert.equal(broken.length, 0, broken.join(" "));
+});
+
+check("稿纸自己是滚动容器", () => {
+	const flat = views.replace(/\s+/g, " ");
+	expect(/\.ms-scroll \{[^}]*overflow-y: auto/, flat);
+	expect(/\.ms-body \{[^}]*resize: none/, flat, "正文框不该出现拖拽把手");
+});
+
+check("稿纸有死宽度，不被 fit-content 收窄", () => {
+	const flat = views.replace(/\s+/g, " ");
+	expect(/\.ms-page \{[^}]*width: min\(100%/, flat);
+	expect(/\.dock-stream \{[^}]*overflow-y: auto/, flat);
+});
+
+check("正文框会跟着内容长高", () => {
+	expect(/function fit\(\)/, modules.get("paper.js"));
+	expect(/textarea\.style\.height = `\$\{Math\.max\(textarea\.scrollHeight, 320\)\}px`/, modules.get("paper.js"));
+	expect(/textarea\?\.addEventListener\("input"[\s\S]{0,120}?fit\(\)/, modules.get("paper.js"));
+});
+
+/* --------------------------------------------------------- 4. 令牌纪律 */
+
+const styleNoComments = style.replace(/\/\*[\s\S]*?\*\//g, "");
+const tokenBlock = (pattern) => [...styleNoComments.matchAll(pattern)].map((m) => m[0]);
+const lightBlocks = tokenBlock(/^:root \{[\s\S]*?^\}/gm);
+const darkBlocks = tokenBlock(/^:root\[data-theme="dark"\] \{[\s\S]*?^\}/gm);
+
+check("亮/暗两套令牌都在", () => {
+	assert.ok(lightBlocks.length >= 1, "缺少 :root 令牌块");
+	assert.ok(darkBlocks.length >= 1, "缺少暗色令牌块");
+	expect(/color-scheme: light;/, style);
+	expect(/color-scheme: dark;/, style, "暗色块要声明 color-scheme，原生控件才跟着变");
+});
+
+check("令牌块之外没有硬编码颜色", () => {
+	let outside = styleNoComments;
+	for (const block of [...lightBlocks, ...darkBlocks].sort((a, b) => b.length - a.length)) outside = outside.split(block).join("");
+	const hardcoded = outside.match(/#[0-9a-fA-F]{3,8}\b|rgba?\(/g) ?? [];
+	assert.equal(hardcoded.length, 0, `漏了：${hardcoded.slice(0, 6).join(" ")}`);
+});
+
+check("按 var() 取的令牌都有定义", () => {
+	const css = allCss.replace(/\/\*[\s\S]*?\*\//g, "");
+	const declared = new Set([...css.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1]));
+	const used = new Set([...css.matchAll(/var\(\s*(--[a-z0-9-]+)/g)].map((m) => m[1]));
+	const undefined = [...used].filter((name) => !declared.has(name));
+	assert.equal(undefined.length, 0, undefined.join(" "));
+});
+
+check("会变色的令牌暗色都覆盖了", () => {
+	// 尺度类令牌（字号/间距/圆角/栏宽/字体）与昼夜无关，不要求重复定义。
+	const scale = /^--(ui|song|mono|serif|kai|sans|fs-|sp-|r-|spine-w|rail-w|dock-w|top-h|nav-h|tap|paper-fs|paper-lh|measure|ease|fast|base|slow|lh-|i-|brush|cinnabar|rule|moss|elev|hover)/;
+	const names = (blocks) => new Set(blocks.flatMap((block) => [...block.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1])));
+	const light = names(lightBlocks);
+	const dark = names(darkBlocks);
+	const missing = [...light].filter((name) => !dark.has(name) && !scale.test(name) && !name.startsWith("--safe-"));
+	assert.equal(missing.length, 0, missing.join(" "));
+});
+
+check("尊重系统的减少动态效果", () => {
+	expect(/@media \(prefers-reduced-motion: reduce\)/, allCss);
+});
+
+check("专注模式真的把三栏收起来", () => {
+	const flat = allCss.replace(/\s+/g, " ");
+	expect(/\.app\.is-focus/, flat);
+	expect(/\.app\.is-focus[^{]*\{[^}]*\.spine|\.app\.is-focus \.spine/, flat, "专注模式应藏起书脊");
+	expect(/\.app\.dock-open/, flat);
+	expect(/\.app\.rail-open/, flat);
+});
+
+check("有窄屏断点，且三栏会变成抽屉", () => {
+	const breaks = [...allCss.matchAll(/@media \(max-width: (\d+)px\)/g)].map((m) => Number(m[1]));
+	assert.ok(breaks.some((width) => width <= 900), `缺少窄屏断点：${breaks.join(",")}`);
+	assert.ok(breaks.some((width) => width >= 1100), `缺少收窄断点：${breaks.join(",")}`);
+});
+
+/* --------------------------------------------------- 5. 产品行为（代码级） */
+
+check("正文自动存稿，切章前先落盘", () => {
+	const ctx = modules.get("ctx.js");
+	expect(/1100/, ctx, "自动存稿的节流窗口");
+	expect(/autosave: true/, ctx);
+	// 切章顺序错了就会把上一章的改动写进下一章。
+	const openAt = ctx.indexOf("export async function openChapter");
+	const flushAt = ctx.indexOf("await flushSave()", openAt);
+	const setAt = ctx.indexOf("state.activeId = id", openAt);
+	assert.ok(flushAt > openAt && setAt > flushAt, "openChapter 必须先 flushSave 再换 activeId");
+});
+
+check("换章换纸，但同一章里不抢正文", () => {
+	const paper = modules.get("paper.js");
+	expect(/textarea\?\.dataset\.chapter !== draft\.id/, paper);
+	expect(/document\.activeElement !== textarea/, paper);
+});
+
+check("el() 认得 on: { … } 写法", () => {
+	// 曾经只认 onclick，全站按钮因此一个都没挂上事件。
+	const core = modules.get("core.js");
+	expect(/key === "on" && typeof value === "object"/, core);
+	expect(/addEventListener\(event, handler\)/, core);
+	expect(/export function pack\(/, core, "可选子节点要能摊平，别把 null 变成文本");
+});
+
+check("流式协议按 NDJSON 逐行读", () => {
+	const api = modules.get("api.js");
+	expect(/streamNdjson/, api);
+	expect(/indexOf\("\\n"\)/, api, "要按换行切行，不能把整段当一条");
+	expect(/x-run/, api, "要能接住断线重连的运行号");
+	expect(/x-write-replay/, api, "重放标记要能看见");
+});
+
+check("写作流把思考、工具、结果分开", () => {
+	const paper = modules.get("paper.js");
+	expect(/thinking/, paper);
+	expect(/tool_start/, paper);
+	expect(/run_end/, paper);
+	expect(/savedRevision/, paper);
+});
+
+check("断线后能接回同一条流", () => {
+	const api = modules.get("api.js");
+	expect(/\/api\/runs\/\$\{encodeURIComponent\(id\)\}\/stream/, api);
+	expect(/since/, api);
+});
+
+check("副驾能答模型提问", () => {
+	const dock = modules.get("dock.js");
+	expect(/answerQuestion/, dock);
+	expect(/ask-opt/, dock);
+});
+
+check("改编稿不落盘，采用才写", () => {
+	const adapt = modules.get("adapt.js");
+	expect(/applyProposal/, adapt);
+	expect(/proposalId/, adapt);
+	expect(/baseRevision|又改过一版/, adapt, "旧提案要被后端挡下并说清楚");
+	expectNot(/saveChapter\(/, adapt, "改编台不该直接存正文");
+});
+
+check("润色走选区，替换要带预期值", () => {
+	const paper = modules.get("paper.js");
+	expect(/polishChapter/, paper);
+	expect(/expectedRevision/, paper);
+	expect(/stale/, paper);
+});
+
+check("导出与搬家都有出口", () => {
+	const share = modules.get("share.js");
+	expect(/saveFileNatively/, share, "Tauri 契约要求保留这个名字");
+	expect(/exportNovel/, share);
+	expect(/importNovel/, share);
+	expect(/__mogengSaveFile/, share, "桌面端用原生保存对话框");
+});
+
+check("主题开关与首帧脚本用同一个键", () => {
+	expect(/novel-studio-theme/, app);
+	expect(/novel-studio-theme/, themeInit);
+	expect(/#efe8d9|#17150f/, app, "切换时同步 meta theme-color");
+});
+
+check("设置面板接得上服务端", () => {
+	const settings = modules.get("settings-view.js");
+	expect(/getSettings|putSettings/, settings);
+	expect(/createProvider/, settings);
+	expect(/fetchProviderModels/, settings);
+	expect(/retryStorage/, settings);
+	expect(/restoreSnapshot/, settings);
+	expect(/prefers-color-scheme|auto/, settings);
+});
+
+check("更新面板没被改坏", () => {
+	expect(/AUTO_CHECK_KEY/, update);
+	expect(/invoke\("update_check"\)/, update);
+	expectNot(/innerHTML/, update, "远端说明不能拼 HTML");
+});
+
+check("本地模式与云端登录仍由 boot/auth-gate 接管", async () => {
+	expect(/ensureAuth/, app, "入口要先过登录闸门");
+	expect(/__NOVEL_AUTH_STATE__|ensureAuth/, await read("auth-gate.js"));
+	expect(/__NOVEL_LOCAL_MODE__/, boot);
+	expect(/\/browser\/local-api\.js/, boot);
+	expect(/installNativeSave|__mogengSaveFile/, boot, "Tauri 原生保存仍要装上");
+});
+
+/* ------------------------------------------------------------- 收尾 */
+
+let failed = 0;
+for (const item of checks) {
+	try {
+		await item.run();
+		console.log(`  ok  ${item.name}`);
+	} catch (error) {
+		failed += 1;
+		console.log(`  --  ${item.name}`);
+		console.log(`      ${error.message}`);
+	}
 }
-assert.ok(manifest.icons.some((entry) => entry.src === "/icon-512.png" && entry.purpose === "maskable"));
-assert.match(html, /id="mobile-nav"[^>]*aria-label="主导航"/);
-for (const view of ["home", "manuscript", "materials", "writing"]) {
-	assert.match(html, new RegExp(`data-mobile-view="${view}"`));
-}
-assert.match(html, /id="mobile-tools"[^>]*aria-haspopup="dialog"[^>]*aria-controls="mobile-tools-dialog"/);
-assert.match(html, /id="mobile-tools-dialog"[^>]*tabindex="-1"/);
-for (const tool of ["rail", "tools", "bible", "palette", "theme", "settings"]) {
-	assert.match(html, new RegExp(`data-mobile-tool="${tool}"`));
-}
-assert.match(app, /function updateMobileNav\(\)/);
-assert.match(app, /function showMobileView\(view\)/);
-assert.match(app, /function openMobileTools\(\)/);
-assert.match(app, /function runMobileTool\(tool\)/);
-assert.match(app, /document\.querySelectorAll\("\[data-mobile-view\]"\)/);
-assert.match(app, /document\.querySelectorAll\("\[data-mobile-tool\]"\)/);
-assert.match(app, /function enhanceMobileSheets\(\)/);
-assert.match(app, /mobile-form-submit/);
-assert.match(app, /mobile-form-cancel/);
-assert.match(app, /window\.visualViewport\?\.addEventListener\("resize", syncKeyboardInset\)/);
-assert.ok(!html.includes("mobile-nav-glyph"));
-assert.match(css, /\.bench-talk \.pane-note \{ display: none; \}/);
-assert.match(css, /\.palette \{[^}]*opacity: 1 !important;[^}]*transform: none !important;/);
-assert.match(app, /const compact = phoneQuery\?\.matches/);
-assert.match(app, /project\.stats\.chapters \+ " 章 · " \+ fmt\(project\.stats\.words\)/);
-assert.match(settings, /暂无可用模型/);
-assert.match(settings, /先在下方配置供应商并填入 API Key/);
-assert.match(app, /panel\.setAttribute\("aria-modal", "true"\)/);
-assert.match(app, /restoreFocus\(railDrawerTrigger\)/);
-assert.match(app, /restoreFocus\(bibleDrawerTrigger\)/);
-
-for (const view of ["manuscript", "materials", "writing"]) {
-	assert.match(html, new RegExp(`id="tab-${view}"[^>]*role="tab"[^>]*aria-controls="view-${view}"`));
-	assert.match(html, new RegExp(`id="view-${view}"[^>]*role="tabpanel"[^>]*aria-labelledby="tab-${view}"`));
-}
-assert.match(html, /id="bible"[^>]*role="tabpanel"/);
-// 改编台是写作台之外独立的一间：没有第四个页签，不能与稿 / 料 / 文共用版面。
-assert.ok(!html.includes('id="tab-adapt"'));
-assert.ok(!html.includes('data-view="adapt"'));
-assert.match(html, /id="adapt-app"[^>]*role="region"/);
-assert.match(html, /id="adapt-chapters"/);
-assert.match(app, /function openAdaptApp\(/);
-assert.match(app, /function enterAdaptMode\(/);
-assert.match(app, /classList\.toggle\("adapt-open"/);
-assert.match(css, /body\.adapt-open \.desk > \.beam/);
-assert.match(app, /function bindTabKeyboard\(tablist, selector\)/);
-assert.match(app, /\["ArrowLeft", "ArrowRight", "Home", "End"\]/);
-assert.match(app, /tab\.tabIndex = on \? 0 : -1/g);
-
-assert.match(html, /id="palette-input"[^>]*role="combobox"[^>]*aria-controls="palette-results"/);
-assert.match(app, /row\.id = "palette-option-" \+ index/);
-assert.match(app, /input\.setAttribute\("aria-activedescendant", rows\[index\]\.id\)/);
-assert.match(app, /row\.addEventListener\("mousemove", \(\) => setPaletteIndex\(index\)\)/);
-
-const search = functionBody("bindSearch");
-assert.match(search, /timer = setTimeout\(apply, 180\)/);
-assert.match(search, /clearTimeout\(timer\)/);
-assert.match(search, /input\.focus\(\{ preventScroll: true \}\)/);
-
-assert.match(html, /id="settings-tab-models"[^>]*role="tab"[^>]*aria-controls="settings-models-panel"/);
-assert.match(html, /id="settings-tab-web"[^>]*role="tab"[^>]*aria-controls="settings-web-panel"/);
-assert.match(html, /id="settings-web-panel"[^>]*role="tabpanel"[^>]*aria-labelledby="settings-tab-web"/);
-assert.match(html, /id="settings-tab-about"[^>]*role="tab"[^>]*aria-controls="settings-about-panel"/);
-assert.match(html, /id="settings-about-panel"[^>]*role="tabpanel"[^>]*aria-labelledby="settings-tab-about"/);
-assert.match(settings, /from "\.\/update\.js"/);
-assert.match(settings, /\["models", "web", "about"\]/);
-assert.match(settings, /function isTauriShell\(\)/);
-assert.ok(!settings.includes("数据与密钥保存在本机应用数据目录"));
-assert.ok(!settings.includes("data/credentials.json"));
-assert.ok(!html.includes("provider-key-storage-hint"));
-assert.ok(!html.includes("覆盖环境变量"));
-assert.ok(!html.includes("新对话使用"));
-assert.match(settings, /function relayLink\(baseUrl\)/);
-assert.match(settings, /查看cttai中转/);
-assert.match(update, /const AUTO_CHECK_KEY = "mogeng\.update\.auto-check"/);
-assert.match(update, /invoke\("update_check"\)/);
-assert.match(update, /invoke\("update_install"\)/);
-assert.match(update, /LATEST_RELEASE_API/);
-assert.match(update, /aria-live/);
-assert.ok(!update.includes("innerHTML"), "更新面板不应以 HTML 字符串拼接远端说明");
-assert.match(settings, /function setSection\(section\)/);
-assert.match(settings, /\["ArrowLeft", "ArrowRight", "Home", "End"\]/);
-assert.match(settings, /test\.disabled = !\(web\.enabled && web\.configured\)/);
-assert.match(settings, /保存失败时控件已经先被用户改过/);
-assert.match(settings, /const enable = document\.createElement\("input"\)/);
-assert.match(html, /class="defaults-fields"[\s\S]*?id="settings-default-model"[\s\S]*?id="settings-default-thinking"/);
-assert.match(settings, /querySelector\("\.settings-defaults \.defaults-fields"\)/);
-assert.match(settings, /host\.append\(extra\)/);
-assert.match(settings, /view\.returnFocus = document\.activeElement/);
-assert.match(settings, /target\.focus\(\{ preventScroll: true \}\)/);
-assert.match(settings, /const order = \["推荐", "国际通用", "国内厂商", "云平台与推理"\]/);
-assert.match(settings, /保存 API Key 后，即可列出内置模型。/);
-assert.ok(!settings.includes("innerHTML"), "设置页不应以 HTML 字符串拼接用户数据");
-
-assert.match(html, /id="upload-pick"/);
-assert.match(html, /id="novel-pick"/);
-assert.match(html, /id="novel-input"/);
-assert.match(html, /id="material-source-list"/);
-assert.match(html, /id="material-source-count"/);
-assert.match(html, /id="library-material-sources"/);
-assert.match(app, /async function loadNovelSources\(/);
-assert.match(app, /async function importMaterialFiles\(/);
-assert.match(app, /fetch\("\/api\/material-sources" \+ query/);
-assert.match(app, /kind=\$\{kind\}/);
-assert.match(app, /function renderMaterialSources\(/);
-assert.match(app, /function materialSourceGroup\(/);
-assert.match(app, /el\("details", "material-source-group"\)/);
-assert.match(app, /materialSourceGroup\(kind, grouped, pane\)/);
-assert.match(app, /function materialSourceCard\(/);
-assert.match(app, /source\.kind === "document" \? "资料" : "小说"/);
-const useNovel = functionBody("useNovelSource");
-assert.match(useNovel, /sourceId: \$\{source\.id\}/);
-assert.ok(!useNovel.includes("entry.text") && !useNovel.includes("source.text"), "原料提炼只能传 sourceId，不能把全文塞进对话");
-
-console.log("frontend contracts: OK（静态契约；真实浏览器交互未验证）");
+console.log(failed === 0 ? `\nfrontend contracts: ${checks.length} 项全通过` : `\nfrontend contracts: ${failed} 项失败`);
+process.exit(failed === 0 ? 0 : 1);

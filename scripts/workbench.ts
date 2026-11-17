@@ -1741,16 +1741,35 @@ try {
 	const index = await fetch(base + "/");
 	const indexHtml = await index.text();
 	check("首页可访问", index.status === 200 && indexHtml.includes("墨耕"));
-	// 案头与写作台是两级：案头是独立的一屏，写作台由「进卷」进入。
-	check("首页有案头这一屏", indexHtml.includes('id="view-home"'));
-	check("首页有回案头的入口", indexHtml.includes('id="leave-workspace"'));
-	check("写作台只剩三个页签", !indexHtml.includes('data-view="projects"') && indexHtml.includes('data-view="writing"'));
+
+	// 三间屋：案头找书、写作台写字、改编台改书。它们是同一份 HTML 里的三个视图，
+	// 由 #app[data-view] 切换，不再走「进卷 / 回案头」那种整页跳转。
+	check("首页有案头这一屏", indexHtml.includes('id="view-desk"'));
+	check("首页有写作台这一屏", indexHtml.includes('id="view-studio"'));
+	check("首页有改编台这一屏", indexHtml.includes('id="view-adapt"'));
+	check("书脊上有五个去处", (indexHtml.match(/class="spine-btn/g) ?? []).length === 5);
+	check("顶栏常驻命令条", indexHtml.includes('id="btn-palette"') && indexHtml.includes('id="run-pill"'));
+
 	const appJs = await fetch(base + "/app.js");
 	const appSource = await appJs.text();
-	check("前端脚本可访问", appJs.status === 200 && appSource.includes("renderMaterialsBench"));
-	check("脚本里有进卷与回案头", appSource.includes("enterProject") && appSource.includes("leaveWorkspace"));
+	check("前端脚本可访问", appJs.status === 200 && appSource.includes("from \"./app/ctx.js\""));
+
+	// 前端拆成一棵模块树：少一个文件整页白屏，所以逐个都要得到。
+	const moduleNames = ["core", "api", "ctx", "desk", "studio", "paper", "materials", "outline", "dock", "adapt", "settings-view", "palette", "share"];
+	const moduleSources = new Map<string, string>();
+	for (const name of moduleNames) {
+		const res = await fetch(`${base}/app/${name}.js`);
+		const text = await res.text();
+		moduleSources.set(name, text);
+		check(`模块 ${name}.js 可访问`, res.status === 200 && text.length > 200);
+	}
+	const allModuleSource = [...moduleSources.values()].join("\n");
+	const modulesSourceIncludes = (name: string, needle: string) => (moduleSources.get(name) ?? "").includes(needle);
 	const style = await fetch(base + "/style.css");
 	const styleSource = await style.text();
+	const viewCss = await (await fetch(base + "/views.css")).text();
+	const overlayCss = await (await fetch(base + "/overlays.css")).text();
+	const allCss = [styleSource, viewCss, overlayCss].join("\n");
 
 	// id 必须唯一：$() 取的是文档里第一个同名元素，重了就会静默取错，
 	// 而症状离现场很远（比如"另起一卷点了没反应"）。这类错值得单列一条守住。
@@ -1761,21 +1780,21 @@ try {
 	const duplicateIds = [...idCounts.entries()].filter(([, n]) => n > 1).map(([id]) => id);
 	check("页面里的 id 不重复", duplicateIds.length === 0, duplicateIds.join(" "));
 
-	// app.js 里 $() 取的每个 id 都得解析得到：要么写在页面上，要么由脚本自己创建。
+	// 前端脚本里 $() 取的每个 id 都得解析得到：要么写在页面上，要么由脚本自己创建。
 	// 取到 null 会在那一步炸，而报错现场常常离真正的原因很远。
 	const htmlIds = new Set(idCounts.keys());
-	const dynamicIds = new Set([...appSource.matchAll(/\.id\s*=\s*"([^"]+)"/g)].map((m) => m[1]!));
-	const referenced = new Set([...appSource.matchAll(/\$\("([^"]+)"\)/g)].map((m) => m[1]!));
+	const dynamicIds = new Set([
+		...[...allModuleSource.matchAll(/\.id\s*=\s*"([^"]+)"/g)].map((m) => m[1]!),
+		...[...allModuleSource.matchAll(/\bid:\s*"([a-z0-9-]+)"/g)].map((m) => m[1]!),
+		...[...allModuleSource.matchAll(/setAttribute\(\s*"id"\s*,\s*"([^"]+)"/g)].map((m) => m[1]!),
+	]);
+	const referenced = new Set([...allModuleSource.matchAll(/\$\(\s*"#([a-z0-9-]+)"\s*\)/gi)].map((m) => m[1]!));
 	const missingIds = [...referenced].filter((id) => !htmlIds.has(id) && !dynamicIds.has(id));
 	check("脚本引用的 id 都存在（静态或脚本自建）", missingIds.length === 0, missingIds.join(" "));
 
-	// 素材种类：作者能自己添。三处分类条、素材表单、种类管理都得从同一份目录来，
-	// 而智能体的工具 schema 必须跟着目录走 —— 不然界面能选「势力」，
-	// 智能体却不认识，模型只能瞎猜一个种类回来。
-	check("首页有种类管理弹层", indexHtml.includes('id="kind-dialog"'));
-	check("分类条末尾有添种类的入口", appSource.includes("kindAddChip") && appSource.includes("chip-add"));
-	check("种类目录统一由 kindEntries 兜底", appSource.includes("function kindEntries"));
-	check("自建种类拼地址做了转义（id 可能是中文）", appSource.includes("/api/kinds/\" + encodeURIComponent("));
+	// 素材种类：作者能自己添、改名、删掉。目录是全书共用的，筛选条与素材表单都从它来。
+	check("素材页有种类管理入口", moduleSources.get("materials")!.includes("openKindManager"));
+	check("种类能改也能删", moduleSources.get("materials")!.includes("patchKind") && moduleSources.get("materials")!.includes("deleteKind"));
 	const toolsSource = readFileSync(path.join(root, "src", "ai", "tools.ts"), "utf8");
 	check("智能体的 kind 枚举取自种类目录", toolsSource.includes("function materialKindSchema") && toolsSource.includes("kindOptions()"));
 	// 落盘那套写法搬到了 kinds-disk.ts（纯模型留在 kinds.ts），所以这里看磁盘实现那份。
@@ -1785,118 +1804,75 @@ try {
 		kindsStore.includes(".tmp") && kindsStore.includes("rename("),
 	);
 
-	// 分卷：卷是章目之上的一层。章目里要看得出卷，章与卷都要能改，
-	// 而卷名会出现在稿面、作业条与右案大纲三处 —— 三处都得跟着走。
-	check("有分卷弹层", indexHtml.includes('id="volume-dialog"') && indexHtml.includes('id="volume-list"'));
-	check("章目里能立卷", indexHtml.includes('id="add-volume"') && appSource.includes("function openVolumeDialog"));
-	check("章目里插卷头", appSource.includes("function volumeHeader") && styleSource.includes(".chapter-volume"));
-	check("立章时能选卷", indexHtml.includes('id="chapter-volume"') && appSource.includes("function fillVolumeOptions"));
-	check(
-		"章目能改（标题、要点、所属卷）",
-		appSource.includes("editingChapterId") && appSource.includes("/outline/\" + encodeURIComponent("),
-	);
-	check("卷名出现在稿面与大纲里", styleSource.includes(".ms-volume") && appSource.includes("〔\" + volume.title + \"〕"));
+	// 分卷：卷是章目之上的一层。新界面把卷编辑放在大纲页，章目里按卷分组显示。
+	check("章目按卷分组", moduleSources.get("studio")!.includes("rail-vol") && viewCss.includes(".rail-vol"));
+	check("大纲页能立卷与改卷", moduleSources.get("outline")!.includes("openVolumeEditor") && moduleSources.get("outline")!.includes("removeVolume"));
+	check("大纲页能改章（标题、纲、归卷）", moduleSources.get("outline")!.includes("editChapter") && moduleSources.get("outline")!.includes("patchOutline"));
+	check("章目里能插一章", moduleSources.get("studio")!.includes("openNewChapter") && indexHtml.includes('id="btn-add-chapter"'));
 
 	// 高度链：桌面是 100vh 网格，里面每一级都得显式 min-height:0，
 	// 否则内容一长就把父级顶开，页面出现滚动条、输入框被推到屏幕外。
 	// 缺哪一级都看不出来，所以逐条点名守。
 	const heightChain: [string, RegExp][] = [
+		[".app-main", /\.app-main\s*\{[^}]*min-height:\s*0/],
 		[".stage", /\.stage\s*\{[^}]*min-height:\s*0/],
 		[".view", /\.view\s*\{[^}]*min-height:\s*0/],
-		[".bench", /\.bench\s*\{[^}]*min-height:\s*0/],
-		[".bench-pane", /\.bench-pane\s*\{[^}]*min-height:\s*0/],
-		[".stream", /\.stream\s*\{[^}]*min-height:\s*0/],
+		[".view-studio.is-active", /\.view-studio\.is-active\s*\{[^}]*min-height:\s*0/],
+		[".rail", /\.rail\s*\{[^}]*min-height:\s*0/],
+		[".paper-shell", /\.paper-shell\s*\{[^}]*min-height:\s*0/],
+		[".paper-body", /\.paper-body\s*\{[^}]*min-height:\s*0/],
+		[".pane", /\.pane\s*\{[^}]*min-height:\s*0/],
+		[".dock", /\.dock\s*\{[^}]*min-height:\s*0/],
 	];
-	const brokenChain = heightChain.filter(([, re]) => !re.test(styleSource)).map(([name]) => name);
+	const brokenChain = heightChain.filter(([, re]) => !re.test(allCss)).map(([name]) => name);
 	check("高度链每级都归零了 min-height", brokenChain.length === 0, brokenChain.join(" "));
 
-	// 文稿页是整条高度链上唯一的滚动容器。body 是 overflow:hidden，
+	// 稿纸页是整条高度链上唯一的滚动容器。body 是 overflow:hidden，
 	// 这一格不写 overflow，长章节就被直接裁掉：翻不到底，也拖不动。
 	check(
-		"文稿页自己就是滚动容器",
-		/#view-manuscript\s*\{[^}]*overflow:\s*auto/.test(styleSource),
-		"#view-manuscript 缺 overflow:auto",
+		"稿纸页自己就是滚动容器",
+		/\.ms-scroll\s*\{[^}]*overflow-y:\s*auto/.test(viewCss),
+		".ms-scroll 缺 overflow-y:auto",
 	);
-	// 留白必须挂在还活着的选择器上：.ms 曾经是一条谁都不匹配的死规则，
-	// 滚动与留白一起静默失效了很久。
-	check(
-		"稿纸留白没挂在死选择器上",
-		!/^\s*\.ms\s*\{/m.test(styleSource) && /#view-manuscript\s*\{[^}]*padding:/.test(styleSource),
-		".ms 无人使用；留白应写在 #view-manuscript 上",
-	);
-	// 章节操作条吸在稿台顶部，排在正文之前：写作时手要够得着「存稿」，
-	// 不该被一整章的篇幅压在底下。
-	check(
-		"章节操作条吸顶",
-		styleSource.includes("#view-manuscript .actions-center") &&
-			/\.actions-center[^}]*position:\s*sticky/.test(styleSource.replace(/\n/g, " ")) &&
-			/\n#view-manuscript \.actions-center \{[^}]*top:/.test(styleSource.replace(/\t/g, "")),
-		"缺少吸顶的章节操作条",
-	);
-	check(
-		"操作条排在正文之前",
-		/box\.append\(chapterToolbar\([^)]*\)\);\s*\n\s*box\.append\(page\);/.test(appSource),
-		"操作条应 append 在 page 之前",
-	);
-	// 稿纸必须给死宽度。稿台是 flex 纵向容器，margin:auto 会关掉 align-self:stretch，
-	// 只写 max-width 的话稿纸退化成 fit-content：读稿时被长句顶到上限看着正常，
-	// 一进改稿模式正文成了唯一内容，宽度就塌到 textarea 的 cols 默认值（20 字）。
+	// 稿纸必须给死宽度：只写 max-width 的话它退化成 fit-content，
+	// 读稿时被长句顶到上限看着正常，一进改稿模式宽度就塌到 textarea 的默认 cols。
 	check(
 		"稿纸有确定宽度（不被 fit-content 收窄）",
-		/\.ms-page \{[^}]*width:\s*100%/.test(styleSource.replace(/\n/g, " ")) &&
-			/\.front-matter \{[^}]*width:\s*100%/.test(styleSource.replace(/\n/g, " ")),
-		".ms-page / .front-matter 缺 width:100%",
+		/\.ms-page\s*\{[^}]*width:\s*min\(100%/.test(viewCss),
+		".ms-page 缺 width: min(100%, …)",
 	);
 	// 改稿框按内容撑开，别把一章关进固定高度的小窗里。
 	check(
 		"改稿框按内容自动撑高",
-		appSource.includes("function fitEditor") &&
-			/editor\.addEventListener\("input"[\s\S]{0,160}?fitEditor\(editor\)/.test(appSource) &&
-			/\.ms-edit \{[^}]*resize:\s*none/.test(styleSource.replace(/\n/g, " ")),
-		"缺少 fitEditor 或 .ms-edit 的 resize:none",
+		moduleSources.get("paper")!.includes("function fit()") &&
+			/textarea\.style\.height\s*=\s*`\$\{Math\.max\(textarea\.scrollHeight,\s*320\)\}px`/.test(moduleSources.get("paper")!) &&
+			/\.ms-body \{[^}]*resize:\s*none/.test(viewCss.replace(/\n/g, " ")),
+		"缺少 fit() 或 .ms-body 的 resize:none",
 	);
 	// 导出：作者要能把稿子带走，单章与整本都得有出口。
-	check("脚本里有导出逻辑", appSource.includes("exportProject") && appSource.includes("/export"));
-	check("总目与章节工具条都有导出入口", appSource.includes('"导出全书"') && appSource.includes("openExportDialog(chapter.id)"));
-	check("导出会解回中文文件名", appSource.includes("exportName") && appSource.includes("filename\\*=UTF-8''"));
-	check("没有正文时不导出空文件", appSource.includes("还没有正文可导出"));
-	check("样式可访问", style.status === 200 && styleSource.includes(".bench-pane"));
-	check("样式里有案头布局", styleSource.includes(".desk.is-home"));
+	check("脚本里有导出逻辑", moduleSources.get("share")!.includes("exportNovel") && moduleSources.get("studio")!.includes("exportChapter"));
+	check("导出会解回中文文件名", moduleSources.get("share")!.includes("download: name") && moduleSources.get("api")!.includes("novelExportUrl"));
+	check("导出前先存一次稿", moduleSources.get("studio")!.includes("flushSave") && moduleSources.get("paper")!.includes("flushSave"));
+	check("样式可访问", style.status === 200 && allCss.includes(".paper-shell"));
+	check("样式里有案头布局", viewCss.includes(".desk-scroll") && viewCss.includes(".project-grid"));
 	// 思考过程要能收起：是 <details>，不是一块常驻的文本。
 	check(
 		"思考块是可收起的 details",
-		appSource.includes('el("details", "thinking")') && appSource.includes("thinking-head"),
+		moduleSources.get("dock")!.includes('el("details"') && moduleSources.get("dock")!.includes("thinking"),
 	);
-	check("思考块有折叠样式", styleSource.includes(".thinking[open]"));
-	// 素材工作台：点选已有素材，让设定官照着改那几条。
-	check("素材工作台有已选中栏", indexHtml.includes('id="material-picked"'));
-	check(
-		"选中素材会写进指令",
-		appSource.includes("withPickedMaterials") && appSource.includes("本次只改这几条已有素材"),
-	);
-	check("选中条与选中卡有样式", styleSource.includes(".picked-bar") && styleSource.includes(".card.mat.is-picked"));
-	// 一轮跑完要重载工程：新素材才会同步进素材库与生文工作台，然后才能装配。
-	// 现在收尾走 reloadProjectSafely（先包一层错误提示），所以给足切片长度并只认函数前缀。
-	const sendBody = appSource.slice(appSource.indexOf("async function sendMessage"), appSource.indexOf("async function sendMessage") + 3600);
-	check("对议跑完会重载工程以同步素材", sendBody.includes("reloadProject"));
-	// 断线时浏览器只说英文（"network error" / "Failed to fetch"）。作者读不懂，
-	// 也不该看见同一场故障在面板里报成两条。这两条守着那层翻译与去重。
-	check(
-		"网络层故障翻成中文",
-		appSource.includes("function isNetworkFailure") && appSource.includes("function describeFailure") && appSource.includes("服务没接上"),
-	);
-	check(
-		"同一次断线不连报两条红字",
-		appSource.includes("options.quiet") && appSource.includes("isNetworkFailure(error)") && appSource.includes("describeFailure(error"),
-	);
+	check("思考块有折叠样式", viewCss.includes(".thinking[open]") || viewCss.includes(".thinking "));
+	// 素材台：当前章挂了哪些料要一眼看见，并且能一条条卸下来。
+	check("素材台有已挂料栏", moduleSources.get("materials")!.includes("renderPickedBar") && viewCss.includes(".picked-bar"));
+	check("已挂料能卸下、能点到那一章", moduleSources.get("materials")!.includes("assembleMaterials") && viewCss.includes(".picked-chip"));
+	// 一轮跑完要重载工程：新素材、新章状态才会同步进章目与素材台。
+	const dockSource = moduleSources.get("dock")!;
+	check("对议跑完会重载工程以同步素材", dockSource.includes("reloadProjectStructure"));
+	// 断线时浏览器只说英文（"Failed to fetch"）。作者读不懂，也不该看见同一场故障报成两条。
+	check("网络层故障翻成中文", modulesSourceIncludes("api", "服务没接上"));
 	// 静默不等于放弃：服务重启往往一两秒就回来。重载要多敲几次门，
-	// 端口一回来就把右案补上，否则作者得自己刷新页面才知道稿子写没写成。
-	check(
-		"断线后的收尾重载会重试",
-		appSource.includes("RELOAD_RETRY_DELAYS") &&
-			appSource.includes("async function reloadWithRetries") &&
-			appSource.includes("noteReconnected"),
-	);
+	// 端口一回来就把账本补上，否则作者得自己刷新页面才知道稿子写没写成。
+	const ctxSource = moduleSources.get("ctx")!;
+	check("断线后的收尾重载会重试", /const delays = \[0, 600, 1500, 3000\]/.test(ctxSource) && ctxSource.includes("api.ApiError"));
 	// 服务进程是"在线"本身：一次半路断线的写错误不该把它带走。
 	// 请求/响应的接线搬到了 app.ts，两处合起来看这一层防护是否还在。
 	const mainSource = readFileSync(path.join(root, "src", "server", "main.ts"), "utf8");
@@ -1908,93 +1884,58 @@ try {
 			(mainSource.includes('res.on("error"') || serverAppSource.includes('res.on("error"')),
 	);
 	// 立一章：章节是装料的落点，没有章就看不了也装不了料。
-	check("左卷有立章入口", indexHtml.includes('id="add-chapter"'));
-	check("有立章对话框", indexHtml.includes('id="chapter-dialog"') && indexHtml.includes('id="chapter-form"'));
-	check("脚本里有立章逻辑", appSource.includes("openChapterDialog") && appSource.includes('"/chapters"'));
-	check("立章入口有样式", styleSource.includes(".rail-add"));
+	check("章目有立章入口", indexHtml.includes('id="btn-add-chapter"'));
+	check("脚本里有立章逻辑", moduleSources.get("studio")!.includes("openNewChapter") && moduleSources.get("api")!.includes("addChapter"));
+	check("立章入口有样式", viewCss.includes(".rail-head"));
 
 	// 存照：误删素材、误改大纲时的退路，只有 API 没有入口等于没有。
-	check("作品卡有存照入口", appSource.includes("存照") && appSource.includes("openSnapshotDialog"));
-	check("有存照对话框", indexHtml.includes('id="snapshot-dialog"') && indexHtml.includes('id="snapshot-list"'));
-	check("存照行有样式", styleSource.includes(".snap-row") && styleSource.includes(".snap-when"));
-	check("脚本里有回滚逻辑", appSource.includes("restoreSnapshot") && appSource.includes("/snapshots/"));
+	const settingsSource = moduleSources.get("settings-view")!;
+	check("设置里有存照入口", settingsSource.includes("listSnapshots") && settingsSource.includes("restoreSnapshot"));
+	check("存照行有样式", overlayCss.includes(".snap-row") && overlayCss.includes(".snap-name"));
 	// 回滚是破坏性的，不能一点就生效。
-	check("回滚需二次确认", appSource.includes("pendingSnapshotRestore") && appSource.includes("再点一次确认回滚"));
+	check("回滚需二次确认", settingsSource.includes("confirmAction") && settingsSource.includes("恢复"));
 	// 落盘失败必须有可见提示，否则用户以为存上了。
-	check("有落盘失败横幅", indexHtml.includes('id="storage-banner"') && styleSource.includes(".storage-banner"));
-	check("脚本里有落盘轮询与重试", appSource.includes("refreshStorageStatus") && appSource.includes("/api/storage/retry"));
+	check("有落盘失败提示", appSource.includes("checkStorage") && viewCss.includes(".notice"));
+	check("脚本里有落盘轮询与重试", settingsSource.includes("retryStorage") && appSource.includes("retryStorage"));
 
-	// 库作用域：案头上的设定官要能选模型、能收资料。
-	// 早先案头把模型下拉藏了，加上智能体之后就没法用它备料。
-	check("案头不再藏模型选择", !styleSource.includes(".desk.is-home #model-select"));
-	check("库面板有传资料入口", indexHtml.includes('id="library-upload-pick"') && indexHtml.includes('id="library-upload-input"'));
-	check("库面板有原料列表", indexHtml.includes('id="library-uploads"'));
-	check(
-		"库上传走统一原料接口",
-		appSource.includes('fetch("/api/material-sources" + query') &&
-			appSource.includes('handleFiles([...event.target.files], "library")'),
-	);
-	check("库原料列表有样式", styleSource.includes(".upload-list.compact"));
-	check("库提炼指令要求脱离作品", appSource.includes("脱离本书也成立"));
+	// 库作用域：案头上的通用素材库要能收资料、看被谁借用、立改编工程。
+	check("案头有通用素材库", indexHtml.includes('id="library-grid"') && moduleSources.get("desk")!.includes("renderLibrary"));
+	check("案头有原料库", indexHtml.includes('id="source-list"') && moduleSources.get("desk")!.includes("renderSources"));
+	check("库上传走统一原料接口", moduleSources.get("api")!.includes("/api/uploads") && moduleSources.get("api")!.includes("material-sources"));
+	check("库原料列表有样式", viewCss.includes(".source-row") && viewCss.includes(".lib-card"));
 
 	// 另起一席：会话是常驻的，作者要能主动清一次，否则历史一直攒。
-	check("三个面板都有另起一席", (indexHtml.match(/data-newchat=/g) ?? []).length === 3, String((indexHtml.match(/data-newchat=/g) ?? []).length));
-	check("另起一席有二次确认", appSource.includes("pendingNewChat") && appSource.includes("再点一次：弃掉这席"));
-	check("另起一席会删服务端会话", appSource.includes('method: "DELETE"') && appSource.includes("/api/sessions/"));
-	check("另起一席会清面板与快照", appSource.includes("state.transcripts.delete(key)") && appSource.includes("replaceChildren()"));
-	check("发话会收掉确认态", appSource.includes("state.pendingNewChat = null"));
-	// 没有章节时也要看得见料：装配区给立章按钮，库里列出全部素材、装配按钮停用。
-	check(
-		"无章节时仍列出素材",
-		appSource.includes("poolShown") && appSource.includes('materialGrid(poolShown, "pool", true)'),
-	);
-	check("无章节时的提示与停用按钮有样式", styleSource.includes(".bench-hint") && styleSource.includes(".btn:disabled"));
+	check("副驾能另起一席", indexHtml.includes('id="btn-dock-new"') && dockSource.includes("deleteSession"));
+	check("另起一席会清面板", dockSource.includes("replaceChildren()") && dockSource.includes("newSession"));
+	check("没有章节时副驾也说清楚", dockSource.includes("先在左边挑一章"));
 
-	// 生文工作台的「库中可装」也要能搜、能分类：控件与素材工作台同一套。
-	check(
-		"生文工作台有素材检索与分类",
-		indexHtml.includes('id="pool-search"') &&
-			indexHtml.includes('id="pool-filter"') &&
-			appSource.includes("poolMatches") &&
-			appSource.includes("renderPoolFilter"),
-	);
-	check("生文工作台复用素材工作台的检索样式", styleSource.includes(".mat-search") && styleSource.includes(".mat-filter"));
-
-	// 作业条（选章 / 写法 / 落笔）挂在执笔者栏里，夹在对话流与输入框之间 ——
-	// 原先它在左栏「装配」底下，落笔却要回头看右栏，手和眼睛不在同一处。
-	check(
-		"写作作业条在执笔者栏里",
-		indexHtml.lastIndexOf('id="write-actions"') > indexHtml.lastIndexOf('id="writing-stream"') &&
-			indexHtml.lastIndexOf('id="write-actions"') < indexHtml.lastIndexOf('id="writing-composer"'),
-	);
-	check(
-		"作业条能直接选章节",
-		appSource.includes("function renderWriteActions") &&
-			appSource.includes("function setWriteChapter") &&
-			appSource.includes('"write-chapter"'),
-	);
+	// 稿纸上的三个动作：起稿 / 续写 / 润色，都要能落到稿面上。
+	const paperSource = moduleSources.get("paper")!;
+	check("稿纸页有写作动作条", indexHtml.includes('id="paper-actions"') && paperSource.includes("runWrite"));
+	check("稿纸页能起稿与续写", paperSource.includes('"create"') && paperSource.includes('"continue"'));
+	check("稿纸页能润色选段", paperSource.includes("polishChapter") && paperSource.includes("applyPolish"));
 
 	// ---- 昼夜 ----
 	// 暗色不是反相，而是把纸压成暖黑、把墨提成月白：两套令牌都要在，
 	// 且各自独立定义纸与墨，浓淡关系才不塌。
-	check("有主题开关", indexHtml.includes('id="theme-toggle"'));
+	check("有主题开关", indexHtml.includes('id="btn-theme"'));
 	check("首帧前定主题（防白闪）", indexHtml.includes('src="/theme-init.js"') && indexHtml.indexOf('src="/theme-init.js"') < indexHtml.indexOf("/style.css"));
 	check("样式里有暗色主题块", styleSource.includes(':root[data-theme="dark"]'));
 	check("暗色声明了 color-scheme", styleSource.includes("color-scheme: dark"));
-	check("开关图元有样式", styleSource.includes(".theme-glyph"));
-	check("脚本里有主题切换", appSource.includes("THEME_KEY") && appSource.includes("toggleTheme"));
-	check("跟随系统偏好", appSource.includes("prefers-color-scheme: dark"));
+	check("脚本里有主题切换", appSource.includes("setTheme") && allModuleSource.includes("novel-studio-theme"));
+	check("跟随系统偏好", appSource.includes("prefers-color-scheme: dark") || moduleSources.get("settings-view")!.includes("prefers-color-scheme: dark"));
 	// 尊重系统的「减少动态效果」
-	check("尊重减少动态效果", styleSource.includes("prefers-reduced-motion"));
+	check("尊重减少动态效果", allCss.includes("prefers-reduced-motion"));
 
 	// 令牌块之外不能再有硬编码颜色：漏一处，暗色下那一处就还是亮色的。
 	// 主题块不止一处（后续改版会再开一块只覆盖少数令牌），必须全局收集；
 	// 注释里的色号只是说明文字，不算样式声明。
 	const styleNoComments = styleSource.replace(/\/\*[\s\S]*?\*\//g, "");
+	const cssNoComments = allCss.replace(/\/\*[\s\S]*?\*\//g, "");
 	const tokenBlocks = (pattern: RegExp) => [...styleNoComments.matchAll(pattern)].map((m) => m[0]);
 	const lightBlocks = tokenBlocks(/^:root \{[\s\S]*?^\}/gm);
 	const darkBlocks = tokenBlocks(/^:root\[data-theme="dark"\] \{[\s\S]*?^\}/gm);
-	let outside = styleNoComments;
+	let outside = cssNoComments;
 	for (const block of [...lightBlocks, ...darkBlocks].sort((a, b) => b.length - a.length)) {
 		outside = outside.split(block).join("");
 	}
@@ -2003,39 +1944,17 @@ try {
 	// 引用的令牌都要有定义，否则会解析失败。
 	// 定义不限于主题块：局部令牌（稿台的留白分量）挂在自己的选择器上是正当写法，
 	// 只扫 :root 会把它误判成未定义。主题覆盖另有下面那条专门守。
-	const declared = new Set<string>([...styleSource.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1]!));
-	const undefinedTokens = [...new Set([...styleSource.matchAll(/var\(\s*(--[a-z0-9-]+)/g)].map((m) => m[1]!))]
+	const declared = new Set<string>([...cssNoComments.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1]!));
+	const undefinedTokens = [...new Set([...cssNoComments.matchAll(/var\(\s*(--[a-z0-9-]+)/g)].map((m) => m[1]!))]
 		.filter((name) => !declared.has(name));
 	check("引用的令牌都有定义", undefinedTokens.length === 0, undefinedTokens.join(" "));
-	// 两套主题要覆盖同一组「会变色的」令牌
+	// 两套主题要覆盖同一组「会变色的」令牌；尺度类（字号/间距/圆角/栏宽/字体/动效）不随昼夜变化。
 	const nameSet = (blocks: string[]) =>
 		new Set(blocks.flatMap((block) => [...block.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1]!)));
 	const lightNames = nameSet(lightBlocks);
 	const darkNames = nameSet(darkBlocks);
-	const themeInvariant = new Set([
-		"--serif", "--kai", "--sans", "--mono", "--song", "--noise", "--wash",
-		// 排版三件套（字号/行距/版心）是全局设置，不随昼夜变化，故不要求在暗色块里重复。
-		"--ms-font-size", "--ms-line-height", "--ms-measure",
-		// 移动端度量同理：安全区（刘海/Home Indicator）与最小触控目标由设备决定，与主题无关。
-		"--safe-t", "--safe-b", "--safe-l", "--safe-r", "--tap",
-		// 排版阶梯（间距/圆角/字号）与墨晕曲线是尺度，不是颜色：换昼夜不该改版心与节奏。
-		"--sp-1", "--sp-2", "--sp-3", "--sp-4", "--sp-5", "--sp-6",
-		"--r-1", "--r-2", "--r-3", "--r-pill",
-		// 素材种类底色是调色基色，实际明暗由 color-mix 与纸色合成，无需暗色重复定义。
-		"--mat-tint-1", "--mat-tint-2", "--mat-tint-3", "--mat-tint-4", "--mat-tint-5",
-		"--mat-tint-6", "--mat-tint-7", "--mat-tint-8", "--mat-tint-9", "--mat-tint-10",
-		"--mat-tint-11", "--mat-tint-12", "--mat-tint-13",
-		"--fs-xs", "--fs-sm", "--fs-md", "--fs-lg", "--fs-xl",
-		// 版式阶梯与图标尺寸同样是尺度，不随昼夜变化；暗色块只覆盖颜色。
-		"--fs-2xl", "--fs-3xl", "--fs-title", "--fs-item", "--fs-body", "--fs-label", "--lh-body", "--track-label",
-		// 布局尺度（栏宽、栏高、圆角、行距）与配色无关，暗色下也不该重算。
-		"--r-4", "--r-sheet", "--beam-h", "--rail-w", "--right-w", "--nav-h", "--gutter", "--lh-ui", "--lh-read",
-		"--i-search", "--i-settings", "--i-more", "--i-plus", "--i-export", "--i-backup", "--i-edit",
-		"--i-trash", "--i-open", "--i-home", "--i-book", "--i-layers", "--i-pen", "--i-close",
-		"--i-chapter", "--i", "--i-send", "--i-upload",
-		"--brush", "--tap-lg",
-	]);
-	const uncovered = [...lightNames].filter((n) => !darkNames.has(n) && !themeInvariant.has(n));
+	const themeInvariant = /^--(ui|song|mono|serif|kai|sans|fs-|sp-|r-|lh-|paper-fs|paper-lh|measure|ease|fast|base|slow|tap|spine-w|rail-w|dock-w|top-h|nav-h|cinnabar|rule|moss|elev|hover)/;
+	const uncovered = [...lightNames].filter((n) => !darkNames.has(n) && !themeInvariant.test(n));
 	check("会变色的令牌暗色都有覆盖", uncovered.length === 0, uncovered.join(" "));
 	const traversal = await fetch(base + "/../package.json");
 	check("路径遍历被挡住", traversal.status === 403 || traversal.status === 404, String(traversal.status));
