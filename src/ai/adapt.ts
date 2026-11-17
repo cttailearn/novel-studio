@@ -25,6 +25,7 @@ import {
 } from "../store/project.ts";
 import type { NovelChapter } from "../store/novel-source.ts";
 import type { NovelSourceStorePort, ProjectStorePort } from "../store/store-port.ts";
+import { DE_SLOP_RULES } from "./de-slop.ts";
 
 /** 一章的改编上下文：原文、现有改编稿、上一章、台账。 */
 export interface AdaptContext {
@@ -264,6 +265,15 @@ ${clipped}
    先调用 rename_chapter 换成贴题的短句，再交稿。只给题目本身，不要带「第 N 章」；
    题目本来就叫得准，就别为了好看而换 —— 读者认的是原来那个名字。
 8. ${ADAPT_STYLE_RULES}
+
+# 改编不是重写
+
+原文是作者已经写成的书，它在语言上可能有它的毛病。**只改作者点名要改的**：
+总要求没提语言，就保住原来的句子、原来的口气，不要顺手把它改得更"顺"。
+尤其不要往原文里加套话：清嗓开场、万能强调、空泛断言、假拟人，一条都不要新添 ——
+原文里本来就有、而作者没让动的，照旧留着。
+
+${DE_SLOP_RULES}
 
 # 前后章的联动
 

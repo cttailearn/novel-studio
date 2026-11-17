@@ -410,6 +410,20 @@ check("润色走选区，替换要带预期值", () => {
 	expect(/stale/, paper);
 });
 
+// 校验行必须把 detail 显示出来。字段名对不上时页面上什么都不显示，
+// 而检查本身照常通过 —— 这种错靠肉眼看不出来，所以在这里钉住。
+check("润色校验行显示明细", () => {
+	const paper = modules.get("paper.js");
+	expect(/check\.detail/, paper, "renderChecks 要读 detail");
+	expect(/check-note/, paper);
+});
+
+check("润色有去 AI 味的起手话", () => {
+	const paper = modules.get("paper.js");
+	expect(/去 AI 味/, paper);
+	expect(/instruction\.value\s*=/, paper, "预设只填输入框，不直接开跑");
+});
+
 check("导出与搬家都有出口", () => {
 	const share = modules.get("share.js");
 	expect(/saveFileNatively/, share, "Tauri 契约要求保留这个名字");

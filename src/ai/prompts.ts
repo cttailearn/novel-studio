@@ -12,6 +12,7 @@ import {
 } from "../store/project.ts";
 import type { LibraryMaterial } from "../store/library.ts";
 import type { NovelSourceMeta } from "../store/novel-source.ts";
+import { DE_SLOP_RULES } from "./de-slop.ts";
 
 /** 作品简介，两套提示词共用。 */
 function briefOf(project: Project): string {
@@ -32,7 +33,9 @@ const STYLE_RULES = `# 文风
 - 展示而不述说：写“他接过来，低头看了一眼手机”，而不是“他很惊喜”。
 - 对话用简洁的口语，尽量减少“作者说道”这类代入话。
 - 每段都要有节奏：长句用于描写，短句用于推进。
-- 保持语言一致性：人物的口头禅不能一章一变。`;
+- 保持语言一致性：人物的口头禅不能一章一变。
+
+${DE_SLOP_RULES}`;
 
 /** 原料库的公共说明。普通资料与整本小说共用同一套检索工具。 */
 function novelSourcesSection(sources: NovelSourceMeta[]): string {

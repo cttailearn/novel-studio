@@ -30,6 +30,7 @@
     "test:storage": "node --experimental-strip-types scripts/storage-check.ts",
     "test:frontend": "node --experimental-vm-modules scripts/frontend-contracts.mjs",
     "test:context": "node --experimental-strip-types scripts/ai-context-check.ts",
+    "test:slop": "node --experimental-strip-types scripts/de-slop-check.ts",
     "test:idb": "node --experimental-strip-types scripts/idb-storage-check.ts && node --experimental-strip-types scripts/idb-stores-check.ts",
     "test:package": "node --experimental-strip-types scripts/novel-package-check.ts",
     "test:local": "node --experimental-strip-types scripts/local-api-check.ts",
@@ -40,7 +41,7 @@
     "dev:tauri": "tauri dev",
     "build:tauri": "tauri build",
     "test:browser": "node --experimental-strip-types scripts/browser-build-check.ts",
-    "test": "pnpm typecheck && pnpm test:config && pnpm test:tools && pnpm test:novel && pnpm test:context && pnpm test:storage && pnpm test:server && pnpm test:auth && pnpm test:e2e && pnpm test:loop && pnpm test:frontend && pnpm test:idb && pnpm test:package && pnpm test:local && pnpm test:relay && pnpm test:tauri",
+    "test": "pnpm typecheck && pnpm test:config && pnpm test:tools && pnpm test:novel && pnpm test:context && pnpm test:slop && pnpm test:storage && pnpm test:server && pnpm test:auth && pnpm test:e2e && pnpm test:loop && pnpm test:frontend && pnpm test:idb && pnpm test:package && pnpm test:local && pnpm test:relay && pnpm test:tauri",
     "build:android": "node scripts/android-patch.mjs && tauri android build --apk --target aarch64"
   },
   "dependencies": {

@@ -640,6 +640,23 @@ async function openPolish() {
 	const out = el("div", { class: "polish-out" }, el("p", { class: "set-note", text: "还没开始。" }));
 	const checks = el("div", { class: "polish-checks" });
 	const actions = el("div", { class: "modal-foot-actions" });
+	// 预设只写进输入框，作者还能接着改 —— 它给的是起手话，不是命令。
+	const presets = el("div", { class: "chips" });
+	for (const [label, text] of [
+		["去 AI 味", "删掉套话和空泛的话，保住事实与我的口气，只改这一段的表达。"],
+		["更紧一点", "删掉可删的字，句子改短，节奏提起来。"],
+		["白描", "去掉形容词与解释，只写看得见的动作和声音。"],
+	]) {
+		presets.append(
+			el("button", {
+				class: "chip",
+				type: "button",
+				text: label,
+				title: text,
+				on: { click: () => { instruction.value = text; instruction.focus(); } },
+			}),
+		);
+	}
 	const body = el(
 		"div",
 		{ class: "polish-body" },
@@ -647,6 +664,7 @@ async function openPolish() {
 			el("label", { class: "field" }, el("span", { class: "field-label", text: "往哪儿改" }), instruction),
 			el("label", { class: "field" }, el("span", { class: "field-label", text: "别动的东西" }), keep),
 		),
+		presets,
 		el("div", { class: "field field-wide" }, el("span", { class: "field-label", text: "原文" }), el("div", { class: "polish-src", text: excerpt(sel.text, 400) })),
 		el("div", { class: "field field-wide" }, el("span", { class: "field-label", text: "改后" }), out),
 		checks,
@@ -767,7 +785,7 @@ function renderChecks(host, list) {
 				{ class: `check-row${ok ? "" : " is-warn"}` },
 				icon(ok ? "check" : "alert"),
 				el("span", { class: "check-label", text: check.label || check.name || "查过" }),
-				check.note ? el("span", { class: "check-note", text: check.note }) : null,
+				check.detail || check.note ? el("span", { class: "check-note", text: check.detail || check.note }) : null,
 			),
 		);
 	}

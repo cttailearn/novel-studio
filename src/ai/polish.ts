@@ -10,6 +10,8 @@
  * 好让两边都能单独测。
  */
 
+import { deSlopSummary, newDeSlopHits } from "./de-slop.ts";
+
 export interface PolishContext {
 	chapterTitle: string;
 	chapterSummary: string;
@@ -40,7 +42,8 @@ export const POLISH_SYSTEM_PROMPT = `你是一位只做局部改写的中文小�
 5. 篇幅与段落按作者的要求来：作者要扩写就扩写、要删就删、要拆段就拆段；作者没提，就尽量贴近原文的长度与分段。段落之间空一行。
 6. 作者写进「别动」的东西，一个字都不要碰。
 7. 要求与原文事实冲突时，按原文写，不要编新设定。
-8. 不要写「以下是修改后的段落」这类前言，第一句就是正文。`;
+8. 不要写「以下是修改后的段落」这类前言，第一句就是正文。
+9. 不要顺手加"真正""切实""值得一提""不是……而是……"这类套话；原文本来就有、而作者要保留的，照旧留着。`;
 
 /** 选区上下的取景范围：够接得上，又不至于把整章灌给模型。 */
 export const POLISH_WINDOW = 700;
@@ -65,7 +68,7 @@ export function buildPolishPrompt(ctx: PolishContext): string {
 }
 
 export interface PolishCheck {
-	id: "length" | "paragraphs" | "numbers" | "names";
+	id: "length" | "paragraphs" | "numbers" | "names" | "deSlop";
 	label: string;
 	ok: boolean;
 	/** 没通过时告诉作者哪里不对；通过时给一句人话的量化。 */
@@ -127,7 +130,12 @@ export function sanitizePolish(raw: string): string {
  * 删数字、换称呼，代码不该替作者做这个决定。检查的意义是让他一眼看到
  * 「这一版跟原文差在哪」，而不是替他挡住。
  */
-export function checkPolish(original: string, next: string, characters: string[]): PolishVerdict {
+export function checkPolish(
+	original: string,
+	next: string,
+	characters: string[],
+	options?: { deSlop?: boolean },
+): PolishVerdict {
 	const checks: PolishCheck[] = [];
 	const weight = weightOf(original);
 	const nextWeight = weightOf(next);
@@ -178,6 +186,19 @@ export function checkPolish(original: string, next: string, characters: string[]
 		detail: dropped.length === 0 ? "人物称呼未改" : "这几个名字没了：" + dropped.join("、"),
 		hard: false,
 	});
+
+	// 去 AI 味只查字面套话，不判断写得好不好 —— 命中了也照样能采用，
+	// 决定权在作者手里。比的是"这一版新添的"，原文本来就有的不算。
+	if (options?.deSlop !== false) {
+		const added = newDeSlopHits(original, next);
+		checks.push({
+			id: "deSlop",
+			label: "AI 腔",
+			ok: added.length === 0,
+			detail: added.length === 0 ? "没添新套话" : deSlopSummary(added, "新添了 "),
+			hard: false,
+		});
+	}
 
 	const feedback = checks
 		.filter((check) => check.hard || check.id === "names")
