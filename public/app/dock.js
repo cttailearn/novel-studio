@@ -16,6 +16,9 @@ let mode = "writing"; // writing | material | polish
 let pendingRecordId = "";
 let busy = false;
 let abortCtl = null;
+// 副驾可以被搬进读稿台：记住原来的位置，收起时送回去。
+let embedded = false;
+const home = { parent: null, next: null };
 
 const ROLE_LABEL = { writing: "执笔者", material: "设定官", polish: "润色" };
 const ROLE_HINT = {
@@ -71,6 +74,10 @@ export function initDock() {
 export function closeDock() {
 	ctx.state.prefs.dockOpen = false;
 	ctx.savePrefs({ dockOpen: false });
+	if (embedded) {
+		// 嵌在读稿台里时，收起来只影响读稿台那一栏。
+		return;
+	}
 	$("#app").classList.remove("dock-open");
 	const scrim = $("#scrim");
 	if (scrim) {
@@ -82,16 +89,49 @@ export function closeDock() {
 export function openDock() {
 	ctx.state.prefs.dockOpen = true;
 	ctx.savePrefs({ dockOpen: true });
-	$("#app").classList.add("dock-open");
-	// 窄屏上副驾是一张抽屉，得把遮罩也放下来。
-	if (window.matchMedia("(max-width: 1160px)").matches) {
-		const scrim = $("#scrim");
-		if (scrim) {
-			scrim.hidden = false;
-			requestAnimationFrame(() => scrim.classList.add("is-on"));
+	if (!embedded) {
+		$("#app").classList.add("dock-open");
+		// 窄屏上副驾是一张抽屉，得把遮罩也放下来。
+		if (window.matchMedia("(max-width: 1160px)").matches) {
+			const scrim = $("#scrim");
+			if (scrim) {
+				scrim.hidden = false;
+				requestAnimationFrame(() => scrim.classList.add("is-on"));
+			}
 		}
 	}
 	if ($("#dock-input")) setTimeout(() => $("#dock-input").focus(), 120);
+}
+
+/**
+ * 把副驾整块搬进读稿台/别处。元素本身不重建，会话、监听、滚动位置都还在；
+ * 搬走前记住原位，unmountDock() 再放回去。
+ */
+export function mountDock(host) {
+	const node = $("#dock");
+	if (!node || !host) return false;
+	if (!home.parent) {
+		home.parent = node.parentElement;
+		home.next = node.nextElementSibling;
+	}
+	embedded = true;
+	node.classList.add("is-embedded");
+	host.append(node);
+	renderAttach();
+	renderQuick();
+	renderIntro();
+	renderSendState();
+	return true;
+}
+
+export function unmountDock() {
+	const node = $("#dock");
+	if (!node || !home.parent) return;
+	embedded = false;
+	node.classList.remove("is-embedded");
+	if (home.next && home.next.parentElement === home.parent) home.parent.insertBefore(node, home.next);
+	else home.parent.append(node);
+	$("#app").classList.remove("dock-open");
 }
 
 /* ---------------------------------------------------------------- 身份 */

@@ -1922,7 +1922,7 @@ try {
 	check("首页有案头这一屏", indexHtml.includes('id="view-desk"'));
 	check("首页有写作台这一屏", indexHtml.includes('id="view-studio"'));
 	check("首页有改编台这一屏", indexHtml.includes('id="view-adapt"'));
-	check("书脊上有五个去处", (indexHtml.match(/class="spine-btn/g) ?? []).length === 5);
+	check("书脊上有五个去处，改编工程多一个改编台", (indexHtml.match(/class="spine-btn/g) ?? []).length === 6);
 	check("顶栏常驻命令条", indexHtml.includes('id="btn-palette"') && indexHtml.includes('id="run-pill"'));
 
 	const appJs = await fetch(base + "/app.js");
@@ -1930,7 +1930,7 @@ try {
 	check("前端脚本可访问", appJs.status === 200 && appSource.includes("from \"./app/ctx.js\""));
 
 	// 前端拆成一棵模块树：少一个文件整页白屏，所以逐个都要得到。
-	const moduleNames = ["core", "api", "ctx", "desk", "studio", "paper", "materials", "outline", "dock", "adapt", "settings-view", "palette", "share"];
+	const moduleNames = ["core", "api", "ctx", "desk", "studio", "paper", "materials", "outline", "dock", "adapt", "reader", "settings-view", "palette", "share"];
 	const moduleSources = new Map<string, string>();
 	for (const name of moduleNames) {
 		const res = await fetch(`${base}/app/${name}.js`);
@@ -2128,7 +2128,7 @@ try {
 		new Set(blocks.flatMap((block) => [...block.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1]!)));
 	const lightNames = nameSet(lightBlocks);
 	const darkNames = nameSet(darkBlocks);
-	const themeInvariant = /^--(ui|song|mono|serif|kai|sans|fs-|sp-|r-|lh-|paper-fs|paper-lh|measure|ease|fast|base|slow|tap|spine-w|rail-w|dock-w|top-h|nav-h|cinnabar|rule|moss|elev|hover)/;
+	const themeInvariant = /^--(ui|song|mono|serif|kai|sans|fs-|sp-|r-|lh-|paper-fs|paper-lh|reader-fs|reader-lh|measure|ease|fast|base|slow|tap|spine-w|rail-w|dock-w|top-h|nav-h|cinnabar|rule|moss|elev|hover)/;
 	const uncovered = [...lightNames].filter((n) => !darkNames.has(n) && !themeInvariant.test(n));
 	check("会变色的令牌暗色都有覆盖", uncovered.length === 0, uncovered.join(" "));
 	const traversal = await fetch(base + "/../package.json");

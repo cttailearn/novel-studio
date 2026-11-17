@@ -87,6 +87,8 @@
 
 	--paper-fs: 17.5px;
 	--paper-lh: 1.95;
+	--reader-fs: 18.5px;
+	--reader-lh: 1.9;
 	--measure: 33em;
 
 	--ease: cubic-bezier(0.22, 0.61, 0.36, 1);

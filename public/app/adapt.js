@@ -7,7 +7,7 @@
 
 import * as api from "./api.js";
 import * as ctx from "./ctx.js";
-import { $, el, icon, toast, openModal, confirmAction, excerpt, renderMarkdown, wordLabel, timeAgo, num } from "./core.js";
+import { $, el, icon, toast, openModal, confirmAction, excerpt, renderMarkdown, wordLabel, countWords, num } from "./core.js";
 
 let mounted = false;
 let adaptation = null;
@@ -19,6 +19,8 @@ let proposalFor = "";
 let streaming = false;
 let abortCtl = null;
 let draftText = "";
+let chapterDraft = "";
+let chapterDraftFor = "";
 let signature = "";
 
 const CHANGE_LABELS = {
@@ -28,6 +30,7 @@ const CHANGE_LABELS = {
 	pov: "视角",
 	addition: "增补",
 	style: "语感",
+	title: "章名",
 	other: "其他",
 };
 
@@ -57,6 +60,28 @@ async function ensureData(force = false) {
 	}
 }
 
+/** 现在是轮到哪一章（空串 = 已经改到底）。后端会用同一套算法兜底。 */
+function cursorChapterId() {
+	const chapters = ctx.state.project?.outline || [];
+	const pinned = adaptation?.cursor;
+	if (typeof pinned === "string") {
+		if (!pinned) return "";
+		if (chapters.some((item) => item.id === pinned)) return pinned;
+	}
+	const next = chapters.find((item) => !ctx.chapterMeta(item.id)?.hasDraft);
+	return next?.id || "";
+}
+
+function cursorIndex() {
+	const id = cursorChapterId();
+	if (!id) return (ctx.state.project?.outline || []).length;
+	return (ctx.state.project?.outline || []).findIndex((item) => item.id === id);
+}
+
+function isReopened(chapterId) {
+	return Boolean(ctx.chapterMeta(chapterId)?.hasDraft);
+}
+
 async function render({ force = false } = {}) {
 	const host = $("#adapt-root");
 	if (!host || ctx.state.view !== "adapt") return;
@@ -74,11 +99,23 @@ async function render({ force = false } = {}) {
 	await ensureData(force);
 	const chapters = project.outline || [];
 	if (!selected || !chapters.some((item) => item.id === selected)) {
-		selected = ctx.state.activeId && chapters.some((item) => item.id === ctx.state.activeId)
-			? ctx.state.activeId
-			: chapters.find((item) => item.status !== "drafted")?.id || chapters[0]?.id || "";
+		const cursor = cursorChapterId();
+		selected =
+			(ctx.state.activeId && chapters.some((item) => item.id === ctx.state.activeId) ? ctx.state.activeId : "") ||
+			cursor ||
+			chapters[0]?.id ||
+			"";
 	}
-	const next = [project.id, selected, chapters.length, project.updatedAt, streaming, draftText.length].join("|");
+	const next = [
+		project.id,
+		selected,
+		chapters.length,
+		project.updatedAt,
+		streaming,
+		draftText.length,
+		chapterDraft.length,
+		adaptation?.cursor ?? "",
+	].join("|");
 	if (!force && next === signature && host.childElementCount) return;
 	signature = next;
 	host.replaceChildren(barNode(), bodyNode());
@@ -108,12 +145,20 @@ function barNode() {
 	const project = ctx.state.project;
 	const bar = el("header", { class: "adapt-bar" });
 	const sourceLabel = source?.title || adaptation?.sourceTitle || "原书";
+	const chapters = project.outline || [];
+	const cursor = cursorChapterId();
+	const cursorAt = cursor ? chapters.findIndex((item) => item.id === cursor) + 1 : chapters.length;
+	const done = chapters.filter((item) => ctx.chapterMeta(item.id)?.hasDraft).length;
 	const title = el(
 		"div",
 		{ class: "adapt-bar-title" },
 		el("h2", { text: project.title }),
 		el("span", { class: "tag tag-jade", text: "改编" }),
 		el("span", { class: "adapt-source", text: `原书：${sourceLabel}` }),
+		el("span", {
+			class: `adapt-cursor${cursor ? "" : " is-done"}`,
+			text: cursor ? `轮到第 ${cursorAt} 章 · 已改 ${done}/${chapters.length}` : `已改到底（${done}/${chapters.length}）· 可以回头再改`,
+		}),
 	);
 	const actions = el("div", { class: "adapt-bar-actions" });
 	actions.append(
@@ -134,6 +179,21 @@ function barNode() {
 		el(
 			"button",
 			{
+				class: "btn btn-quiet btn-sm",
+				type: "button",
+				title: "整屏读这一章；改编稿可对照原文 (v)",
+				on: {
+					click: () => void readSelected(),
+				},
+			},
+			icon("eye"),
+			"读全篇",
+		),
+	);
+	actions.append(
+		el(
+			"button",
+			{
 				class: "btn btn-ghost btn-sm",
 				type: "button",
 				on: {
@@ -148,6 +208,15 @@ function barNode() {
 	return bar;
 }
 
+/** 读稿台：改编稿 + 原书对照。读完可以直接在里面改，改的是同一份正文。 */
+async function readSelected({ edit = false } = {}) {
+	if (!selected) return;
+	await ctx.flushSave().catch(() => {});
+	const mod = await import("./reader.js");
+	void mod.openReader({ chapterId: selected, mode: edit ? "edit" : "read", compare: true });
+}
+
+
 function bodyNode() {
 	const project = ctx.state.project;
 	const chapters = project.outline || [];
@@ -161,17 +230,23 @@ function bodyNode() {
 		),
 	);
 	const list = el("div", { class: "adapt-scroll" });
+	const cursorAt = cursorIndex();
 	for (const [index, chapter] of chapters.entries()) {
 		const marks = (adaptation?.changes || []).filter((change) => change.chapterId === chapter.id).length;
+		const done = isReopened(chapter.id);
+		const current = chapter.id === cursorChapterId();
+		const later = cursorAt < chapters.length && index > cursorAt && !done;
+		const stateLabel = done ? "已改" : current ? "轮到" : later ? "待改" : "可改";
 		const row = el(
 			"button",
 			{
-				class: `adapt-ch${chapter.id === selected ? " is-active" : ""}`,
+				class: `adapt-ch${chapter.id === selected ? " is-active" : ""}${done ? " is-done" : ""}${current ? " is-current" : ""}${later ? " is-later" : ""}`,
 				type: "button",
 				on: {
 					click: () => {
 						selected = chapter.id;
 						proposal = null;
+						draftText = "";
 						void render();
 					},
 				},
@@ -180,7 +255,12 @@ function bodyNode() {
 			el(
 				"span",
 				{ class: "adapt-ch-main" },
-				el("span", { class: "adapt-ch-title", text: chapter.title || `第 ${index + 1} 章` }),
+				el(
+					"span",
+					{ class: "adapt-ch-title" },
+					el("span", { text: chapter.title || `第 ${index + 1} 章` }),
+					el("span", { class: `adapt-ch-state is-${done ? "done" : current ? "current" : "later"}`, text: stateLabel }),
+				),
 				el("span", { class: "adapt-ch-sub", text: excerpt(chapter.summary || "还没纲", 40) }),
 			),
 			marks ? el("span", { class: "adapt-ch-marks", text: `${marks} 改` }) : null,
@@ -256,29 +336,91 @@ function paperNode() {
 		wrap.append(el("div", { class: "adapt-stream", id: "adapt-stream" }));
 		return wrap;
 	}
-	if (!proposal) {
+	const chapters = ctx.state.project?.outline || [];
+	const index = chapters.findIndex((item) => item.id === selected);
+	const done = isReopened(selected);
+	const current = selected === cursorChapterId();
+	const cursorAt = cursorIndex();
+	const later = cursorAt < chapters.length && index > cursorAt;
+
+	if (!proposal && !done) {
 		const empty = el("div", { class: "adapt-empty" });
 		empty.append(icon("book-open"));
-		empty.append(el("p", { text: "这一章还没交稿。" }));
-		empty.append(el("p", { class: "set-note", text: "点上面「让改编者改这一章」，它会读原文与台账，交一版给你看。" }));
-		wrap.append(empty);
+		empty.append(
+			el("p", {
+				text: current
+					? "轮到这一章了，还没交稿。"
+					: later
+						? `还没轮到这一章：先改完第 ${cursorAt + 1} 章。`
+						: "这一章还没交稿。",
+			}),
+		);
+		empty.append(
+			el("p", {
+				class: "set-note",
+				text: later
+					? "改编是一章一章往下走的：后面的章要接住前面的改动，跳着改会把设定搅乱。"
+					: "让改编者读原书这一章与前面的台账，交一版给你过目；也可以自己先把这一章写出来。",
+			}),
+		);
+		const buttons = el("div", { class: "adapt-actions" });
+		if (!later) {
+			buttons.append(
+				el(
+					"button",
+					{ class: "btn btn-seal", type: "button", on: { click: () => void runSelected() } },
+					icon("quill"),
+					"让改编者改这一章",
+				),
+			);
+		} else {
+			buttons.append(
+				el(
+					"button",
+					{
+						class: "btn btn-primary",
+						type: "button",
+						on: { click: () => void jumpToCursor() },
+					},
+					icon("arrow-right"),
+					`先改第 ${cursorAt + 1} 章`,
+				),
+			);
+		}
+		buttons.append(
+			el(
+				"button",
+				{ class: "btn btn-ghost", type: "button", on: { click: () => void readSelected({ edit: true }) } },
+				icon("edit"),
+				"自己写这一章",
+			),
+		);
+		wrap.append(empty, buttons);
 		return wrap;
 	}
+
+	const mode = proposal ? "proposal" : "author";
+	const value = draftText || (proposal ? proposal.content : chapterDraft);
+	const revisionLabel = proposal
+		? `基线第 ${proposal.baseRevision} 稿`
+		: `第 ${ctx.chapterMeta(selected)?.revision || 1} 稿`;
 	const head = el(
 		"div",
 		{ class: "adapt-paper-head" },
-		el("span", { class: "eyebrow", text: "改编稿" }),
-		el("span", { class: "adapt-paper-meta", text: `${wordLabel(draftText ? draftText.length : proposal.content.length)} · 基线第 ${proposal.baseRevision} 稿` }),
+		el("span", { class: "eyebrow", text: mode === "proposal" ? "改编稿 · 等你定" : "这一章已改完" }),
+		el("span", { class: "adapt-paper-meta", text: `${wordLabel(value.length)} · ${revisionLabel}` }),
 	);
-	const area = el("textarea", { class: "adapt-paper-body", rows: 18, spellcheck: "false" });
-	area.value = draftText || proposal.content;
+	const area = el("textarea", { class: "adapt-paper-body", rows: 22, spellcheck: "false" });
+	area.value = value;
 	area.addEventListener("input", () => {
 		draftText = area.value;
+		const meta = wrap.querySelector(".adapt-paper-meta");
+		if (meta) meta.textContent = `${wordLabel(countWords(area.value))} · ${revisionLabel}`;
 	});
-	if (proposal.summary) wrap.append(el("p", { class: "adapt-summary", text: proposal.summary }));
+	if (proposal?.summary) wrap.append(el("p", { class: "adapt-summary", text: proposal.summary }));
 	wrap.append(head, area);
 
-	const changes = proposal.changes || [];
+	const changes = proposal?.changes || [];
 	if (changes.length) {
 		const list = el("div", { class: "changes-list" });
 		for (const change of changes) {
@@ -295,81 +437,200 @@ function paperNode() {
 	}
 
 	const actions = el("div", { class: "adapt-actions" });
-	actions.append(
-		el(
-			"button",
-			{
-				class: "btn btn-seal",
-				type: "button",
-				on: {
-					click: async () => {
-						const yes = await confirmAction({
-							title: "采用这一版？",
-							message: "它会成为这一章的正文（存一版历史），台账也一并记上。",
-							confirmLabel: "采用",
-						});
-						if (!yes) return;
-						try {
-							await api.applyProposal(ctx.state.project.id, selected, {
-								proposalId: proposal.id,
-								content: area.value,
-								summary: proposal.summary,
-								changes: proposal.changes,
-							});
-							proposal = null;
-							proposalFor = "";
-							draftText = "";
-							await ctx.reloadProjectStructure();
-							if (ctx.state.activeId === selected) await ctx.loadDraft(selected, { silent: true });
-							await ensureData(true);
-							await render();
-							toast("这一章算改完了。", "ok");
-						} catch (error) {
-							toast(error.message || "采用不了。", "error");
-						}
-					},
-				},
-			},
-			icon("check"),
-			"采用这一版",
-		),
-		el(
-			"button",
-			{
-				class: "btn btn-ghost btn-sm",
-				type: "button",
-				on: {
-					click: async () => {
-						const yes = await confirmAction({ title: "弃掉这一版？", message: "正文一个字不动，只把这份提案撤下来。", confirmLabel: "弃掉", danger: true });
-						if (!yes) return;
-						try {
-							await api.http.del(`/api/projects/${encodeURIComponent(ctx.state.project.id)}/chapters/${encodeURIComponent(selected)}/adapt`);
-							proposal = null;
-							proposalFor = "";
-							draftText = "";
-							renderPaper();
-							toast("弃掉了。");
-						} catch (error) {
-							toast(error.message || "弃不掉。", "error");
-						}
-					},
-				},
-			},
-			"弃掉",
-		),
-		el(
-			"button",
-			{
-				class: "btn btn-quiet btn-sm",
-				type: "button",
-				on: { click: () => void runSelected(true) },
-			},
-			icon("refresh"),
-			"按现稿重交一版",
-		),
-	);
+	if (mode === "proposal") {
+		actions.append(
+			el(
+				"button",
+				{ class: "btn btn-seal", type: "button", on: { click: () => void applyVersion(area) } },
+				icon("check"),
+				"采用这一版",
+			),
+		);
+		actions.append(
+			el(
+				"button",
+				{ class: "btn btn-ghost btn-sm", type: "button", on: { click: () => void readSelected() } },
+				icon("eye"),
+				"读全篇对照",
+			),
+		);
+		actions.append(
+			el(
+				"button",
+				{ class: "btn btn-quiet btn-sm", type: "button", on: { click: () => void dropProposal() } },
+				icon("x"),
+				"弃掉",
+			),
+		);
+		actions.append(
+			el(
+				"button",
+				{ class: "btn btn-quiet btn-sm", type: "button", on: { click: () => void runSelected(true) } },
+				icon("refresh"),
+				"按现稿重交一版",
+			),
+		);
+	} else {
+		actions.append(
+			el(
+				"button",
+				{ class: "btn btn-seal", type: "button", on: { click: () => void saveAuthorVersion(area) } },
+				icon("save"),
+				"存下这一版",
+			),
+		);
+		actions.append(
+			el(
+				"button",
+				{ class: "btn btn-ghost btn-sm", type: "button", on: { click: () => void readSelected() } },
+				icon("eye"),
+				"读全篇对照",
+			),
+		);
+		actions.append(
+			el(
+				"button",
+				{ class: "btn btn-quiet btn-sm", type: "button", on: { click: () => void readSelected({ edit: true }) } },
+				icon("edit"),
+				"整屏改",
+			),
+		);
+		actions.append(
+			el(
+				"button",
+				{ class: "btn btn-quiet btn-sm", type: "button", on: { click: () => void runSelected(true) } },
+				icon("refresh"),
+				"让改编者再改一版",
+			),
+		);
+	}
 	wrap.append(actions);
 	return wrap;
+}
+
+async function jumpToCursor() {
+	const cursor = cursorChapterId();
+	if (!cursor) {
+		toast("这一本已经改到底了，可以点任意一章回头再改。");
+		return;
+	}
+	selected = cursor;
+	proposal = null;
+	draftText = "";
+	await render({ force: true });
+}
+
+async function applyVersion(area) {
+	const content = area.value.trim();
+	if (!content) {
+		toast("改编稿是空的，采用不了。", "warn");
+		return;
+	}
+	const yes = await confirmAction({
+		title: "采用这一版？",
+		message: "它会成为这一章的正文（存一版历史），台账也一并记上。",
+		confirmLabel: "采用",
+	});
+	if (!yes) return;
+	try {
+		await api.applyProposal(ctx.state.project.id, selected, {
+			proposalId: proposal?.id,
+			content: area.value,
+			summary: proposal?.summary,
+			changes: proposal?.changes,
+		});
+		toast("这一章算改完了。", "ok");
+		await afterSave();
+	} catch (error) {
+		if (await reportSequenceError(error)) return;
+		toast(error.message || "采用不了。", "error");
+	}
+}
+
+/** 作者自己在改编稿上手改的那一版：不带 proposalId，服务端照样落盘、记台账。 */
+async function saveAuthorVersion(area) {
+	const content = area.value.trim();
+	if (!content) {
+		toast("这一版还是空的。", "warn");
+		return;
+	}
+	if (content === chapterDraft.trim()) {
+		toast("这一版没有改动。");
+		return;
+	}
+	const yes = await confirmAction({
+		title: "存下这一版？",
+		message: "它会成为这一章的正文，并记进改编台账（存一版历史）。",
+		confirmLabel: "存下",
+	});
+	if (!yes) return;
+	try {
+		await api.applyProposal(ctx.state.project.id, selected, { content: area.value });
+		toast("存下了。", "ok");
+		await afterSave();
+	} catch (error) {
+		if (await reportSequenceError(error)) return;
+		toast(error.message || "没存上。", "error");
+	}
+}
+
+async function dropProposal() {
+	const yes = await confirmAction({ title: "弃掉这一版？", message: "正文一个字不动，只把这份提案撤下来。", confirmLabel: "弃掉", danger: true });
+	if (!yes) return;
+	try {
+		await api.http.del(`/api/projects/${encodeURIComponent(ctx.state.project.id)}/chapters/${encodeURIComponent(selected)}/adapt`);
+		proposal = null;
+		proposalFor = "";
+		draftText = "";
+		renderPaper();
+		toast("弃掉了。");
+	} catch (error) {
+		toast(error.message || "弃不掉。", "error");
+	}
+}
+
+async function afterSave() {
+	proposal = null;
+	proposalFor = "";
+	draftText = "";
+	chapterDraft = "";
+	chapterDraftFor = "";
+	await ctx.reloadProjectStructure();
+	if (ctx.state.activeId === selected) await ctx.loadDraft(selected, { silent: true });
+	await ensureData(true);
+	await render({ force: true });
+}
+
+/** 409 里最常见的是「还没轮到这一章」和「你看稿期间又被改过」：都给出下一步，而不是只报个错。 */
+async function reportSequenceError(error) {
+	const message = error?.message || "";
+	if (/一章一章往下走/.test(message) || /已经改到底/.test(message)) {
+		const cursor = cursorChapterId();
+		const body = el("div", null, el("p", { class: "set-note", text: message }));
+		const actions = [{ label: "知道了", onClick: () => close() }];
+		if (cursor) {
+			actions.push({
+				label: "去改轮到的那一章",
+				kind: "primary",
+				onClick: () => {
+					close();
+					selected = cursor;
+					proposal = null;
+					draftText = "";
+					void render({ force: true });
+				},
+			});
+		}
+		const { close } = openModal({ eyebrow: "改编顺序", title: "还没轮到这一章", body, actions });
+		return true;
+	}
+	if (/又改过一版/.test(message)) {
+		toast(message, "warn", 6000);
+		await ensureData(true);
+		await render({ force: true });
+		return true;
+	}
+	return false;
 }
 
 function renderPaper() {
@@ -380,7 +641,15 @@ function renderPaper() {
 	const head = $("#adapt-paper-head");
 	if (head) head.textContent = paperHeadLabel();
 	const state = $("#adapt-paper-state");
-	if (state) state.textContent = streaming ? "改编者在写…" : proposal ? "交了一版，等你定" : "";
+	if (state) {
+		state.textContent = streaming
+			? "改编者在写…"
+			: proposal
+				? "交了一版，等你定"
+				: isReopened(selected)
+					? "已改完，可直接改"
+					: "";
+	}
 }
 
 async function loadProposal(chapterId) {
@@ -395,7 +664,23 @@ async function loadProposal(chapterId) {
 			proposal = null;
 		}
 	}
+	await loadChapterDraft(chapterId);
 	renderPaper();
+}
+
+/** 已经改过的章：把现在这一版正文取来，作者可以直接在上面改。 */
+async function loadChapterDraft(chapterId) {
+	const key = `${ctx.state.project.id}:${chapterId}`;
+	if (chapterDraftFor === key) return;
+	chapterDraftFor = key;
+	chapterDraft = "";
+	if (!isReopened(chapterId)) return;
+	try {
+		const data = await api.getDraft(ctx.state.project.id, chapterId);
+		chapterDraft = data.chapter?.content || "";
+	} catch {
+		chapterDraft = "";
+	}
 }
 
 /* ---------------------------------------------------------------- 跑一轮 */
@@ -407,6 +692,13 @@ async function runSelected(rework = false) {
 	}
 	if (!selected) {
 		toast("先挑一章。", "error");
+		return;
+	}
+	// 一章一章往下走：没轮到的章先别抢跑（已经改过的章可以回头再改）。
+	const cursor = cursorChapterId();
+	if (cursor && selected !== cursor && !isReopened(selected)) {
+		toast(`改编是一章一章往下走的：现在轮到第 ${cursorIndex() + 1} 章。`, "warn", 6000);
+		await jumpToCursor();
 		return;
 	}
 	if (!ctx.aimModel()) {
@@ -484,7 +776,9 @@ async function runSelected(rework = false) {
 			},
 		);
 	} catch (error) {
-		if (error?.name !== "AbortError") toast(error.message || "这一轮没跑完。", "error");
+		if (error?.name !== "AbortError") {
+			if (!(await reportSequenceError(error))) toast(error.message || "这一轮没跑完。", "error");
+		}
 	} finally {
 		streaming = false;
 		abortCtl = null;
@@ -584,5 +878,4 @@ async function openSourceReader() {
 		actions: [{ label: "合上", onClick: () => close() }],
 	});
 	void chapters.length;
-	void timeAgo;
 }

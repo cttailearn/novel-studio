@@ -3601,4 +3601,667 @@ dialog.modal.is-polish {
 	}
 }
 
+/* ==========================================================================
+   读稿台：把这一章从纸里抽出来，铺满整屏
+   —— 手机读长文、路上改一句、改编稿逐句对照，都在这一层。
+   ========================================================================== */
 
+.reader {
+	position: fixed;
+	inset: 0;
+	z-index: 620;
+	display: grid;
+	grid-template-rows: auto minmax(0, 1fr) auto;
+	background: var(--paper);
+	opacity: 0;
+	transition: opacity var(--base) var(--ease);
+}
+
+.reader[hidden] {
+	display: none;
+}
+
+.reader.is-open {
+	opacity: 1;
+}
+
+.reader.is-editing .reader-page,
+.reader.is-editing .reader-empty {
+	display: none;
+}
+
+.reader:not(.is-editing) .reader-input {
+	display: none;
+}
+
+.reader.is-comparing .reader-scroll {
+	padding-bottom: 16vh;
+}
+
+.reader-bar {
+	display: flex;
+	align-items: center;
+	gap: var(--sp-3);
+	padding: calc(var(--sp-2) + env(safe-area-inset-top)) var(--sp-5) var(--sp-2);
+	border-bottom: 1px solid var(--line-soft);
+	background: var(--paper-lo);
+}
+
+.reader-heading {
+	display: grid;
+	gap: 2px;
+	min-width: 0;
+}
+
+.reader-heading .eyebrow {
+	margin: 0;
+	font-size: var(--fs-2xs);
+	color: var(--ink-4);
+}
+
+.reader-title {
+	margin: 0;
+	font-family: var(--song);
+	font-size: var(--fs-xl);
+	font-weight: 600;
+	line-height: 1.2;
+	color: var(--ink);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.reader-tools {
+	display: flex;
+	align-items: center;
+	gap: var(--sp-2);
+	margin-left: auto;
+	flex: none;
+}
+
+.reader-meta {
+	font-size: var(--fs-2xs);
+	color: var(--ink-4);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+.reader-save {
+	min-width: 3.6em;
+	text-align: right;
+	font-size: var(--fs-2xs);
+	color: var(--ink-4);
+}
+
+.reader-save[data-state="dirty"] {
+	color: var(--amber);
+}
+
+.reader-save[data-state="saved"] {
+	color: var(--jade);
+}
+
+.reader-save.is-error,
+.reader-save[data-state="error"] {
+	color: var(--seal);
+}
+
+.reader-font {
+	display: flex;
+	border: 1px solid var(--line-soft);
+	border-radius: var(--r-2);
+	overflow: hidden;
+}
+
+.reader-font .btn {
+	height: 28px;
+	padding: 0 8px;
+	border: 0;
+	border-radius: 0;
+	font-family: var(--mono);
+	font-size: var(--fs-2xs);
+	color: var(--ink-3);
+}
+
+.reader-font .btn + .btn {
+	border-left: 1px solid var(--line-soft);
+}
+
+.reader-font .btn:hover {
+	background: var(--wash-1);
+	color: var(--ink);
+}
+
+.reader-scroll {
+	grid-column: 1;
+	grid-row: 2;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	padding: var(--sp-6) var(--sp-4) 24vh;
+}
+
+.reader-page {
+	display: grid;
+	gap: 1.1em;
+	width: min(100%, 40rem);
+	margin: 0 auto;
+}
+
+/* 两页（读稿页 / 编辑框）用 hidden 切换，别让 display 规则把它顶回可见。 */
+.reader-page[hidden],
+.reader-input[hidden] {
+	display: none;
+}
+
+.reader-p {
+	margin: 0;
+	font-family: var(--song);
+	font-size: var(--reader-fs, 18.5px);
+	line-height: var(--reader-lh, 1.9);
+	color: var(--ink);
+	text-indent: 2em;
+}
+
+.reader-p:first-child {
+	text-indent: 2em;
+}
+
+.reader-input {
+	display: block;
+	width: min(100%, 40rem);
+	min-height: 58vh;
+	margin: 0 auto;
+	padding: 0 0 24vh;
+	border: 0;
+	background: transparent;
+	resize: none;
+	outline: none;
+	font-family: var(--song);
+	font-size: var(--reader-fs, 18.5px);
+	line-height: var(--reader-lh, 1.9);
+	color: var(--ink);
+	caret-color: var(--seal);
+}
+
+/* 改稿时整块纸换一档底色：一眼看出「现在能写」。 */
+.reader.is-editing .reader-scroll {
+	background: var(--paper-hi);
+}
+
+.reader-input[hidden] {
+	display: none;
+}
+
+.reader-legend {
+	display: flex;
+	align-items: center;
+	gap: var(--sp-2);
+	margin: 0 0 var(--sp-3);
+	padding: var(--sp-2) var(--sp-3);
+	border: 1px dashed var(--line);
+	border-radius: var(--r-2);
+	font-size: var(--fs-2xs);
+	color: var(--ink-3);
+	text-indent: 0;
+}
+
+.reader-legend.is-wait {
+	border-style: dotted;
+	color: var(--ink-4);
+}
+
+.reader-mark {
+	padding: 0 1px;
+	border-radius: 2px;
+	background: var(--seal-wash);
+	color: inherit;
+	box-shadow: inset 0 -1px 0 var(--seal-line);
+}
+
+.reader-origin {
+	margin-top: var(--sp-6);
+	padding-top: var(--sp-3);
+	border-top: 1px solid var(--line-soft);
+	text-indent: 0;
+}
+
+.reader-origin > summary {
+	margin-bottom: var(--sp-3);
+	font-size: var(--fs-sm);
+	color: var(--ink-3);
+	cursor: pointer;
+}
+
+.reader-origin .reader-p {
+	font-size: calc(var(--reader-fs, 18.5px) * 0.94);
+	color: var(--ink-3);
+}
+
+.reader-foot {
+	display: flex;
+	align-items: center;
+	gap: var(--sp-3);
+	padding: var(--sp-2) var(--sp-4) calc(var(--sp-2) + env(safe-area-inset-bottom));
+	border-top: 1px solid var(--line-soft);
+	background: var(--paper-lo);
+}
+
+.reader-progress-track {
+	flex: 1;
+	height: 2px;
+	border-radius: 2px;
+	background: var(--line-soft);
+	overflow: hidden;
+}
+
+.reader-progress {
+	width: 0;
+	height: 100%;
+	background: var(--seal);
+	transition: width 90ms linear;
+}
+
+.reader-empty {
+	display: grid;
+	justify-items: center;
+	gap: var(--sp-2);
+	padding: 16vh var(--sp-4) 0;
+	text-align: center;
+	color: var(--ink-4);
+	text-indent: 0;
+}
+
+.reader-empty-title {
+	margin: 0;
+	font-family: var(--song);
+	font-size: var(--fs-lg);
+	color: var(--ink-2);
+}
+
+.reader-empty-note {
+	margin: 0;
+	max-width: 27rem;
+	font-size: var(--fs-sm);
+	line-height: 1.85;
+}
+
+.reader-empty-actions {
+	display: flex;
+	gap: var(--sp-2);
+	margin-top: var(--sp-3);
+}
+
+body.is-reading {
+	overflow: hidden;
+}
+
+/* —— 改编顺序：一章一章往下走 —————————————————— */
+
+.adapt-cursor {
+	padding: 1px 8px;
+	border-radius: var(--r-pill);
+	background: var(--jade-wash);
+	color: var(--jade);
+	font-size: var(--fs-2xs);
+	white-space: nowrap;
+}
+
+.adapt-cursor.is-done {
+	background: var(--wash-2);
+	color: var(--ink-3);
+}
+
+.adapt-ch-title {
+	display: flex;
+	align-items: center;
+	gap: var(--sp-2);
+}
+
+.adapt-ch-title > span:first-child {
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.adapt-ch-state {
+	flex: none;
+	padding: 0 5px;
+	border: 1px solid var(--line);
+	border-radius: var(--r-pill);
+	color: var(--ink-4);
+	font-size: var(--fs-2xs);
+	font-weight: 400;
+}
+
+.adapt-ch-state.is-current {
+	border-color: var(--seal-line);
+	background: var(--seal-wash);
+	color: var(--seal);
+}
+
+.adapt-ch-state.is-done {
+	border-color: transparent;
+	background: var(--jade-wash);
+	color: var(--jade);
+}
+
+.adapt-ch.is-later {
+	opacity: 0.66;
+}
+
+.adapt-ch.is-later:hover {
+	opacity: 1;
+}
+
+.change-kind.kind-title {
+	background: var(--amber-wash);
+	color: var(--ink-2);
+}
+
+/* —— 读稿台：窄屏 —— */
+
+@media (max-width: 920px) {
+	.reader-bar {
+		padding-inline: var(--sp-3);
+		gap: var(--sp-2);
+	}
+
+	.reader-title {
+		font-size: var(--fs-lg);
+	}
+
+	.reader-scroll {
+		padding: var(--sp-5) var(--sp-4) 20vh;
+	}
+
+	.reader-foot {
+		padding-inline: var(--sp-3);
+	}
+}
+
+@media (max-width: 620px) {
+	.reader-bar {
+		flex-wrap: wrap;
+	}
+
+	.reader-heading {
+		order: 1;
+		flex: 1;
+	}
+
+	.reader-tools {
+		order: 3;
+		width: 100%;
+		justify-content: space-between;
+		margin-left: 0;
+		padding-top: 6px;
+		border-top: 1px solid var(--line-soft);
+	}
+
+	.reader-meta {
+		display: none;
+	}
+
+	.reader-tools .btn-sm {
+		padding-inline: 8px;
+	}
+
+	.reader-scroll {
+		padding: var(--sp-4) var(--sp-3) 18vh;
+	}
+
+	.reader-input {
+		min-height: 52vh;
+	}
+
+	.reader-empty {
+		padding-top: 12vh;
+	}
+}
+
+
+
+/* ---------- 读稿台里的副驾（边读边改） ---------- */
+
+.reader.agent-open {
+	grid-template-columns: minmax(0, 1fr) min(var(--dock-w), 34vw);
+}
+
+.reader-bar,
+.reader-foot {
+	grid-column: 1 / -1;
+}
+
+.reader-agent {
+	grid-column: 2;
+	grid-row: 2;
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	min-height: 0;
+	border-left: 1px solid var(--line-soft);
+	background: var(--paper-lo);
+}
+
+.reader-agent[hidden] {
+	display: none;
+}
+
+.reader-agent-head {
+	display: flex;
+	align-items: center;
+	gap: var(--sp-2);
+	flex: none;
+	padding: var(--sp-2) var(--sp-3);
+	border-bottom: 1px solid var(--line-soft);
+}
+
+#reader-agent-close {
+	margin-left: auto;
+}
+
+.reader-agent-tabs {
+	display: flex;
+	gap: 2px;
+	padding: 2px;
+	border-radius: var(--r-pill);
+	background: var(--wash-2);
+}
+
+.reader-agent-tab {
+	appearance: none;
+	border: 0;
+	background: transparent;
+	color: var(--ink-3);
+	font: inherit;
+	font-size: var(--fs-xs);
+	height: 24px;
+	padding: 0 10px;
+	border-radius: var(--r-pill);
+	cursor: pointer;
+}
+
+.reader-agent-tab.is-active {
+	background: var(--paper-hi);
+	color: var(--ink);
+	box-shadow: var(--shadow-1);
+}
+
+.reader-agent-body {
+	display: flex;
+	flex: 1;
+	min-height: 0;
+}
+
+.reader-agent-pane {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	min-height: 0;
+}
+
+.reader-agent-pane[hidden] {
+	display: none;
+}
+
+.reader-agent-pane .dock,
+#dock.is-embedded {
+	position: static;
+	inset: auto;
+	z-index: auto;
+	width: auto;
+	height: auto;
+	max-height: none;
+	min-height: 0;
+	flex: 1;
+	padding: 0;
+	border: 0;
+	border-radius: 0;
+	background: transparent;
+	box-shadow: none;
+	transform: none;
+}
+
+#dock.is-embedded #btn-close-dock {
+	display: none;
+}
+
+.reader-agent-empty {
+	padding: var(--sp-5) var(--sp-4);
+}
+
+.reader-agent-note {
+	margin: 0 0 var(--sp-2);
+	color: var(--ink-3);
+	font-size: var(--fs-xs);
+	line-height: 1.7;
+}
+
+.reader-adapt {
+	display: flex;
+	flex-direction: column;
+	gap: var(--sp-3);
+	min-height: 0;
+	padding: var(--sp-3) var(--sp-3) var(--sp-5);
+	overflow-y: auto;
+}
+
+.reader-adapt-status {
+	margin: 0;
+	color: var(--ink-2);
+	font-size: var(--fs-xs);
+}
+
+.reader-adapt-brief-wrap {
+	display: grid;
+	gap: 4px;
+}
+
+.reader-adapt-brief {
+	min-height: 76px;
+	font-size: var(--fs-sm);
+	resize: vertical;
+}
+
+.reader-adapt-run {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--sp-2);
+}
+
+.reader-adapt-stream {
+	display: grid;
+	gap: var(--sp-2);
+}
+
+.reader-adapt-text {
+	max-height: 40vh;
+	padding-left: var(--sp-3);
+	border-left: 2px solid var(--seal-line);
+	color: var(--ink-2);
+	font-size: var(--fs-sm);
+	line-height: 1.85;
+	overflow-y: auto;
+}
+
+.reader-adapt-proposal {
+	display: grid;
+	gap: var(--sp-2);
+	padding: var(--sp-3);
+	border: 1px solid var(--line-soft);
+	border-radius: var(--r-2);
+	background: var(--paper-hi);
+}
+
+.reader-adapt-summary {
+	margin: 0;
+	color: var(--ink);
+	font-size: var(--fs-sm);
+}
+
+.reader-adapt-actions {
+	display: flex;
+	gap: var(--sp-2);
+}
+
+.reader-adapt .change-list {
+	display: grid;
+	gap: 4px;
+}
+
+.reader-adapt-tip {
+	margin: 0;
+}
+
+@media (max-width: 1100px) {
+	.reader.agent-open {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.reader.agent-open .reader-foot {
+		display: none;
+	}
+
+	.reader.agent-open .reader-scroll {
+		padding-bottom: 8vh;
+	}
+
+	.reader-agent {
+		position: absolute;
+		right: 0;
+		bottom: 0;
+		left: 0;
+		z-index: 2;
+		grid-column: 1 / -1;
+		grid-row: 2;
+		height: min(64vh, 540px);
+		border-top: 1px solid var(--line-soft);
+		border-left: 0;
+		background: var(--paper-hi);
+		box-shadow: var(--shadow-2);
+	}
+}
+
+/* 手机上的副驾：把引导卡收一收，把地方让给正文与输入。 */
+@media (max-width: 620px) {
+	#dock.is-embedded .dock-intro {
+		margin: var(--sp-3) var(--sp-3) var(--sp-4);
+		padding: var(--sp-4) var(--sp-3);
+	}
+
+	#dock.is-embedded .dock-intro-seal {
+		width: 34px;
+		height: 34px;
+	}
+
+	#dock.is-embedded .dock-intro-title {
+		font-size: var(--fs-md);
+	}
+
+	#dock.is-embedded .dock-intro-note {
+		font-size: var(--fs-xs);
+	}
+
+	.reader-agent-head {
+		padding: var(--sp-2) var(--sp-3);
+	}
+}

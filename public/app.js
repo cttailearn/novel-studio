@@ -19,6 +19,7 @@ import { initDock } from "./app/dock.js";
 import { initAdapt } from "./app/adapt.js";
 import { initSettings, refreshSettings, applyReadPrefs } from "./app/settings-view.js";
 import { initPalette, openPalette, closePalette } from "./app/palette.js";
+import { initReader, handleReaderKey, isReaderOpen, openActiveReader } from "./app/reader.js";
 
 const THEME_KEY = "novel-studio-theme";
 
@@ -150,20 +151,26 @@ function applyViewChrome() {
 	const app = $("#app");
 	if (!app) return;
 	const view = ctx.state.view;
+	const adapted = Boolean(ctx.state.project?.adaptation);
 	app.dataset.view = view;
 	for (const node of $$(".view")) {
 		node.classList.toggle("is-active", node.id === `view-${view}`);
 	}
+	// 改编台是改编工程才有的房间：别让普通工程看见一扇打不开的门。
+	for (const btn of $$('[data-nav="adapt"]')) btn.hidden = !adapted;
 	const tab = ctx.state.tab;
 	for (const btn of $$(".spine-btn")) {
 		const nav = btn.dataset.nav;
-		const on = view === "studio" ? nav === tab : view === "desk" ? nav === "desk" : false;
+		const on =
+			view === "adapt" ? nav === "adapt" : view === "studio" ? nav === tab : view === "desk" ? nav === "desk" : false;
 		btn.classList.toggle("is-active", on);
 	}
 	for (const btn of $$(".mnav")) {
 		const nav = btn.dataset.nav;
 		const dockOn = nav === "dock" && app.classList.contains("dock-open") && window.matchMedia("(max-width: 1160px)").matches;
-		const on = dockOn || (view === "studio" ? nav === tab : view === "desk" ? nav === "desk" : false);
+		const on =
+			dockOn ||
+			(view === "adapt" ? nav === "adapt" : view === "studio" ? nav === tab : view === "desk" ? nav === "desk" : false);
 		btn.classList.toggle("is-active", on);
 	}
 	$("#spine-title").hidden = !ctx.state.project;
@@ -241,6 +248,15 @@ function bindSpine() {
 			ctx.setView("desk");
 			return;
 		}
+		if (nav === "adapt") {
+			await ctx.flushSave();
+			if (!ctx.state.project.adaptation) {
+				toast("这一本不是改编工程。去书库挑一本原书，立一部改编工程。", "info");
+				return;
+			}
+			ctx.setView("adapt");
+			return;
+		}
 		ctx.setView("studio");
 		if (nav === "dock") {
 			// 窄屏是带遮罩的抽屉、宽屏是让出一列，交给副驾自己处理。
@@ -271,6 +287,9 @@ function bindKeys() {
 			(target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
 		const paletteOpen = !$("#palette")?.hidden;
 		const drawerOpen = !$("#drawer")?.hidden;
+
+		// 读稿台是整屏的：散键、翻章都先交给它，Esc 也只收它这一层。
+		if (isReaderOpen() && handleReaderKey(event)) return;
 
 		if (event.key === "Escape") {
 			// 原生对话框（模态框、设置）自己会关，别在这里抢。
@@ -348,6 +367,11 @@ function bindKeys() {
 			}
 			if (event.key.toLowerCase() === "t") {
 				setTheme(currentTheme() === "dark" ? "light" : "dark");
+				return;
+			}
+			if (event.key.toLowerCase() === "v") {
+				if (!ctx.state.project) toast("先翻开一本书。");
+				else void openActiveReader({ mode: "read" });
 				return;
 			}
 			if (event.key.toLowerCase() === "f") {
@@ -486,6 +510,7 @@ async function boot() {
 	initAdapt();
 	initSettings();
 	initPalette();
+	initReader();
 	bindTopbar();
 	bindSpine();
 	bindKeys();

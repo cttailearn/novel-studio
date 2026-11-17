@@ -313,6 +313,12 @@ export const adaptChapter = (pid, cid, json, { signal, onEvent } = {}) =>
 	});
 export const getProposal = (pid, cid) =>
 	http.get(`/api/projects/${encodeURIComponent(pid)}/chapters/${encodeURIComponent(cid)}/adapt`);
+/** 改编的进度是把章的游标：一章一章往下走，改到底之后才允许回头。 */
+export const moveAdaptCursor = (pid, chapterId) =>
+	http.post(
+		`/api/projects/${encodeURIComponent(pid)}/adaptation/cursor`,
+		chapterId ? { chapterId } : {},
+	);
 export const applyProposal = (pid, cid, json) =>
 	http.post(`/api/projects/${encodeURIComponent(pid)}/chapters/${encodeURIComponent(cid)}/adapt/apply`, json || {});
 

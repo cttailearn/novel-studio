@@ -339,6 +339,9 @@ function renderActions() {
 	const selection = selectedText();
 	const busy = Boolean(ctx.state.run);
 
+	// 先说「怎么读」，再说「怎么写」：读长文、在路上改一句都在这一屏里。
+	box.append(actionButton("读稿", "book-open", () => void openReaderNow()));
+	box.append(actionButton("改稿", "edit", () => void openReaderNow("edit")));
 	if (hasText) {
 		box.append(actionButton(busy ? "在写…" : "续写", "quill", () => void runWrite("continue"), { kind: "seal" }));
 		box.append(actionButton(selection ? "润色这段" : "润色", "wand", () => void openPolish()));
@@ -414,6 +417,18 @@ async function exportCurrent() {
 		name: `${ctx.state.project?.title || "书稿"} · ${title}.md`,
 		url: api.exportUrl(ctx.state.project.id, draft.id, "md"),
 	});
+}
+
+/** 读稿台和稿纸是同一份稿：进屏之前先把这笔存上。 */
+async function openReaderNow(mode = "read") {
+	if (!ctx.state.project) return;
+	await ctx.flushSave().catch(() => {});
+	const mod = await import("./reader.js");
+	// 读稿时手上这章还空着，就别把空章传进去——让读稿台去找最近一章有字的。
+	const meta = ctx.state.activeId ? ctx.chapterMeta(ctx.state.activeId) : null;
+	const hasDraft = Boolean(meta?.hasDraft);
+	const chapterId = mode === "read" && !hasDraft ? "" : ctx.state.activeId;
+	void mod.openReader({ chapterId, mode });
 }
 
 /* ---------------------------------------------------------------- 写作 */

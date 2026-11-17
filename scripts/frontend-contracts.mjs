@@ -274,7 +274,7 @@ check("按 var() 取的令牌都有定义", () => {
 
 check("会变色的令牌暗色都覆盖了", () => {
 	// 尺度类令牌（字号/间距/圆角/栏宽/字体）与昼夜无关，不要求重复定义。
-	const scale = /^--(ui|song|mono|serif|kai|sans|fs-|sp-|r-|spine-w|rail-w|dock-w|top-h|nav-h|tap|paper-fs|paper-lh|measure|ease|fast|base|slow|lh-|i-|brush|cinnabar|rule|moss|elev|hover)/;
+	const scale = /^--(ui|song|mono|serif|kai|sans|fs-|sp-|r-|spine-w|rail-w|dock-w|top-h|nav-h|tap|paper-fs|paper-lh|reader-fs|reader-lh|measure|ease|fast|base|slow|lh-|i-|brush|cinnabar|rule|moss|elev|hover)/;
 	const names = (blocks) => new Set(blocks.flatMap((block) => [...block.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1])));
 	const light = names(lightBlocks);
 	const dark = names(darkBlocks);
@@ -347,6 +347,46 @@ check("断线后能接回同一条流", () => {
 	const api = modules.get("api.js");
 	expect(/\/api\/runs\/\$\{encodeURIComponent\(id\)\}\/stream/, api);
 	expect(/since/, api);
+});
+
+check("改编一章一章往下走", () => {
+	const adapt = modules.get("adapt.js");
+	expect(/adaptation\.cursor|cursorChapterId/, adapt, "顺序读 adaptation.cursor");
+	expect(/reportSequenceError|adaptSequenceError|一章一章往下走/, adapt, "顺序错误要翻译成人话");
+	expect(/saveAuthorVersion/, adapt, "作者手写的稿也要能存");
+	expect(/openReader/, adapt, "改编稿要能整屏读");
+	expect(/kind-title|章名/, adapt, "章名改动要进台账");
+});
+
+check("读稿台整屏读、整屏改、能对照", () => {
+	const reader = modules.get("reader.js");
+	expect(/openReader/, reader);
+	expect(/reader-input|markDirty/, reader, "整屏也能改正文，改的是同一份稿");
+	expect(/applyPolish|diffSegments|lcs|reader-mark/, reader, "对照原书要高亮改动");
+	expect(/ArrowRight/, reader, "整屏也要能翻章");
+	const css = allCss;
+	expect(/\.reader \{[^}]*position: fixed/, css, "读稿台铺满整屏");
+	expect(/body\.is-reading/, css, "读稿时锁住背后的滚动");
+	expect(/@media \(max-width: 620px\)[\s\S]*\.reader-bar \{[^}]*flex-wrap/, css, "手机上工具条要折行");
+});
+
+check("读稿台里能叫副驾，改编工程还能直接让改编者改", () => {
+	const reader = modules.get("reader.js");
+	const dock = modules.get("dock.js");
+	const readerHtml = html;
+	expect(/id="reader-agent-btn"/, readerHtml);
+	expect(/id="reader-agent"/, readerHtml);
+	expect(/data-agent="chat"/, readerHtml);
+	expect(/data-agent="adapt"/, readerHtml);
+	expect(/mountDock\(/, reader, "读稿台把副驾搬进来，不是另开一层");
+	expect(/unmountDock\(/, reader, "收起时还回原位");
+	expect(/runAdaptInReader/, reader);
+	expect(/adaptChapter/, reader, "改编者就在读稿台里动笔");
+	expect(/applyProposal/, reader, "看中了就地采用");
+	expect(/一章一章往下走|还没轮到/, reader, "顺序规矩要说人话");
+	expect(/export function mountDock/, dock);
+	expect(/export function unmountDock/, dock);
+	expect(/\.reader-agent \{[^}]*border-left/, allCss, "副驾占读稿台右侧一栏");
 });
 
 check("副驾能答模型提问", () => {

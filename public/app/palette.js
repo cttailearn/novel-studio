@@ -89,6 +89,20 @@ function build() {
 	}, "p");
 
 	if (ctx.state.project) {
+		go("全屏读这一章", "整屏读稿，手机上也能读长文", "book-open", async () => {
+			const mod = await import("./reader.js");
+			void mod.openReader({ chapterId: ctx.state.activeId, mode: "read" });
+		}, "v");
+		go("全屏改这一章", "整屏编辑，改完自动存", "edit", async () => {
+			const mod = await import("./reader.js");
+			void mod.openReader({ chapterId: ctx.state.activeId, mode: "edit" });
+		});
+		if (ctx.state.project.adaptation) {
+			go("对照原书读改编稿", "改过的句子垫底色", "eye", async () => {
+				const mod = await import("./reader.js");
+				void mod.openReader({ chapterId: ctx.state.activeId, mode: "read", compare: true });
+			});
+		}
 		go("存稿", "现在这一章", "save", async () => {
 			await ctx.flushSave(true);
 			toast("存下了。", "ok");

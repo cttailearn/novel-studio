@@ -191,6 +191,9 @@
 					<button id="nav-outline" class="spine-btn" type="button" data-nav="outline" title="大纲">
 						<svg class="ico"><use href="#i-list" /></svg>
 					</button>
+					<button id="nav-adapt" class="spine-btn" type="button" data-nav="adapt" title="改编台" hidden>
+						<svg class="ico"><use href="#i-branch" /></svg>
+					</button>
 					<button id="nav-library" class="spine-btn" type="button" data-nav="library" title="书库">
 						<svg class="ico"><use href="#i-book-open" /></svg>
 					</button>
@@ -458,11 +461,72 @@
 				<button class="mnav" type="button" data-nav="outline">
 					<svg class="ico"><use href="#i-list" /></svg><span>大纲</span>
 				</button>
+				<button class="mnav" type="button" data-nav="adapt" hidden>
+					<svg class="ico"><use href="#i-branch" /></svg><span>改编</span>
+				</button>
 				<button class="mnav" type="button" data-nav="dock">
 					<svg class="ico"><use href="#i-spark" /></svg><span>副驾</span>
 				</button>
 			</nav>
 		</div>
+
+		<!-- 读稿台：整屏铺开这一章。读长文、在路上改一句、改编稿对照原书都在这里。 -->
+		<section id="reader" class="reader" aria-label="读稿台" hidden>
+			<header class="reader-bar">
+				<button id="reader-close" class="btn btn-quiet btn-icon" type="button" title="回到纸面 (Esc)">
+					<svg class="ico"><use href="#i-arrow-left" /></svg>
+				</button>
+				<div class="reader-heading">
+					<p id="reader-eyebrow" class="eyebrow"></p>
+					<h1 id="reader-title" class="reader-title">无题</h1>
+				</div>
+				<div class="reader-tools">
+					<span id="reader-meta" class="reader-meta"></span>
+					<span id="reader-save" class="reader-save" aria-live="polite"></span>
+					<button id="reader-compare" class="btn btn-quiet btn-sm" type="button" title="对照原书 (c)" hidden>
+						<svg class="ico ico-sm"><use href="#i-eye" /></svg><span>对照</span>
+					</button>
+					<button id="reader-agent-btn" class="btn btn-ghost btn-sm" type="button" title="叫副驾过来，边读边改 (a)" aria-pressed="false">
+						<svg class="ico ico-sm"><use href="#i-spark" /></svg><span>副驾</span>
+					</button>
+					<button id="reader-mode" class="btn btn-ghost btn-sm" type="button" title="拿起笔改这一章 (e)">
+						<svg class="ico ico-sm"><use href="#i-edit" /></svg><span>改稿</span>
+					</button>
+					<div class="reader-font">
+						<button id="reader-font-down" class="btn btn-quiet btn-icon" type="button" title="字小一点">A−</button>
+						<button id="reader-font-up" class="btn btn-quiet btn-icon" type="button" title="字大一点">A+</button>
+					</div>
+				</div>
+			</header>
+			<div id="reader-scroll" class="reader-scroll">
+				<article id="reader-page" class="reader-page"></article>
+				<textarea id="reader-input" class="reader-input" spellcheck="false" hidden></textarea>
+			</div>
+			<aside id="reader-agent" class="reader-agent" hidden>
+				<header class="reader-agent-head">
+					<div class="reader-agent-tabs" role="tablist" aria-label="边读边改">
+						<button class="reader-agent-tab is-active" data-agent="chat" role="tab" aria-selected="true" type="button">副驾</button>
+						<button class="reader-agent-tab" data-agent="adapt" role="tab" aria-selected="false" type="button" hidden>改编者</button>
+					</div>
+					<button id="reader-agent-close" class="btn btn-quiet btn-icon" type="button" title="收起（a）">
+						<svg class="ico"><use href="#i-x" /></svg>
+					</button>
+				</header>
+				<div class="reader-agent-body">
+					<div id="reader-agent-chat" class="reader-agent-pane"></div>
+					<div id="reader-agent-adapt" class="reader-agent-pane" hidden></div>
+				</div>
+			</aside>
+			<footer class="reader-foot">
+				<button id="reader-prev" class="btn btn-ghost btn-sm" type="button">
+					<svg class="ico ico-sm"><use href="#i-chevron-left" /></svg><span>上一章</span>
+				</button>
+				<div class="reader-progress-track" aria-hidden="true"><div id="reader-progress" class="reader-progress"></div></div>
+				<button id="reader-next" class="btn btn-ghost btn-sm" type="button">
+					<span>下一章</span><svg class="ico ico-sm"><use href="#i-chevron-right" /></svg>
+				</button>
+			</footer>
+		</section>
 
 		<div id="toasts" class="toasts" role="status" aria-live="polite"></div>
 
