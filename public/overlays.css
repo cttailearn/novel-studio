@@ -1342,8 +1342,15 @@ dialog.settings[open] {
 	.stage {
 		padding-bottom: 0;
 	}
+	/* 案头是入口，不是工作台：底栏收起来，点进书里再出现。 */
+	.app[data-view="desk"] .mobile-nav {
+		display: none;
+	}
 	.view-desk.is-active {
 		padding-bottom: var(--nav-h);
+	}
+	.app[data-view="desk"] .view-desk.is-active {
+		padding-bottom: var(--sp-6);
 	}
 	.view-studio.is-active {
 		grid-template-columns: minmax(0, 1fr);
@@ -1421,7 +1428,6 @@ dialog.settings[open] {
 	}
 	.adapt-body {
 		grid-template-columns: minmax(0, 1fr);
-		grid-template-rows: minmax(0, 0.85fr) minmax(0, 1fr);
 	}
 	.adapt-col:first-child {
 		border-right: 0;

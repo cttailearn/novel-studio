@@ -699,11 +699,21 @@ function toggleAgent(force) {
 	if (!opened) return;
 	const next = typeof force === "boolean" ? force : !agentOpen;
 	if (next === agentOpen) return;
+	// 打开/收起时纸面高度会变，先把读到哪记住，别让正文被顶走。
+	const scroll = document.getElementById("reader-scroll");
+	const keep = scroll?.scrollTop ?? 0;
 	agentOpen = next;
 	root?.classList.toggle("agent-open", next);
 	if (agentEl) agentEl.hidden = !next;
 	agentToggle?.classList.toggle("is-on", next);
 	agentToggle?.setAttribute("aria-pressed", next ? "true" : "false");
+	if (scroll) {
+		const restore = () => {
+			scroll.scrollTop = Math.min(keep, Math.max(0, scroll.scrollHeight - scroll.clientHeight));
+		};
+		if (typeof requestAnimationFrame === "function") requestAnimationFrame(restore);
+		else restore();
+	}
 	if (!next) {
 		unmountDock();
 		return;

@@ -2926,6 +2926,13 @@ dialog.modal.is-polish {
 	font-variant-numeric: tabular-nums;
 }
 
+.adapt-rail-note {
+	display: none;
+	font-size: var(--fs-2xs);
+	color: var(--ink-3);
+	font-variant-numeric: tabular-nums;
+}
+
 .adapt-source {
 	font-size: var(--fs-2xs);
 	color: var(--ink-4);
@@ -3446,17 +3453,50 @@ dialog.modal.is-polish {
 
 @media (max-width: 920px) {
 	.adapt-bar {
-		padding: var(--sp-2) var(--sp-3);
-		gap: var(--sp-2);
+		padding: 6px var(--sp-3);
+		gap: 8px;
+		flex-wrap: nowrap;
 	}
 
 	.adapt-bar-title {
-		font-size: var(--fs-lg);
+		flex: 1;
+		min-width: 0;
+		align-items: center;
+		gap: 6px;
+	}
+
+	.adapt-bar-title h2 {
+		font-size: var(--fs-md);
+		max-width: 40vw;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.adapt-source,
+	.adapt-cursor {
+		display: none;
+	}
+
+	.adapt-rail-note {
+		display: inline;
+		margin-left: auto;
+		color: var(--ink-3);
+	}
+
+	.adapt-bar-actions {
+		flex: none;
+		margin-left: 0;
+		gap: 6px;
+	}
+
+	.adapt-bar-actions .btn {
+		padding-inline: 8px;
 	}
 
 	.adapt-body {
 		grid-template-columns: minmax(0, 1fr);
-		grid-template-rows: minmax(0, 0.85fr) minmax(0, 1fr);
+		grid-template-rows: auto minmax(0, 1fr);
 	}
 
 	.adapt-col {
@@ -3467,8 +3507,119 @@ dialog.modal.is-polish {
 		border-bottom: 1px solid var(--line-soft);
 	}
 
+	.adapt-col:first-child .adapt-col-head {
+		padding: 4px var(--sp-3);
+		border-bottom: 0;
+		background: transparent;
+	}
+
+	.adapt-col:first-child .adapt-col-head > span:first-child,
+	.adapt-col:first-child .adapt-count {
+		display: none;
+	}
+
+	/* 章目横过来：一行横滑的章条，把高度留给正文。 */
+	.adapt-col:first-child .adapt-scroll {
+		display: flex;
+		gap: 8px;
+		overflow-x: auto;
+		overflow-y: hidden;
+		padding: 0 var(--sp-3) 10px;
+		scroll-snap-type: x proximity;
+		-webkit-overflow-scrolling: touch;
+		scrollbar-width: none;
+	}
+
+	.adapt-col:first-child .adapt-scroll::-webkit-scrollbar {
+		display: none;
+	}
+
+	.adapt-col:first-child .adapt-ch {
+		flex: 0 0 auto;
+		width: auto;
+		min-width: 150px;
+		max-width: 70vw;
+		padding: 7px 10px;
+		border: 1px solid var(--line-soft);
+		border-left-width: 1px;
+		border-radius: var(--r-2);
+		background: var(--paper-hi);
+		scroll-snap-align: start;
+	}
+
+	.adapt-col:first-child .adapt-ch.is-active {
+		border-color: var(--seal-line);
+		border-left-color: var(--seal-line);
+		box-shadow: var(--shadow-1);
+	}
+
+	.adapt-ch-sub,
+	.adapt-ch-marks {
+		display: none;
+	}
+
 	#view-adapt.is-active {
 		bottom: calc(var(--nav-h) + env(safe-area-inset-bottom));
+	}
+}
+
+/* 手机上的改编台：工具只留图标，标题交给顶栏，正文与智能体各得其所。 */
+@media (max-width: 620px) {
+	.adapt-bar {
+		padding: 5px var(--sp-3);
+	}
+
+	/* 书名交回顶栏；这一行只留「轮到第几章」与动作。 */
+	.adapt-bar-title {
+		display: flex;
+		flex: 1;
+		min-width: 0;
+		gap: 0;
+	}
+
+	.adapt-bar-title h2,
+	.adapt-bar-title .tag,
+	.adapt-bar-title .adapt-source {
+		display: none;
+	}
+
+	.adapt-cursor {
+		display: inline;
+		min-width: 0;
+		font-size: var(--fs-2xs);
+		color: var(--ink-3);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.adapt-rail-note {
+		display: none;
+	}
+
+	.adapt-bar-actions .btn {
+		width: 32px;
+		min-width: 32px;
+		height: 32px;
+		padding: 0;
+	}
+
+	.adapt-bar-actions .btn .btn-label {
+		display: none;
+	}
+
+	.adapt-bar-actions .btn.is-primary {
+		width: auto;
+		padding: 0 9px;
+	}
+
+	.adapt-bar-actions .btn.is-primary .btn-label {
+		display: inline;
+		font-size: var(--fs-2xs);
+	}
+
+	.adapt-col:first-child .adapt-ch {
+		min-width: 132px;
 	}
 }
 
@@ -4222,7 +4373,7 @@ body.is-reading {
 	}
 
 	.reader.agent-open .reader-scroll {
-		padding-bottom: 8vh;
+		padding-bottom: calc(min(56vh, 520px) + 24px);
 	}
 
 	.reader-agent {
@@ -4233,9 +4384,10 @@ body.is-reading {
 		z-index: 2;
 		grid-column: 1 / -1;
 		grid-row: 2;
-		height: min(64vh, 540px);
+		height: min(56vh, 520px);
 		border-top: 1px solid var(--line-soft);
 		border-left: 0;
+		border-radius: var(--r-4) var(--r-4) 0 0;
 		background: var(--paper-hi);
 		box-shadow: var(--shadow-2);
 	}
@@ -4243,6 +4395,18 @@ body.is-reading {
 
 /* 手机上的副驾：把引导卡收一收，把地方让给正文与输入。 */
 @media (max-width: 620px) {
+	.reader.agent-open .reader-scroll {
+		padding-bottom: calc(min(46vh, 420px) + 24px);
+	}
+
+	.reader-agent {
+		height: min(46vh, 420px);
+	}
+
+	.reader-agent-head {
+		padding: var(--sp-2) var(--sp-3);
+	}
+
 	#dock.is-embedded .dock-intro {
 		margin: var(--sp-3) var(--sp-3) var(--sp-4);
 		padding: var(--sp-4) var(--sp-3);

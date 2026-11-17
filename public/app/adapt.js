@@ -172,7 +172,7 @@ function barNode() {
 				},
 			},
 			icon("book-open"),
-			"翻原书",
+			el("span", { class: "btn-label", text: "翻原书" }),
 		),
 	);
 	actions.append(
@@ -187,21 +187,21 @@ function barNode() {
 				},
 			},
 			icon("eye"),
-			"读全篇",
+			el("span", { class: "btn-label", text: "读全篇" }),
 		),
 	);
 	actions.append(
 		el(
 			"button",
 			{
-				class: "btn btn-ghost btn-sm",
+				class: "btn btn-ghost btn-sm is-primary",
 				type: "button",
 				on: {
 					click: () => void runSelected(),
 				},
 			},
 			icon("quill"),
-			"让改编者改这一章",
+			el("span", { class: "btn-label", text: "让改编者改这一章" }),
 		),
 	);
 	bar.append(title, actions);
@@ -226,6 +226,12 @@ function bodyNode() {
 			"div",
 			{ class: "adapt-col-head" },
 			el("span", { text: `章目 · ${chapters.length} 章` }),
+			el("span", {
+				class: "adapt-rail-note",
+				text: cursorChapterId()
+					? `轮到第 ${cursorIndex() + 1} 章 · 已改 ${chapters.filter((item) => ctx.chapterMeta(item.id)?.hasDraft).length}/${chapters.length}`
+					: `已改到底（${chapters.filter((item) => ctx.chapterMeta(item.id)?.hasDraft).length}/${chapters.length}）`,
+			}),
 			el("span", { class: "adapt-count", text: `${chapters.filter((item) => item.status === "drafted").length} 章改完` }),
 		),
 	);
@@ -242,6 +248,7 @@ function bodyNode() {
 			{
 				class: `adapt-ch${chapter.id === selected ? " is-active" : ""}${done ? " is-done" : ""}${current ? " is-current" : ""}${later ? " is-later" : ""}`,
 				type: "button",
+				title: `${chapter.title || `第 ${index + 1} 章`} · ${stateLabel}`,
 				on: {
 					click: () => {
 						selected = chapter.id;
