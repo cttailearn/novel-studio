@@ -766,6 +766,23 @@ export class ProjectStore implements ProjectStorePort {
 		}
 	}
 
+	/**
+	 * 永久删掉回收站里的那一份。
+	 *
+	 * 只认回收站：活动区里的作品一律走 remove()，不会因为传错一个 id
+	 * 把案头这本书当场抹掉。回收站里没有它时返回 false，不抛错。
+	 */
+	async purgeDeleted(id: string): Promise<boolean> {
+		// 内存里还活着就说明它没进回收站，此时什么都不做。
+		if (this.projects.has(id)) return false;
+		const trash = path.join(this.dir, TRASH_DIR, id);
+		const hasFile = await stat(path.join(trash, "project.json")).then(() => true, () => false);
+		const hasDir = hasFile || (await stat(trash).then(() => true, () => false));
+		if (!hasDir) return false;
+		await rm(trash, { recursive: true, force: true });
+		return true;
+	}
+
 	stats(project: Project): ProjectStats {
 		return projectStats(project);
 	}

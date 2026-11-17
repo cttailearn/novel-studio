@@ -228,6 +228,11 @@ class FakeProjectStore implements ProjectStorePort {
 		return project;
 	}
 
+	async purgeDeleted(id: string): Promise<boolean> {
+		if (this.projects.has(id)) return false;
+		return this.trash.delete(id);
+	}
+
 	stats(project: Project): ProjectStats {
 		return projectStats(project);
 	}

@@ -267,6 +267,40 @@
 	transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
 }
 
+/* 卡片右下角的删除：平时收着，鼠标进来或触屏上常显，点了先问一句。 */
+.pc-del {
+	flex: none;
+	width: 24px;
+	height: 24px;
+	display: grid;
+	place-items: center;
+	margin-left: auto;
+	border-radius: var(--r-1);
+	color: var(--ink-4);
+	opacity: 0;
+	transition: opacity var(--fast) var(--ease), background var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+
+.pc-del .ico {
+	width: 13px;
+	height: 13px;
+}
+
+.project-card:hover .pc-del,
+.pc-del:focus-visible {
+	opacity: 1;
+}
+
+.pc-del:hover {
+	background: var(--seal-wash);
+	color: var(--seal);
+}
+
+/* 已经有删除键贴右，进度那行就不再抢 margin-left。 */
+.pc-foot:has(.pc-del) .pc-go {
+	margin-left: 0;
+}
+
 .pc-go .ico {
 	width: 12px;
 	height: 12px;
@@ -2763,6 +2797,32 @@ dialog.modal.is-polish {
 	white-space: nowrap;
 }
 
+/* 废纸篓里两个动作：捡回来、彻底删掉。窄屏下折行，不挤书名。 */
+.trash-actions {
+	display: flex;
+	flex: none;
+	align-items: center;
+	gap: var(--sp-1);
+}
+
+.trash-actions .btn {
+	white-space: nowrap;
+}
+
+@media (max-width: 620px) {
+	.trash-row {
+		flex-wrap: wrap;
+	}
+
+	.trash-main {
+		flex-basis: 100%;
+	}
+
+	.trash-actions {
+		margin-left: auto;
+	}
+}
+
 /* —— 大纲账本细节 ———————————————————————————— */
 
 .ol-head-text {
@@ -3629,6 +3689,7 @@ dialog.modal.is-polish {
 @media (hover: none) {
 	.ch-more,
 	.pc-kebab,
+	.pc-del,
 	.ol-actions,
 	.ol-vol-tools {
 		opacity: 1;

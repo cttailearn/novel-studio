@@ -424,6 +424,22 @@ check("润色有去 AI 味的起手话", () => {
 	expect(/instruction\.value\s*=/, paper, "预设只填输入框，不直接开跑");
 });
 
+check("案头上的书能删，删了还能彻底删", () => {
+	const desk = modules.get("desk.js");
+	// 卡片上要有一个直接看得见的删除键：藏在 kebab 菜单里的删法，触屏上根本找不到。
+	expect(/pc-del/, desk, "卡片右下角要有删除键");
+	expect(/removeProject/, desk);
+	expect(/purgeProject/, desk, "废纸篓里要能彻底删掉");
+	expect(/api\.deleteProject/, desk, "先丢进废纸篓");
+	expect(/api\.purgeProject/, desk, "再从废纸篓里抹掉");
+	expect(/event\.stopPropagation\(\)/, desk, "删除键不能顺带把书打开");
+	// 彻底删要作者把书名打一遍，误触一次不该烧掉一本书。
+	expect(/typed/, desk, "打书名确认");
+	const apiSource = modules.get("api.js");
+	expect(/purgeProject/, apiSource);
+	expect(/trash\/\$\{encodeURIComponent\(pid\)\}`\)/, apiSource);
+});
+
 check("导出与搬家都有出口", () => {
 	const share = modules.get("share.js");
 	expect(/saveFileNatively/, share, "Tauri 契约要求保留这个名字");

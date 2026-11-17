@@ -179,6 +179,8 @@ export const patchProject = (pid, json) => http.patch(`/api/projects/${encodeURI
 export const deleteProject = (pid) => http.del(`/api/projects/${encodeURIComponent(pid)}`);
 export const listTrash = () => http.get("/api/projects/trash");
 export const restoreProject = (pid) => http.post(`/api/projects/trash/${encodeURIComponent(pid)}/restore`);
+/** 彻底删掉废纸篓里的那一部：正文、历史、快照一起没了，不能恢复。 */
+export const purgeProject = (pid) => http.del(`/api/projects/trash/${encodeURIComponent(pid)}`);
 
 export const addChapter = (pid, json) => http.post(`/api/projects/${encodeURIComponent(pid)}/chapters`, json);
 export const saveChapter = (pid, cid, json) =>

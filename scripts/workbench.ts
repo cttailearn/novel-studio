@@ -974,6 +974,29 @@ try {
 	check("恢复后能重新取到作品", (await req("GET", `/api/projects/${takeProjectId}`)).status === 200);
 	await req("DELETE", `/api/projects/${takeProjectId}`);
 
+	// ---- 彻底删除：只认回收站里的那一份，删完连记录都不留 ----
+	console.log("\n彻底删除");
+	const liveKeep = await req("GET", "/api/projects");
+	const liveId = liveKeep.data.projects[0]?.id;
+	const purgeLive = await req("DELETE", `/api/projects/trash/${liveId}`);
+	check("案头上的书不能被彻底删除", purgeLive.status === 409, JSON.stringify(purgeLive.data));
+	check("案头上的书还活着", (await req("GET", `/api/projects/${liveId}`)).status === 200);
+	const purgeGhost = await req("DELETE", "/api/projects/trash/never-there");
+	check("废纸篓里没有的报 404", purgeGhost.status === 404, String(purgeGhost.status));
+	const purgeOk = await req("DELETE", `/api/projects/trash/${takeProjectId}`);
+	check("彻底删除返回 200", purgeOk.status === 200, JSON.stringify(purgeOk.data));
+	const trashAfterPurge = await req("GET", "/api/projects/trash");
+	check(
+		"彻底删除后回收站里没有了",
+		trashAfterPurge.data.projects.every((entry: any) => entry.id !== takeProjectId),
+		JSON.stringify(trashAfterPurge.data.projects),
+	);
+	check("彻底删除后也取不到", (await req("GET", `/api/projects/${takeProjectId}`)).status === 404);
+	const restorePurged = await req("POST", `/api/projects/trash/${takeProjectId}/restore`);
+	check("彻底删除后恢复不了", restorePurged.status >= 400, String(restorePurged.status));
+	const purgeAgain = await req("DELETE", `/api/projects/trash/${takeProjectId}`);
+	check("重复彻底删除报 404", purgeAgain.status === 404, String(purgeAgain.status));
+
 	// ---- 删库条目：作品手里的副本不受影响 ----
 	const libRemoved = await req("DELETE", `/api/library/${libraryId}`);
 	check("删库条目返回 200", libRemoved.status === 200);

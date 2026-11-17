@@ -1867,6 +1867,29 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 		return json(sink, 200, { project, stats: store.stats(project) });
 	}
 
+	// 永久删除：只从回收站里抹，案头上的书要先删一次才可能命中这里。
+	const purgeMatch = pathname.match(/^\/api\/projects\/trash\/([\w-]+)$/);
+	if (purgeMatch && req.method === "DELETE") {
+		const id = purgeMatch[1]!;
+		const purged = await store.purgeDeleted(id);
+		if (!purged) {
+			// 两种可能：还在案头上（没删过），或回收站里本来就没有。分开说清。
+			const live = store.get(id);
+			return json(sink, live ? 409 : 404, {
+				error: live ? "这部还在案头上，先删进废纸篓再彻底删掉。" : "废纸篓里没有这一部。",
+			});
+		}
+		// 记录与这一部同生共死：正文都抹了，留一份记录只会让「续着说」接上一本不存在的书。
+		for (const record of recordStore.list({ projectId: id }, 1000)) {
+			await recordStore.remove(record.id);
+		}
+		// 会话是内存里的，进程重启就没；这里顺手收掉，免得同一进程里又能写回去。
+		for (const [sessionId, session] of sessions) {
+			if (session.projectId === id) sessions.delete(sessionId);
+		}
+		return json(sink, 200, { ok: true, purged: true });
+	}
+
 	const projectMatch = pathname.match(/^\/api\/projects\/([\w-]+)$/);
 	if (projectMatch) {
 		const projectId = projectMatch[1]!;

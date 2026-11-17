@@ -91,6 +91,8 @@ export interface ProjectStorePort {
 	listDeleted(): Promise<DeletedProject[]>;
 	/** 从回收站恢复整部作品。 */
 	restoreDeleted(id: string): Promise<Project>;
+	/** 永久删掉回收站里的那一份（正文、历史、快照一起）。回收站里没有它时返回 false。 */
+	purgeDeleted(id: string): Promise<boolean>;
 	/** 列出某部作品的快照，最新的在前。 */
 	listSnapshots(projectId: string): Promise<SnapshotInfo[]>;
 	/** 读回一份快照。文件损坏时返回 undefined 而不是抛错。 */

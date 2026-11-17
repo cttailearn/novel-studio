@@ -744,6 +744,23 @@ export class IdbProjectStore implements ProjectStorePort {
 		return project;
 	}
 
+	/**
+	 * 永久删掉回收站里的那一份。
+	 *
+	 * 只认回收站：活动区里的作品一律走 remove()，不会因为传错一个 id
+	 * 把案头这本书当场抹掉。回收站里没有它时返回 false，不抛错。
+	 */
+	async purgeDeleted(id: string): Promise<boolean> {
+		if (this.projects.has(id)) return false;
+		const db = await this.ensureOpen();
+		const row = await this.readOne<TrashRow>(db, "trash", id);
+		if (!row) return false;
+		await this.runTransaction(db, ["trash"], (tx) => {
+			tx.objectStore("trash").delete(id);
+		});
+		return true;
+	}
+
 	// ───────────────────────── 待重试
 
 	/**

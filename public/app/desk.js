@@ -156,6 +156,23 @@ function projectCard(project) {
 		"div",
 		{ class: "pc-foot" },
 		el("span", { class: "pc-when", text: words ? `上次动笔 ${timeAgo(project.updatedAt)}` : "还没落笔" }),
+		el(
+			"button",
+			{
+				class: "pc-del",
+				type: "button",
+				title: "把这本书删掉",
+				"aria-label": `删除《${project.title || "未命名"}》`,
+				on: {
+					click: (event) => {
+						// 卡片本身是「打开」，这颗按钮要自己吞掉冒泡。
+						event.stopPropagation();
+						void removeProject(project);
+					},
+				},
+			},
+			icon("trash"),
+		),
 		el("span", { class: "pc-go" }, words ? "继续" : "开写", icon("arrow-right")),
 	);
 	card.append(foot);
@@ -188,7 +205,7 @@ function openCardMenu(anchor, project) {
 	add("打开", "book-open", () => void open(project.id));
 	add("改书名与说明", "edit", () => void editProject(project));
 	add("导出这份书稿", "download", () => void exportProject(project));
-	add("删除", "trash", () => void removeProject(project), true);
+	add("丢进废纸篓", "trash", () => void removeProject(project), true);
 
 	const rect = anchor.getBoundingClientRect();
 	menu.style.top = `${rect.bottom + 6}px`;
@@ -254,7 +271,7 @@ async function editProject(project) {
 async function removeProject(project) {
 	const yes = await confirmAction({
 		title: "把这本书丢进废纸篓？",
-		message: `《${project.title}》会从案头挪开，正文与素材都还在，随时能捡回来。`,
+		message: `《${project.title}》会从案头挪开，正文与素材都还在，随时能捡回来。\n要彻底删掉，删完再到下面的废纸篓里点一次。`,
 		confirmLabel: "丢进去",
 		danger: true,
 	});
@@ -263,11 +280,71 @@ async function removeProject(project) {
 		await api.deleteProject(project.id);
 		if (ctx.state.project?.id === project.id) ctx.leaveProject();
 		await ctx.refreshProjects();
+		trashOpen = true;
 		await renderTrash();
-		toast("进废纸篓了。", "ok");
+		toast("进废纸篓了。要彻底删掉，在下面废纸篓里再点一次。", "ok");
 	} catch (error) {
 		toast(error.message || "丢不掉。", "error");
 	}
+}
+
+/** 彻底删掉：不可恢复，所以要把书名打一遍才放行。 */
+async function purgeProject(project) {
+	const input = el("input", { class: "set-input", type: "text", placeholder: project.title || "未命名", autocomplete: "off" });
+	const body = el(
+		"div",
+		{ class: "confirm-text" },
+		el("p", { text: `这会从磁盘上抹掉《${project.title}》的正文、历史版本与快照，捡不回来了。` }),
+		el("label", { class: "field" }, el("span", { class: "field-label", text: `打一遍书名「${project.title || "未命名"}」确认` }), input),
+	);
+	let typed = false;
+	const { close } = openModal({
+		eyebrow: "彻底删掉",
+		title: "这本书捡不回来了",
+		body,
+		actions: [
+			{ label: "算了", onClick: () => close() },
+			{
+				label: "彻底删掉",
+				kind: "seal",
+				onClick: async ({ close: shut }) => {
+					if (!typed) {
+						toast("书名还没打对。", "error");
+						input.focus();
+						return;
+					}
+					try {
+						await api.purgeProject(project.id);
+						if (ctx.state.project?.id === project.id) ctx.leaveProject();
+						shut();
+						await ctx.refreshProjects();
+						await renderTrash();
+						toast("彻底删了。", "ok");
+					} catch (error) {
+						toast(error.message || "删不掉。", "error");
+					}
+				},
+			},
+		],
+	});
+	input.addEventListener("input", () => {
+		typed = input.value.trim() === (project.title || "未命名");
+	});
+	input.addEventListener("keydown", (event) => {
+		if (event.key === "Enter" && typed) {
+			event.preventDefault();
+			void api
+				.purgeProject(project.id)
+				.then(async () => {
+					close();
+					await ctx.refreshProjects();
+					await renderTrash();
+					toast("彻底删了。", "ok");
+				})
+				.catch((error) => toast(error.message || "删不掉。", "error"));
+		}
+	});
+	input.focus();
 }
 
 async function exportProject(project) {
@@ -568,25 +645,40 @@ async function renderTrash() {
 				{ class: "trash-row" },
 				el("div", { class: "trash-main" }, el("span", { class: "trash-title", text: project.title || "未命名" }), el("span", { class: "trash-when", text: `丢于 ${timeAgo(project.deletedAt)}` })),
 				el(
-					"button",
-					{
-						class: "btn btn-ghost btn-sm",
-						type: "button",
-						on: {
-							click: async () => {
-								try {
-									await api.restoreProject(project.id);
-									await ctx.refreshProjects();
-									await renderTrash();
-									toast("捡回来了。", "ok");
-								} catch (error) {
-									toast(error.message || "捡不回来。", "error");
-								}
+					"div",
+					{ class: "trash-actions" },
+					el(
+						"button",
+						{
+							class: "btn btn-ghost btn-sm",
+							type: "button",
+							on: {
+								click: async () => {
+									try {
+										await api.restoreProject(project.id);
+										await ctx.refreshProjects();
+										await renderTrash();
+										toast("捡回来了。", "ok");
+									} catch (error) {
+										toast(error.message || "捡不回来。", "error");
+									}
+								},
 							},
 						},
-					},
-					icon("refresh"),
-					"捡回来",
+						icon("refresh"),
+						"捡回来",
+					),
+					el(
+						"button",
+						{
+							class: "btn btn-ghost btn-sm btn-danger",
+							type: "button",
+							title: "彻底删掉，捡不回来",
+							on: { click: () => void purgeProject(project) },
+						},
+						icon("trash"),
+						"彻底删掉",
+					),
 				),
 			),
 		);
