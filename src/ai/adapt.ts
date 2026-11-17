@@ -59,6 +59,14 @@ export interface AdaptProposalInput {
 	changes: AdaptProposalChangeInput[];
 }
 
+/** 模型要求改的章名。 */
+export interface AdaptRenameInput {
+	/** 新章名，只含题目本身。 */
+	title: string;
+	/** 为什么改，一句话。 */
+	reason?: string;
+}
+
 /** 服务端登记过的提案：带上基线版本，采用时据此判断"你看的是不是最新那版"。 */
 export interface AdaptProposal extends AdaptProposalInput {
 	id: string;
@@ -158,12 +166,19 @@ function chapterLabel(ctx: AdaptContext): string {
 	return "第 " + (ctx.index + 1) + " 章《" + ctx.chapter.title + "》";
 }
 
-/** 台账里的一行。章号按大纲现算，作者与模型看到的是同一个号。 */
+/**
+ * 台账里的一行。章号按大纲现算，作者与模型看到的是同一个号。
+ *
+ * detail 一并给出去：后面几章要接住前章的改动，"改了什么"之外还得知道
+ * "原文怎么写、现在怎么改" —— 只给 summary 的话，模型只能照着猜。
+ */
 function changeLine(project: Project, change: AdaptationChange): string {
 	const at = project.outline.findIndex((chapter) => chapter.id === change.chapterId);
 	const where = at >= 0 ? "第 " + (at + 1) + " 章" : "全书";
 	const label = ADAPTATION_CHANGE_LABELS[change.kind] ?? "其他";
-	return "- " + where + " · [" + label + "] " + change.summary;
+	const detail = (change.detail ?? "").replace(/\s+/g, " ").trim();
+	const tail = detail ? " —— " + (detail.length > 90 ? detail.slice(0, 90) + "…" : detail) : "";
+	return "- " + where + " · [" + label + "] " + change.summary + tail;
 }
 
 /** 供工具与提示词共用的台账文本。 */
@@ -245,16 +260,37 @@ ${clipped}
 5. **加料**：作者要加人物、加情节、加尺度时，加在原文的骨架上：
    新内容要能接住原段落前后的动作与情绪，不能突然另起一段与上下文无关的戏。
 6. **只改这一章**：不要替下一章交稿，也不要在正文里解释你改了什么。
-7. ${ADAPT_STYLE_RULES}
+7. **章名可以改**：改完这一章，若原来的题目不再贴切（换了主角、换了视角、加了新戏），
+   先调用 rename_chapter 换成贴题的短句，再交稿。只给题目本身，不要带「第 N 章」；
+   题目本来就叫得准，就别为了好看而换 —— 读者认的是原来那个名字。
+8. ${ADAPT_STYLE_RULES}
+
+# 前后章的联动
+
+这是一本一条线写下来的书：前面定下的东西，后面得接住。
+
+- 台账每条都带所在章号，以及"原文怎么写、现在怎么改"。**改到某一章时，前面各章动过的
+  名字、身份、关系、时间线、伏笔，在这一章必须跟着走**：前章把阿青改成青禾，
+  这一章的"阿青"就得改成"青禾"，不能一处新、一处旧。
+- 台账只有一句话。要看那一章实际怎么写的，用 read_adapted_chapter 读它的改编稿，
+  或用 read_original_chapter 拿原文对照；隔了两章以上的联动，动笔前先
+  search_adaptation_changes 按人名、地名、类别检索一遍。
+- 确认过的章不能回头改（改编是一章一章往下的）。真发现前章改得有问题，别在这一章
+  擅自"纠回来"：照台账写，并在 changes 里记一条 detail 写明"上一章某处与本章冲突，
+  建议作者回到那一章再改一版"。
+- 凡属"接住前章改动"的地方，在 changes 里记一条呼应（kind 与被呼应那条同类），
+  后面几章照着它继续走。
 
 # 输出与交付
 
 - 正文用中文，不用 Markdown 标题，不在正文前写"第 N 章"，不写改编说明。
+- 章名要换就先调 rename_chapter：它当场生效，作者在章目里立刻看到新题目；
+  换完再交稿，免得提案里说的名字与章目上印的对不上。
 - **改完必须调用 propose_adaptation**，一轮只交一版：
   - content：完整本章改编稿（不是片段、不是 diff）。
   - summary：2-4 句 —— 这一章现在讲了什么、留下了什么钩子。
   - changes：3-8 条结构化改动，一条只记一件事。kind 取 character（人物）、persona（人设）、
-    plot（剧情）、pov（人称）、addition（加料）、style（文风）、other（其他）；
+    plot（剧情）、pov（人称）、addition（加料）、style（文风）、title（章名）、other（其他）；
     summary 一句话说清"改了什么"（40 字内，后面章节靠它检索）；
     detail 说清"原文怎么写的、现在怎么改的"，可留空。
 - 交稿后用一两句话说清这版动了哪几处，**等作者采用或再改**，不要重复呈上同一稿。
@@ -262,9 +298,11 @@ ${clipped}
 ${currentBlock}${previousBlock}
 # 改动台账的用法
 
-写下一章之前，先看上面的台账。若需要查更早的改动，调用 search_adaptation_changes
-按关键词检索（例如人物名、地点、某个改动类别）。查不到的，就回原文
-（read_original_chapter）去找，不要凭印象补。`;
+写下一章之前，先看上面的台账：每条是「第 N 章 · [类别] 一句话 —— 原文怎么写、现在怎么改」。
+若需要查更早的改动，调用 search_adaptation_changes 按关键词检索（例如人物名、地点、
+某个改动类别）。查不到的，就回原文（read_original_chapter）去找，不要凭印象补。
+台账里若有「作者手改了本章正文」，说明那一版是作者亲手写的、没有提案：以它为准，
+要看细节就 read_adapted_chapter 读那一章。`;
 }
 
 // ─────────────────────────────────────────────────────────── 工具
@@ -285,6 +323,24 @@ export interface AdaptToolDeps {
 	context: AdaptContext;
 	/** 服务端登记提案；返回 false 表示这一轮已经交过一版。 */
 	onProposal: (input: AdaptProposalInput) => boolean;
+	/** 服务端落地章名；返回 false 表示没改成（章节不在了，或新名与旧名一样）。 */
+	onRename?: (input: AdaptRenameInput) => boolean;
+}
+
+/**
+ * 模型给的章名常常自带「第 3 章」，而章目与正文标题本来就按号排，
+ * 存成「第3章 · 第3章 雨夜换船」就重了。带分隔符才算编号前缀，其余原样留着：
+ * 「第二章的雨」是题目本身，摘掉「第二章」只剩「的雨」，那不是改名是毁名。
+ */
+export function cleanChapterTitle(raw: string): string {
+	const title = String(raw ?? "").replace(/\s+/g, " ").trim();
+	const marked = title.match(/^第[0-9０-９零〇一二三四五六七八九十百千两]+[章节回]([\s\S]*)$/);
+	if (!marked) return title.slice(0, 60);
+	const head = marked[1] ?? "";
+	const rest = head.replace(/^[\s·、:：.,，。\-—_]+/, "").trim();
+	// 只有真的摘掉了分隔符才认这是编号前缀；否则整串当题目。
+	if (rest && rest !== head) return rest.slice(0, 60);
+	return title.slice(0, 60);
 }
 
 function getProject(deps: AdaptToolDeps): Project {
@@ -386,6 +442,43 @@ export function createAdaptTools(deps: AdaptToolDeps): AgentTool<any>[] {
 		},
 	});
 
+	const renameChapter = defineTool({
+		name: "rename_chapter",
+		label: "改章名",
+		description:
+			"改当前这一章的章名：大纲与已成稿的标题一起换，正文一个字不动，作者立刻能在章目里看到。" +
+			"改完这一章发现原来的题目不再贴切时用；题目本来就叫得准时不必调用。",
+		parameters: Type.Object(
+			{
+				title: Type.String({ description: "新章名，只写题目本身，不要带「第 N 章」" }),
+				reason: Type.Optional(Type.String({ description: "为什么换名字，一句话" })),
+			},
+			{ description: "改章名" },
+		),
+		execute: async (_toolCallId: string, params: { title: string; reason?: string }) => {
+			const title = cleanChapterTitle(params.title);
+			if (!title) throw new Error("章名不能空着。");
+			const latest = getProject(deps);
+			const planned = latest.outline.find((chapter) => chapter.id === ctx.chapter.id);
+			if (!planned) throw new Error("这一章不在章目里，改不了名。");
+			const before = planned.title;
+			if (before === title) return result("这一章本来就叫《" + before + "》，没有改。", { chapterId: ctx.chapter.id, title });
+			if (!deps.onRename) throw new Error("这一轮不能改章名：作者没有开放这个动作。");
+			const applied = deps.onRename({ title, ...(params.reason?.trim() ? { reason: params.reason.trim() } : {}) });
+			if (!applied) {
+				return result("章名没改成（这一章可能已经被挪走或删掉了）；告诉作者一句，别反复重试。", {
+					chapterId: ctx.chapter.id,
+					title: before,
+				});
+			}
+			return result(
+				"已把" + chapterLabel({ ...ctx, chapter: { ...ctx.chapter, title: before } }) + "改名为《" + title + "》。" +
+					"正文没动；作者在章目里能看到新名字。",
+				{ chapterId: ctx.chapter.id, title, before },
+			);
+		},
+	});
+
 	const propose = defineTool({
 		name: "propose_adaptation",
 		label: "呈上改编稿",
@@ -445,7 +538,7 @@ export function createAdaptTools(deps: AdaptToolDeps): AgentTool<any>[] {
 		},
 	});
 
-	return [readOriginal, readAdapted, searchChanges, propose];
+	return [readOriginal, readAdapted, searchChanges, renameChapter, propose];
 }
 
 /** 服务端把模型交的改动转成台账条目（id 与时间由服务端补）。 */
