@@ -8,12 +8,19 @@
 import * as api from "./api.js";
 import * as ctx from "./ctx.js";
 import { $, $$, el, icon, toast, openModal, wordLabel, num, countWords, renderMarkdown, excerpt, debounce, sleep, pack } from "./core.js";
+import { createRunCard, chapterRefs } from "./run-card.js";
 
 let mounted = false;
 let textarea = null;
 let titleInput = null;
 let rendering = false;
 let writeAbort = null;
+/**
+ * 每章跑过的运行卡：翻走就收起来，翻回来还摆得回去。
+ * 一轮跑过之后，那些「它读了哪一段、取了哪条料」的记录本身就是这一章的底稿注脚，
+ * 翻一趟别章就丢干净，作者想问「上一轮它到底读了什么」就只能重跑一遍。
+ */
+const chapterCards = new Map();
 
 export function initPaper() {
 	if (mounted) return;
@@ -219,6 +226,23 @@ function renderPage() {
 		rendering = false;
 		fit();
 	}
+
+	// 卡属于它跑的那一章：翻走时收起来（节点留着），翻回来再摆回去。
+	// 正在跑的那张始终留在纸面上 —— 作者得看得见进度，也还得按得到「停下」。
+	for (const node of $$("#ms-page .run-card")) {
+		const owner = node.dataset.chapter || "";
+		if (owner === draft.id || node.classList.contains("is-running")) continue;
+		if (owner) {
+			if (!chapterCards.has(owner)) chapterCards.set(owner, []);
+			chapterCards.get(owner).push(node);
+		}
+		node.remove();
+	}
+	for (const node of chapterCards.get(draft.id) || []) {
+		// 作者自己按掉的那张不再挂回来。
+		if (!node.isConnected && node.dataset.dropped !== "1") $("#ms-page")?.append(node);
+	}
+	chapterCards.delete(draft.id);
 
 	const hasText = Boolean((draft.content || "").trim());
 	if (textarea) {
@@ -499,35 +523,30 @@ async function runWrite(mode, note = "") {
 	await ctx.flushSave().catch(() => {});
 	const pid = ctx.state.project.id;
 	const cid = ctx.state.draft.id;
+	const chapterTitle = ctx.outlineItem(cid)?.title || "这一章";
 	const requestId = `w_${cid}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 
-	const block = el("div", { class: "write-run" });
-	const head = el("div", { class: "write-head" });
-	const status = el("span", { class: "write-status", text: "执笔者正在起笔…" });
-	const stop = el("button", { class: "btn btn-quiet btn-sm", type: "button" }, icon("stop"), "停");
-	head.append(status, stop);
-	const body = el("div", { class: "write-body" });
-	const tools = el("div", { class: "write-tools" });
-	block.append(head, tools, body);
-	$("#ms-page").append(block);
-	requestAnimationFrame(() => block.classList.add("is-on"));
+	// 卡摆在纸尾：跑的时候看得见它读了什么，跑完折成一行，点开还是全过程；
+	// 展开那栏底下挂着这一章的正文与料，点「抄进」就进剪贴板，粘到交代或副驾里都行。
+	const host = $("#ms-page");
+	const card = createRunCard({
+		title: `执笔者 · ${chapterTitle}`,
+		useLabel: "抄走",
+		onClose: () => ctx.notify("draft"),
+	});
+	card.setRefs(chapterRefs({ chapterId: cid, draft: ctx.state.draft, materials: ctx.state.materials }));
+	card.el.dataset.chapter = cid;
+	host?.append(card.el);
+	requestAnimationFrame(() => card.el.scrollIntoView({ block: "nearest" }));
 
 	let acc = "";
 	let saved = false;
 	let savedRevision = 0;
 	writeAbort = new AbortController();
-	stop.addEventListener("click", () => {
-		writeAbort?.abort();
-		status.textContent = "停下了。";
-	});
-	ctx.beginRun({ kind: "write", label: `执笔者在写 · ${ctx.outlineItem(cid)?.title || "这一章"}`, abort: () => writeAbort?.abort() });
-
-	const cleanup = () => {
-		ctx.endRun();
-		writeAbort = null;
-		block.classList.remove("is-on");
-		setTimeout(() => block.remove(), 320);
-	};
+	const stop = () => writeAbort?.abort();
+	card.setStop(stop);
+	card.start({ model: ctx.aimModel() });
+	ctx.beginRun({ kind: "write", label: `执笔者在写 · ${chapterTitle}`, abort: stop });
 
 	try {
 		await api.writeChapter(
@@ -538,62 +557,57 @@ async function runWrite(mode, note = "") {
 				signal: writeAbort.signal,
 				onEvent(event) {
 					if (event.type === "run_start") {
-						status.textContent = `执笔者上手（${event.model}）`;
+						card.state.model = event.model || card.state.model;
 						return;
 					}
-					if (event.type === "thinking") {
-						status.textContent = "在琢磨…";
+					if (event.type === "thinking" && event.delta) {
+						card.thinking(event.delta);
 						return;
 					}
 					if (event.type === "text" && event.delta) {
-						status.textContent = "在写";
 						acc += event.delta;
-						body.replaceChildren(el("div", { class: "write-text" }, renderMarkdown(acc)));
-						body.scrollTop = body.scrollHeight;
+						card.text(event.delta);
 						return;
 					}
 					if (event.type === "tool_start" || event.type === "tool_call") {
-						const name = event.name || "";
-						const line = el("div", { class: "write-tool is-running" }, icon("spark"), `${toolLabel(name)}…`);
-						tools.append(line);
-						return;
-					}
-					if (event.type === "tool_end") {
-						const last = tools.lastElementChild;
-						if (last) {
-							last.classList.remove("is-running");
-							last.classList.toggle("is-error", Boolean(event.isError));
-							last.append(el("span", { class: "write-tool-time", text: `${Math.round((event.durationMs || 0) / 100) / 10}s` }));
-						}
+						card.step(event.name || "", event.args);
 						if (!event.isError && /chapter/.test(event.name || "")) saved = true;
 						return;
 					}
+					if (event.type === "tool_end") {
+						card.finishStep(event);
+						return;
+					}
 					if (event.type === "error") {
-						status.textContent = event.message || "出错了。";
-						block.classList.add("is-error");
+						card.state.error = event.message || "这一轮出错了。";
 						return;
 					}
 					if (event.type === "run_end") {
-						saved = event.saved !== false;
+						saved = event.saved !== false && saved;
 						savedRevision = event.savedRevision || 0;
-						status.textContent = event.aborted
-							? "停在这儿，已存下前文。"
-							: saved
-								? `落笔了 · 第 ${savedRevision || "?"} 稿`
-								: "这一轮没落进正文。";
 					}
 				},
 			},
 		);
 	} catch (error) {
-		if (error?.name === "AbortError") status.textContent = "停下了。";
+		if (error?.name === "AbortError") card.state.status = "aborted";
 		else {
-			status.textContent = error?.message || "没写成。";
-			block.classList.add("is-error");
+			card.state.status = "failed";
+			card.state.error = error?.message || "没写成。";
 			toast(error?.message || "这一轮没写成。", "error");
 		}
 	} finally {
-		cleanup();
+		ctx.endRun();
+		writeAbort = null;
+		const aborted = card.state.status === "aborted";
+		const failed = card.state.status === "failed";
+		card.finish({
+			aborted,
+			error: failed ? card.state.error : "",
+			saved: savedRevision ? `第 ${savedRevision} 稿` : "",
+		});
+		// 收笔之后把这一轮的字也留在卡里：万一服务端没落盘，作者还能照着抄回去。
+		if (acc) card.setText(acc);
 		if (saved || savedRevision) {
 			await ctx.loadDraft(cid, { silent: true });
 			await ctx.reloadProjectStructure().catch(() => {});
@@ -601,22 +615,6 @@ async function runWrite(mode, note = "") {
 			toast("正文更新了。", "ok");
 		}
 	}
-}
-
-function toolLabel(name) {
-	const map = {
-		read_chapter: "读这一章",
-		write_chapter: "写整章",
-		append_chapter: "续上一段",
-		revise_chapter: "改一段",
-		get_outline: "翻大纲",
-		list_materials: "看料",
-		upsert_material: "记一条料",
-		attach_materials: "挂料",
-		read_previous_chapter: "读上一章",
-		ask: "问你一句",
-	};
-	return map[name] || name || "动手";
 }
 
 /* ---------------------------------------------------------------- 润色 */
@@ -640,6 +638,23 @@ async function openPolish() {
 	const out = el("div", { class: "polish-out" }, el("p", { class: "set-note", text: "还没开始。" }));
 	const checks = el("div", { class: "polish-checks" });
 	const actions = el("div", { class: "modal-foot-actions" });
+	// 这一轮在干什么、取到了什么，都摆在这张卡里：跑的时候有动效，跑完点开还能回看。
+	// 「抄进」直接把字塞进「往哪儿改」那一栏 —— 交代常常就是指着原文说一句。
+	const card = createRunCard({
+		title: `润色 · ${selectedRangeLabel(sel)}`,
+		useLabel: "抄进交代",
+		showText: false,
+		onUse: (ref) => {
+			const glue = instruction.value.trim() ? " " : "";
+			instruction.value = `${instruction.value}${glue}${ref.text}`;
+			instruction.focus();
+			toast(`《${ref.label}》抄进交代了。`, "ok");
+		},
+	});
+	card.setRefs([
+		{ label: "选中的这一段", meta: `${sel.text.length} 字`, text: sel.text },
+		...chapterRefs({ chapterId: draft.id, draft, materials: ctx.state.materials }),
+	]);
 	// 预设只写进输入框，作者还能接着改 —— 它给的是起手话，不是命令。
 	const presets = el("div", { class: "chips" });
 	for (const [label, text] of [
@@ -665,6 +680,7 @@ async function openPolish() {
 			el("label", { class: "field" }, el("span", { class: "field-label", text: "别动的东西" }), keep),
 		),
 		presets,
+		card.el,
 		el("div", { class: "field field-wide" }, el("span", { class: "field-label", text: "原文" }), el("div", { class: "polish-src", text: excerpt(sel.text, 400) })),
 		el("div", { class: "field field-wide" }, el("span", { class: "field-label", text: "改后" }), out),
 		checks,
@@ -682,6 +698,7 @@ async function openPolish() {
 	let latest = null;
 	let revision = draft.revision || 0;
 	let busy = false;
+	let polishAbort = null;
 
 	const run = async () => {
 		if (busy) return;
@@ -691,7 +708,12 @@ async function openPolish() {
 		out.replaceChildren(el("p", { class: "sk-line", text: "正在改…" }));
 		checks.replaceChildren();
 		actions.replaceChildren(el("button", { class: "btn btn-ghost btn-sm", type: "button", text: "再改一遍", disabled: "" }));
-		ctx.beginRun({ kind: "polish", label: "在改这一段", abort: () => {} });
+		polishAbort = new AbortController();
+		card.setStop(() => polishAbort?.abort());
+		card.setText("");
+		card.start({ model: ctx.aimModel() });
+		card.step("polish_chapter", { start: sel.start, end: sel.end });
+		ctx.beginRun({ kind: "polish", label: "在改这一段", abort: () => polishAbort?.abort() });
 		try {
 			await api.polishChapter(
 				ctx.state.project.id,
@@ -705,23 +727,29 @@ async function openPolish() {
 					revision,
 				},
 				{
+					signal: polishAbort.signal,
 					onEvent(event) {
 						if (event.type === "text" && event.delta) {
 							acc += event.delta;
 							out.replaceChildren(el("div", { class: "polish-text" }, acc));
+							card.text(event.delta);
 							return;
 						}
 						if (event.type === "retry") {
-							out.append(el("p", { class: "set-note", text: `没过校验，再试一次（${event.reason || "不合规"}）` }));
+							const line = `没过校验，再试一次（${event.reason || "不合规"}）`;
+							out.append(el("p", { class: "set-note", text: line }));
+							card.note(line, "warn");
 							return;
 						}
 						if (event.type === "checks") {
 							renderChecks(checks, event.checks);
+							card.note(`校验 ${Array.isArray(event.checks) ? event.checks.length : 0} 条`);
 							return;
 						}
 						if (event.type === "done") {
 							latest = event;
 							renderChecks(checks, event.checks);
+							card.finishStep({ name: "polish_chapter", durationMs: 0, isError: event.hard });
 							actions.replaceChildren(
 								el("button", { class: "btn btn-ghost btn-sm", type: "button", text: "再改一遍", on: { click: () => void run() } }),
 								el("button", { class: "btn btn-ink btn-sm", type: "button", text: "采用这一段", on: { click: () => void apply() } }),
@@ -731,15 +759,27 @@ async function openPolish() {
 						}
 						if (event.type === "error") {
 							out.replaceChildren(el("p", { class: "set-note is-warn", text: event.message || "没改成。" }));
+							card.state.error = event.message || "没改成。";
 						}
 					},
 				},
 			);
 		} catch (error) {
-			out.replaceChildren(el("p", { class: "set-note is-warn", text: error?.message || "没改成。" }));
+			const aborted = error?.name === "AbortError";
+			out.replaceChildren(el("p", { class: "set-note is-warn", text: aborted ? "停下了。" : error?.message || "没改成。" }));
+			card.state.status = aborted ? "aborted" : "failed";
+			card.state.error = aborted ? "" : error?.message || "没改成。";
 		} finally {
 			busy = false;
+			polishAbort = null;
 			ctx.endRun();
+			card.finish({
+				aborted: card.state.status === "aborted",
+				error: card.state.status === "failed" ? card.state.error : "",
+				saved: latest ? "改好了" : "",
+			});
+			// 这一轮改出来的字也留在卡里：再改一遍之后，上一版不至于一句话都找不回。
+			if (acc) card.setText(acc);
 		}
 	};
 

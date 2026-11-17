@@ -2131,13 +2131,95 @@
 	gap: var(--sp-2);
 }
 
+/* 一屏三件：顶上一横条章目（手机上就是这个样子），
+   下面左「改动区」、右「改编正文」。章目不再独占一整列 —— 那一列除了把正文挤没，什么也没干。 */
 .adapt-body {
 	flex: 1;
 	min-height: 0;
 	display: grid;
-	grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+	grid-template-rows: auto minmax(0, 1fr);
 	gap: 0;
 }
+
+.adapt-strip {
+	flex: none;
+	min-height: 0;
+	display: grid;
+	gap: 0;
+	padding-bottom: 2px;
+	border-bottom: 1px solid var(--line-soft);
+	background: var(--paper-lo);
+}
+
+.adapt-strip-head {
+	display: flex;
+	align-items: center;
+	gap: var(--sp-2);
+	padding: 6px var(--sp-4) 0;
+	font-size: var(--fs-sm);
+	color: var(--ink-3);
+	flex-wrap: wrap;
+}
+
+.adapt-strip-label {
+	font-family: var(--song);
+	font-size: var(--fs-md);
+	color: var(--ink-2);
+}
+
+.adapt-strip-hint {
+	margin-left: auto;
+	font-size: var(--fs-2xs);
+	color: var(--ink-4);
+	letter-spacing: 0.04em;
+}
+
+.adapt-strip-list {
+	display: flex;
+	gap: 8px;
+	padding: 6px var(--sp-4) 8px;
+	overflow-x: auto;
+	overflow-y: hidden;
+	scroll-snap-type: x proximity;
+	scrollbar-width: none;
+	-webkit-overflow-scrolling: touch;
+}
+
+.adapt-strip-list::-webkit-scrollbar {
+	display: none;
+}
+
+.adapt-main {
+	min-height: 0;
+	display: grid;
+	grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.16fr);
+	gap: 0;
+}
+
+.adapt-col-title {
+	max-width: 62%;
+	font-family: var(--song);
+	font-size: var(--fs-md);
+	color: var(--ink-2);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.adapt-change-col .adapt-scroll,
+.adapt-paper-col .adapt-scroll {
+	padding: var(--sp-3) var(--sp-4) var(--sp-6);
+	display: flex;
+	flex-direction: column;
+	gap: var(--sp-2);
+}
+
+/* 列里的每一件都按自己的高度站住，别被拉伸也别被压扁。 */
+.adapt-change-col .adapt-scroll > *,
+.adapt-paper-col .adapt-scroll > * {
+	flex: 0 0 auto;
+}
+
 
 .adapt-col {
 	min-height: 0;
@@ -2328,95 +2410,7 @@
 }
 
 /* —— 执笔中的那一页 —————————————————————————— */
-
-.write-run {
-	margin: 0 0 var(--sp-4);
-	border: 1px solid var(--line);
-	border-left: 2px solid var(--seal);
-	border-radius: var(--r-2);
-	background: var(--paper-hi);
-	box-shadow: var(--shadow-1);
-	overflow: hidden;
-}
-
-.write-head {
-	display: flex;
-	align-items: center;
-	gap: var(--sp-2);
-	padding: var(--sp-2) var(--sp-3);
-	border-bottom: 1px solid var(--line-soft);
-	background: var(--wash-1);
-}
-
-.write-status {
-	flex: 1;
-	min-width: 0;
-	font-size: var(--fs-xs);
-	letter-spacing: 0.04em;
-	color: var(--ink-3);
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
-
-.write-status::before {
-	content: "";
-	display: inline-block;
-	width: 5px;
-	height: 5px;
-	margin-right: 7px;
-	border-radius: 50%;
-	background: var(--seal);
-	vertical-align: middle;
-	animation: pulse 1.6s var(--ease) infinite;
-}
-
-.write-tools {
-	display: flex;
-	flex-wrap: wrap;
-	gap: var(--sp-1) var(--sp-3);
-	padding: var(--sp-2) var(--sp-3);
-}
-
-.write-tool {
-	display: inline-flex;
-	align-items: center;
-	gap: 5px;
-	font-size: var(--fs-2xs);
-	letter-spacing: 0.04em;
-	color: var(--ink-4);
-}
-
-.write-tool.is-running {
-	color: var(--seal);
-}
-
-.write-tool.is-error {
-	color: var(--seal);
-}
-
-.write-tool-time {
-	color: var(--ink-4);
-	font-variant-numeric: tabular-nums;
-	opacity: 0.8;
-}
-
-.write-body {
-	padding: 0 var(--sp-4) var(--sp-3);
-	max-height: 42vh;
-	overflow: auto;
-}
-
-.write-text {
-	font-family: var(--song);
-	font-size: var(--fs-md);
-	line-height: 1.9;
-	color: var(--ink-2);
-}
-
-.write-text > *:first-child {
-	margin-top: 0;
-}
+/* 稿纸上的运行卡现在走 .run-card（见文件末尾），这一组旧样式已无人使用。 */
 
 /* —— 润色对话框 —————————————————————————————— */
 
@@ -2916,27 +2910,38 @@ dialog.modal.is-polish {
 
 .adapt-ch {
 	display: grid;
-	grid-template-columns: 26px 1fr auto;
+	grid-template-columns: 26px minmax(0, 1fr) auto;
 	align-items: center;
 	gap: var(--sp-2);
-	width: 100%;
-	padding: var(--sp-2) var(--sp-3);
-	border: 0;
-	border-left: 2px solid transparent;
-	background: none;
+	flex: 0 0 auto;
+	min-width: 156px;
+	max-width: 260px;
+	padding: 6px 10px;
+	border: 1px solid var(--line-soft);
+	border-radius: var(--r-2);
+	background: var(--paper-hi);
 	text-align: left;
 	cursor: pointer;
-	transition: background var(--fast) var(--ease);
+	scroll-snap-align: start;
+	transition:
+		background var(--fast) var(--ease),
+		border-color var(--fast) var(--ease),
+		box-shadow var(--fast) var(--ease);
 }
 
 .adapt-ch:hover {
-	background: var(--wash-1);
+	background: var(--paper);
+	border-color: var(--line);
 }
 
 .adapt-ch.is-active {
 	background: var(--paper-hi);
-	border-left-color: var(--seal);
+	border-color: var(--seal-line);
 	box-shadow: var(--shadow-1);
+}
+
+.adapt-ch.is-active .adapt-ch-ord {
+	color: var(--seal);
 }
 
 .adapt-ch-ord {
@@ -2964,6 +2969,7 @@ dialog.modal.is-polish {
 }
 
 .adapt-ch-sub {
+	display: none;
 	font-size: var(--fs-2xs);
 	color: var(--ink-4);
 	white-space: nowrap;
@@ -2978,6 +2984,7 @@ dialog.modal.is-polish {
 	color: var(--jade);
 	font-size: var(--fs-2xs);
 	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
 }
 
 .adapt-count {
@@ -3002,10 +3009,363 @@ dialog.modal.is-polish {
 }
 
 .adapt-brief-wrap {
+	border: 1px solid var(--line-soft);
+	border-radius: var(--r-2);
+	background: var(--paper-hi);
+	padding: 0;
+	overflow: hidden;
+}
+
+.adapt-brief-head {
+	display: flex;
+	align-items: center;
+	gap: var(--sp-2);
+	padding: 6px var(--sp-3);
+	cursor: pointer;
+	list-style: none;
+	color: var(--ink-3);
+	transition: background var(--fast) var(--ease);
+}
+
+.adapt-brief-head::-webkit-details-marker {
+	display: none;
+}
+
+.adapt-brief-head:hover {
+	background: var(--wash-1);
+}
+
+.adapt-brief-label {
+	flex: none;
+	font-size: var(--fs-sm);
+	color: var(--ink-2);
+}
+
+.adapt-brief-peek {
+	flex: 1;
+	min-width: 0;
+	font-size: var(--fs-2xs);
+	color: var(--ink-4);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.adapt-brief-wrap[open] .adapt-brief-head {
+	border-bottom: 1px solid var(--line-soft);
+}
+
+.adapt-brief-wrap .adapt-brief {
+	border: 0;
+	border-radius: 0;
+	background: transparent;
+	min-height: 72px;
+}
+
+/* —— 改动区：台账 ————————————————————————————————— */
+
+.adapt-ledger {
+	display: grid;
+	gap: var(--sp-3);
+}
+
+.adapt-ledger-group {
+	display: grid;
+	gap: 2px;
+}
+
+.adapt-ledger-group-head {
+	display: flex;
+	align-items: center;
+	gap: var(--sp-2);
+}
+
+.adapt-ledger-group-count {
+	font-size: var(--fs-2xs);
+	color: var(--ink-4);
+	font-variant-numeric: tabular-nums;
+}
+
+.adapt-ledger .changes-list {
+	margin: 0;
+}
+
+.change-stamp {
+	display: block;
+	margin-top: 2px;
+	font-size: var(--fs-2xs);
+	color: var(--ink-4);
+	font-variant-numeric: tabular-nums;
+}
+
+/* 刚换上的那一批条闪一下：改动区「变了」这件事得看得见。 */
+.change-row.is-fresh {
+	animation: adapt-fresh 2.4s var(--ease) 1;
+}
+
+@keyframes adapt-fresh {
+	0% {
+		background: var(--seal-wash);
+		border-color: var(--seal-line);
+	}
+	60% {
+		background: var(--seal-wash);
+		border-color: var(--seal-line);
+	}
+	100% {
+		background: var(--paper-hi);
+		border-color: var(--line-soft);
+	}
+}
+
+/* —— 改编者运行：一点一转、一行一行往下亮 ————————————— */
+
+.adapt-run {
+	display: grid;
+	gap: 0;
+	border: 1px solid var(--line-soft);
+	border-radius: var(--r-2);
+	background: var(--paper-hi);
+	overflow: hidden;
+}
+
+.adapt-run[hidden] {
+	display: none;
+}
+
+.adapt-run.is-running {
+	border-color: var(--seal-line);
+	background: var(--seal-wash);
+}
+
+.adapt-run.is-failed {
+	border-color: var(--amber-wash);
+}
+
+.adapt-run-head {
+	display: flex;
+	align-items: center;
+	gap: var(--sp-1);
+	padding-right: var(--sp-1);
+}
+
+.adapt-run-toggle {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	align-items: center;
+	gap: var(--sp-2);
+	padding: 7px var(--sp-3);
+	border: 0;
+	background: none;
+	text-align: left;
+	cursor: pointer;
+	color: var(--ink-2);
+	font-size: var(--fs-sm);
+}
+
+.adapt-run-toggle:hover {
+	background: var(--wash-1);
+}
+
+.adapt-run-dot {
+	flex: none;
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: var(--ink-4);
+}
+
+.adapt-run.is-running .adapt-run-dot {
+	background: var(--seal);
+	animation: adapt-run-pulse 1.1s var(--ease) infinite;
+}
+
+.adapt-run.is-done .adapt-run-dot {
+	background: var(--jade);
+}
+
+.adapt-run.is-failed .adapt-run-dot,
+.adapt-run.is-aborted .adapt-run-dot {
+	background: var(--amber);
+}
+
+@keyframes adapt-run-pulse {
+	0%,
+	100% {
+		opacity: 1;
+		transform: scale(1);
+	}
+	50% {
+		opacity: 0.35;
+		transform: scale(0.72);
+	}
+}
+
+.adapt-run-title {
+	flex: none;
+	font-family: var(--song);
+	font-size: var(--fs-sm);
+	color: var(--ink);
+	white-space: nowrap;
+}
+
+.adapt-run-meta {
+	flex: 1;
+	min-width: 0;
+	font-size: var(--fs-2xs);
+	color: var(--ink-4);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.adapt-run-arrow {
+	flex: none;
+	color: var(--ink-4);
+	transition: transform var(--fast) var(--ease);
+}
+
+.adapt-run.is-open .adapt-run-arrow {
+	transform: rotate(180deg);
+}
+
+.adapt-run-stop {
+	flex: none;
+}
+
+.adapt-run-body {
 	display: grid;
 	gap: var(--sp-2);
-	padding: 0 var(--sp-4) var(--sp-3);
-	border-bottom: 1px solid var(--line-soft);
+	padding: 0 var(--sp-3) var(--sp-3);
+	border-top: 1px solid var(--line-soft);
+	padding-top: var(--sp-2);
+	animation: adapt-run-in var(--base) var(--ease) 1;
+}
+
+@keyframes adapt-run-in {
+	from {
+		opacity: 0;
+		transform: translateY(-3px);
+	}
+	to {
+		opacity: 1;
+		transform: none;
+	}
+}
+
+.adapt-run-error {
+	margin: 0;
+	padding: var(--sp-2);
+	border-radius: var(--r-1);
+	background: var(--amber-wash);
+	font-size: var(--fs-2xs);
+	line-height: 1.7;
+	color: var(--ink-2);
+}
+
+.adapt-run-thinking {
+	margin: 0;
+	font-size: var(--fs-2xs);
+	line-height: 1.8;
+	color: var(--ink-3);
+	white-space: pre-wrap;
+}
+
+.adapt-run-steps {
+	display: grid;
+	gap: 3px;
+}
+
+.adapt-run-text {
+	font-family: var(--song);
+	font-size: var(--fs-md);
+	line-height: 1.9;
+	color: var(--ink-2);
+	max-height: 18rem;
+	overflow: auto;
+}
+
+.adapt-step {
+	display: flex;
+	align-items: baseline;
+	flex-wrap: wrap;
+	gap: 6px;
+	padding: 4px 6px;
+	border-radius: var(--r-1);
+	font-size: var(--fs-2xs);
+	line-height: 1.6;
+	color: var(--ink-2);
+}
+
+.adapt-step.is-running {
+	background: var(--seal-wash);
+}
+
+.adapt-step.is-error {
+	background: var(--amber-wash);
+}
+
+.adapt-step.is-ok {
+	background: var(--jade-wash);
+}
+
+.adapt-step-dot {
+	flex: none;
+	width: 5px;
+	height: 5px;
+	border-radius: 50%;
+	background: var(--ink-4);
+	align-self: center;
+}
+
+.adapt-step.is-running .adapt-step-dot {
+	background: var(--seal);
+	animation: adapt-run-pulse 1.1s var(--ease) infinite;
+}
+
+.adapt-step.is-done .adapt-step-dot {
+	background: var(--jade);
+}
+
+.adapt-step.is-error .adapt-step-dot {
+	background: var(--amber);
+}
+
+.adapt-step-label {
+	flex: none;
+	color: var(--ink-2);
+}
+
+.adapt-step-time {
+	flex: none;
+	color: var(--ink-4);
+	font-variant-numeric: tabular-nums;
+}
+
+.adapt-step-tool {
+	flex: 1;
+	min-width: 0;
+	font-family: var(--mono);
+	font-size: var(--fs-2xs);
+	color: var(--ink-4);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.adapt-step-preview {
+	flex: 1 0 100%;
+	margin: 0;
+	padding-left: 11px;
+	font-size: var(--fs-2xs);
+	line-height: 1.7;
+	color: var(--ink-4);
+	display: -webkit-box;
+	-webkit-line-clamp: 2;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
 }
 
 .adapt-paper-wrap {
@@ -3554,68 +3914,32 @@ dialog.modal.is-polish {
 		padding-inline: 8px;
 	}
 
-	.adapt-body {
+	/* 窄屏：章条照旧横滑，下面两栏改成上下——改动区在上，正文在下。 */
+	.adapt-main {
 		grid-template-columns: minmax(0, 1fr);
 		grid-template-rows: auto minmax(0, 1fr);
 	}
 
-	.adapt-col {
+	.adapt-change-col {
 		border-right: 0;
-	}
-
-	.adapt-col:first-child {
 		border-bottom: 1px solid var(--line-soft);
 	}
 
-	.adapt-col:first-child .adapt-col-head {
-		padding: 4px var(--sp-3);
-		border-bottom: 0;
-		background: transparent;
+	.adapt-change-col .adapt-scroll {
+		max-height: 38vh;
+		padding-bottom: var(--sp-4);
 	}
 
-	.adapt-col:first-child .adapt-col-head > span:first-child,
-	.adapt-col:first-child .adapt-count {
-		display: none;
+	.adapt-strip-head {
+		padding-inline: var(--sp-3);
 	}
 
-	/* 章目横过来：一行横滑的章条，把高度留给正文。 */
-	.adapt-col:first-child .adapt-scroll {
-		display: flex;
-		gap: 8px;
-		overflow-x: auto;
-		overflow-y: hidden;
-		padding: 0 var(--sp-3) 10px;
-		scroll-snap-type: x proximity;
-		-webkit-overflow-scrolling: touch;
-		scrollbar-width: none;
+	.adapt-strip-list {
+		padding: 6px var(--sp-3) 8px;
 	}
 
-	.adapt-col:first-child .adapt-scroll::-webkit-scrollbar {
-		display: none;
-	}
-
-	.adapt-col:first-child .adapt-ch {
-		flex: 0 0 auto;
-		width: auto;
-		min-width: 150px;
-		max-width: 70vw;
-		padding: 7px 10px;
-		border: 1px solid var(--line-soft);
-		border-left-width: 1px;
-		border-radius: var(--r-2);
-		background: var(--paper-hi);
-		scroll-snap-align: start;
-	}
-
-	.adapt-col:first-child .adapt-ch.is-active {
-		border-color: var(--seal-line);
-		border-left-color: var(--seal-line);
-		box-shadow: var(--shadow-1);
-	}
-
-	.adapt-ch-sub,
-	.adapt-ch-marks {
-		display: none;
+	.adapt-ch {
+		min-width: 138px;
 	}
 
 	#view-adapt.is-active {
@@ -3678,12 +4002,24 @@ dialog.modal.is-polish {
 		font-size: var(--fs-2xs);
 	}
 
-	.adapt-col:first-child .adapt-ch {
-		min-width: 132px;
+	.adapt-ch {
+		min-width: 128px;
+	}
+
+	.adapt-strip-hint {
+		display: none;
+	}
+
+	.adapt-col-head {
+		padding-inline: var(--sp-3);
+	}
+
+	.adapt-run-title {
+		max-width: 42%;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 }
-
-/* ---------- 手机与触屏的最后一遍校正 ---------- */
 
 /* 触屏没有 hover：行内菜单、卡片菜单、章节操作都该直接看得见。 */
 @media (hover: none) {
@@ -4488,5 +4824,429 @@ body.is-reading {
 
 	.reader-agent-head {
 		padding: var(--sp-2) var(--sp-3);
+	}
+}
+
+/* ---------- 运行卡（执笔者 / 设定官 / 润色共用） ---------- */
+
+.run-card {
+	display: grid;
+	/* grid 的隐式列按 max-content 算：长模型名与一屏摘录会把整张卡顶出容器，
+	   明写 minmax(0, 1fr) 才能让它按容器宽度收。 */
+	grid-template-columns: minmax(0, 1fr);
+	gap: 0;
+	border: 1px solid var(--line-soft);
+	border-radius: var(--r-2);
+	background: var(--paper-hi);
+	overflow: hidden;
+	min-width: 0;
+	max-width: 100%;
+}
+
+.run-card-head,
+.run-card-toggle {
+	min-width: 0;
+}
+
+.run-card.is-running {
+	border-color: var(--seal-line);
+	background: var(--seal-wash);
+}
+
+.run-card.is-failed {
+	border-color: var(--amber);
+}
+
+.run-card-head {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	padding: 0 var(--sp-1) 0 0;
+}
+
+.run-card-toggle {
+	display: flex;
+	align-items: center;
+	gap: var(--sp-2);
+	flex: 1;
+	min-width: 0;
+	padding: 7px var(--sp-3);
+	border: 0;
+	background: none;
+	text-align: left;
+	color: var(--ink-2);
+	cursor: pointer;
+}
+
+.run-card-toggle:hover {
+	color: var(--ink);
+}
+
+.run-card-dot {
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: var(--ink-4);
+	flex: none;
+}
+
+.run-card.is-running .run-card-dot {
+	background: var(--seal);
+	animation: run-card-pulse 1.1s var(--ease) infinite;
+}
+
+.run-card.is-done .run-card-dot {
+	background: var(--jade);
+}
+
+.run-card.is-aborted .run-card-dot,
+.run-card.is-failed .run-card-dot {
+	background: var(--amber);
+}
+
+@keyframes run-card-pulse {
+	0%,
+	100% {
+		opacity: 1;
+		transform: scale(1);
+	}
+	50% {
+		opacity: 0.35;
+		transform: scale(0.72);
+	}
+}
+
+.run-card-title {
+	flex: 0 1 auto;
+	min-width: 0;
+	font-size: var(--fs-sm);
+	letter-spacing: 0.02em;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.run-card-meta {
+	margin-left: auto;
+	flex: none;
+	font-family: var(--mono);
+	font-size: var(--fs-2xs);
+	color: var(--ink-4);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+/* 副驾那种窄栏里，模型名与步数挤在一行会把标题压成省略号：
+   让步数换到下一行（order 排在箭头之后，箭头仍留在第一行右端），标题优先。 */
+.dock-stream .run-card-toggle {
+	flex-wrap: wrap;
+}
+
+.dock-stream .run-card-meta {
+	order: 5;
+	flex: 1 0 100%;
+	margin-left: 0;
+	padding-left: 15px;
+}
+
+.run-card-arrow {
+	flex: none;
+	color: var(--ink-4);
+	transition: transform var(--fast) var(--ease);
+}
+
+.run-card.is-open .run-card-arrow {
+	transform: rotate(180deg);
+}
+
+.run-card-halt,
+.run-card-close {
+	flex: none;
+	padding: 0 var(--sp-1);
+	color: var(--ink-4);
+}
+
+.run-card.is-running .run-card-halt {
+	color: var(--seal);
+}
+
+.run-card-body {
+	display: flex;
+	flex-direction: column;
+	gap: var(--sp-2);
+	padding: var(--sp-2) var(--sp-3) var(--sp-3);
+	border-top: 1px solid var(--line-soft);
+	/* 一轮跑下来步骤与摘录能堆到上千像素：卡自己收着，别把纸面顶到看不见字。 */
+	max-height: min(62vh, 36rem);
+	overflow-y: auto;
+	animation: run-card-in var(--base) var(--ease) 1;
+}
+
+@keyframes run-card-in {
+	from {
+		opacity: 0;
+		transform: translateY(-3px);
+	}
+	to {
+		opacity: 1;
+		transform: none;
+	}
+}
+
+.run-error {
+	margin: 0;
+	padding: var(--sp-2) var(--sp-3);
+	border-radius: var(--r-1);
+	background: var(--amber-wash);
+	font-size: var(--fs-xs);
+	line-height: 1.75;
+	color: var(--ink-2);
+}
+
+.run-think {
+	padding: 0;
+	border-radius: var(--r-1);
+	background: var(--wash-1);
+}
+
+.run-think-head {
+	display: flex;
+	align-items: baseline;
+	gap: var(--sp-2);
+	padding: 4px var(--sp-2);
+	cursor: pointer;
+	list-style: none;
+}
+
+.run-think-head::-webkit-details-marker {
+	display: none;
+}
+
+.run-think-size {
+	font-family: var(--mono);
+	font-size: var(--fs-2xs);
+	color: var(--ink-4);
+	font-variant-numeric: tabular-nums;
+}
+
+.run-think[open] .run-think-head {
+	border-bottom: 1px solid var(--line-soft);
+}
+
+.run-think .run-thinking {
+	padding: var(--sp-2);
+	max-height: 16rem;
+	overflow: auto;
+}
+
+.run-thinking {
+	margin: 0;
+	font-size: var(--fs-xs);
+	line-height: 1.8;
+	color: var(--ink-4);
+	white-space: pre-wrap;
+}
+
+.run-steps {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+}
+
+.run-step {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0 6px;
+	padding: 3px var(--sp-2);
+	border-radius: var(--r-1);
+	font-size: var(--fs-xs);
+	line-height: 1.7;
+	color: var(--ink-3);
+}
+
+.run-step.is-running {
+	background: var(--seal-wash);
+	color: var(--ink-2);
+}
+
+.run-step.is-error {
+	background: var(--amber-wash);
+}
+
+.run-step-dot {
+	width: 5px;
+	height: 5px;
+	border-radius: 50%;
+	background: var(--ink-4);
+	flex: none;
+	align-self: center;
+}
+
+.run-step.is-running .run-step-dot {
+	background: var(--seal);
+	animation: run-card-pulse 1.1s var(--ease) infinite;
+}
+
+.run-step.is-done .run-step-dot {
+	background: var(--jade);
+}
+
+.run-step.is-error .run-step-dot {
+	background: var(--amber);
+}
+
+.run-step-label {
+	flex: none;
+	color: var(--ink-2);
+}
+
+.run-step.is-running .run-step-label {
+	color: var(--seal);
+}
+
+.run-step-time {
+	flex: none;
+	font-family: var(--mono);
+	font-size: var(--fs-2xs);
+	color: var(--ink-4);
+	font-variant-numeric: tabular-nums;
+}
+
+.run-step-tool {
+	flex: 1;
+	min-width: 0;
+	font-family: var(--mono);
+	font-size: var(--fs-2xs);
+	color: var(--ink-4);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* 读正文、取料这类结果就是作者要照着写交代的东西：整段摊开，别只给一行省略号。 */
+.run-step-preview {
+	flex: 1 0 100%;
+	margin: 0;
+	padding-left: 11px;
+	font-size: var(--fs-2xs);
+	line-height: 1.7;
+	color: var(--ink-4);
+	display: -webkit-box;
+	-webkit-line-clamp: 2;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+}
+
+.run-step.is-rich .run-step-preview {
+	-webkit-line-clamp: 8;
+	color: var(--ink-3);
+}
+
+.run-text {
+	max-height: 18rem;
+	overflow: auto;
+	font-family: var(--song);
+	font-size: var(--fs-md);
+	line-height: 1.9;
+	color: var(--ink-2);
+}
+
+.run-refs {
+	display: flex;
+	flex-direction: column;
+	gap: var(--sp-2);
+	padding-top: var(--sp-2);
+	border-top: 1px dashed var(--line-soft);
+}
+
+.run-refs-head {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: var(--sp-2);
+}
+
+.run-refs-hint {
+	font-size: var(--fs-2xs);
+	color: var(--ink-4);
+}
+
+.run-ref {
+	display: grid;
+	gap: 3px;
+	padding: var(--sp-2) var(--sp-3);
+	border-radius: var(--r-2);
+	background: var(--paper-lo);
+}
+
+.run-ref-head {
+	display: flex;
+	align-items: baseline;
+	gap: var(--sp-2);
+}
+
+.run-ref-label {
+	flex: 0 1 auto;
+	min-width: 0;
+	font-size: var(--fs-xs);
+	color: var(--ink-2);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.run-ref-meta {
+	flex: none;
+	font-family: var(--mono);
+	font-size: var(--fs-2xs);
+	color: var(--ink-4);
+}
+
+.run-ref-use {
+	margin-left: auto;
+	flex: none;
+	height: 22px;
+	padding: 0 var(--sp-2);
+	font-size: var(--fs-2xs);
+	color: var(--ink-3);
+}
+
+.run-ref-text {
+	margin: 0;
+	font-family: var(--song);
+	font-size: var(--fs-xs);
+	line-height: 1.75;
+	color: var(--ink-3);
+	display: -webkit-box;
+	-webkit-line-clamp: 3;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+	white-space: pre-wrap;
+}
+
+@media (max-width: 920px) {
+	.run-card-title {
+		flex: 1 1 auto;
+	}
+
+	.run-card-meta {
+		flex: 0 1 auto;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.run-step-tool {
+		display: none;
+	}
+}
+
+@media (max-width: 620px) {
+	.run-card-title {
+		max-width: 44%;
+	}
+
+	.run-ref-text {
+		-webkit-line-clamp: 2;
 	}
 }

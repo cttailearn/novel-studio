@@ -424,6 +424,27 @@ check("润色有去 AI 味的起手话", () => {
 	expect(/instruction\.value\s*=/, paper, "预设只填输入框，不直接开跑");
 });
 
+// 三处智能体调用共用同一张运行卡：跑着有动效、跑完点开仍能看到读过什么。
+// 各屏各写一套的话，改一处就会漏一处 —— 上一版就是这样退化成静默流式的。
+check("执笔者、设定官、润色的运行卡是同一张", () => {
+	const card = modules.get("run-card.js");
+	assert.ok(card, "要有一个共用的 run-card.js");
+	expect(/export function createRunCard/, card);
+	expect(/export function chapterRefs/, card, "卡里要能摊出这一章的正文与料");
+	expect(/run-ref-use/, card, "正文与料要能一键抄进输入框");
+	expect(/run-card-dot/, card);
+	expect(/run-card-toggle/, card, "跑完折起来还得点得开");
+	for (const name of ["paper.js", "dock.js"]) {
+		const source = modules.get(name);
+		expect(/createRunCard/, source, `${name} 要走共用的运行卡`);
+	}
+	const paper = modules.get("paper.js");
+	// 执笔与润色都在 paper.js 里，各接一次。
+	assert.ok(paper.match(/createRunCard\(/g).length >= 2, "稿纸与润色弹窗都要挂卡");
+	const dock = modules.get("dock.js");
+	expect(/chapterRefs/, dock, "副驾的运行卡也要摊出正文与料");
+});
+
 check("案头上的书能删，删了还能彻底删", () => {
 	const desk = modules.get("desk.js");
 	// 卡片上要有一个直接看得见的删除键：藏在 kebab 菜单里的删法，触屏上根本找不到。

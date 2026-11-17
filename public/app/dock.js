@@ -8,6 +8,7 @@
 import * as api from "./api.js";
 import * as ctx from "./ctx.js";
 import { $, $$, el, icon, toast, renderMarkdown, excerpt, num, wordLabel } from "./core.js";
+import { createRunCard, chapterRefs } from "./run-card.js";
 
 let mounted = false;
 let streamEl = null;
@@ -311,6 +312,10 @@ function blockNode(block) {
 		block.node = row;
 		return row;
 	}
+	if (block.kind === "run") {
+		// 运行卡自己会重画，这里只把它摆回去：重排对话时不重建，计时与展开状态都还在。
+		return block.node || null;
+	}
 	if (block.kind === "ask") {
 		return askCard(block);
 	}
@@ -451,7 +456,34 @@ async function send(text) {
 
 	busy = true;
 	abortCtl = new AbortController();
-	ctx.beginRun({ kind: "session", label: `${ROLE_LABEL[mode]}在想`, abort: () => abortCtl?.abort() });
+	const roleName = ROLE_LABEL[mode];
+	// 这一轮的「它正在干什么」：摆在回复最上面，跑着有动效，跑完折起来还能点开看
+	// 读了哪一段正文、取了哪几条料；手里那段稿与料也能直接抄进输入框。
+	const card = createRunCard({
+		title: `${roleName}在想`,
+		useLabel: "抄进输入框",
+		showText: false,
+		onUse: (ref) => {
+			const box = inputEl;
+			if (!box) return;
+			const glue = box.value.trim() ? "\n\n" : "";
+			box.value = `${box.value}${glue}${ref.text}`;
+			autosize();
+			renderSendState();
+			box.focus();
+			toast(`《${ref.label}》抄进输入框了，接着说你要怎么改。`, "ok");
+		},
+		onGrow: () => scrollToEnd(),
+	});
+	card.setRefs(chapterRefs({ chapterId: ctx.state.activeId || "", draft: ctx.state.draft, materials: ctx.state.materials }));
+	card.setStop(() => abortCtl?.abort());
+	card.start({ model: ctx.state.prefs.dockModel || ctx.aimModel() });
+	const cardBlock = { kind: "run", node: card.el };
+	reply.blocks.push(cardBlock);
+	if (streamEl) streamEl.append(card.el);
+	scrollToEnd(true);
+
+	ctx.beginRun({ kind: "session", label: `${roleName}在想`, abort: () => abortCtl?.abort() });
 	let textBlock = null;
 	let thinkingBlock = null;
 	let lastEvent = null;
@@ -473,7 +505,8 @@ async function send(text) {
 					return;
 				}
 				if (event.type === "run_start") {
-					note(`开工（${event.model || "模型"}）`);
+					card.state.model = event.model || card.state.model;
+					card.start({ model: event.model });
 					return;
 				}
 				if (event.type === "thinking_start") {
@@ -482,6 +515,7 @@ async function send(text) {
 					return;
 				}
 				if (event.type === "thinking" && event.delta) {
+					card.thinking(event.delta);
 					if (!thinkingBlock) {
 						thinkingBlock = { kind: "thinking", text: "" };
 						reply.blocks.push(thinkingBlock);
@@ -507,24 +541,13 @@ async function send(text) {
 					return;
 				}
 				if (event.type === "tool_start" || event.type === "tool_call") {
-					const block = { kind: "tool", name: event.name, running: true };
-					reply.blocks.push(block);
-					if (streamEl) streamEl.append(blockNode(block));
+					// 工具留在运行卡里：对话正文只留说的话，翻看时一眼能分清「说了什么」与「做了什么」。
+					card.step(event.name || "", event.args);
 					scrollToEnd();
 					return;
 				}
 				if (event.type === "tool_end") {
-					const block = [...reply.blocks].reverse().find((item) => item.kind === "tool" && item.running);
-					if (block) {
-						block.running = false;
-						block.durationMs = event.durationMs;
-						block.preview = event.preview;
-						block.node?.classList.toggle("is-error", Boolean(event.isError));
-						if (block.node) {
-							if (block.durationMs) block.node.append(el("span", { class: "tool-time", text: `${Math.round(block.durationMs / 100) / 10}s` }));
-							if (block.preview) block.node.append(el("span", { class: "tool-preview", text: excerpt(block.preview, 60) }));
-						}
-					}
+					card.finishStep(event);
 					return;
 				}
 				if (event.type === "ask") {
@@ -562,16 +585,29 @@ async function send(text) {
 			},
 		});
 	} catch (error) {
-		if (error?.name === "AbortError") note("停下了。");
-		else if (error?.status === 404) {
+		if (error?.name === "AbortError") {
+			card.state.status = "aborted";
+			note("停下了。");
+		} else if (error?.status === 404) {
+			card.state.status = "failed";
+			card.state.error = "这一席过期了。";
 			note("这一席过期了，下一句会自动接着上次的记录开一席新的。", "warn");
 			pendingRecordId = ctx.state.session?.recordId || "";
 			ctx.state.session = null;
-		} else note(error?.message || "没连上。", "warn");
+		} else {
+			card.state.status = "failed";
+			card.state.error = error?.message || "没连上。";
+			note(error?.message || "没连上。", "warn");
+		}
 	} finally {
 		busy = false;
 		abortCtl = null;
 		ctx.endRun();
+		card.finish({
+			aborted: card.state.status === "aborted",
+			error: card.state.status === "failed" ? card.state.error : "",
+			saved: lastEvent?.type === "run_end" && lastEvent.saved ? `第 ${lastEvent.savedRevision || "?"} 稿` : "",
+		});
 		renderSendState();
 		if (sessionRole() === "writing" && lastEvent?.type === "run_end" && lastEvent.saved && ctx.state.activeId) {
 			await ctx.loadDraft(ctx.state.activeId, { silent: true });
