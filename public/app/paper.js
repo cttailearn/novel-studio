@@ -221,6 +221,9 @@ function renderPage() {
 	}
 
 	const hasText = Boolean((draft.content || "").trim());
+	if (textarea) {
+		textarea.placeholder = hasText ? "" : "从这里落下第一句。";
+	}
 	if (placeholder) {
 		placeholder.hidden = hasText;
 		placeholder.replaceChildren(

@@ -100,10 +100,14 @@ function renderHead() {
 	if (target > 0) ratio = Math.min(1, total / target);
 	else ratio = chapters > 0 ? drafted / chapters : 0;
 	if (value) {
+		const visual = ratio > 0 ? Math.max(ratio, 0.02) : 0;
 		value.setAttribute("stroke-dasharray", String(RING));
-		value.setAttribute("stroke-dashoffset", String(RING * (1 - ratio)));
+		value.setAttribute("stroke-dashoffset", String(RING * (1 - visual)));
 	}
-	if (pctNode) pctNode.textContent = `${Math.round(ratio * 100)}%`;
+	if (pctNode) {
+		const shown = ratio > 0 && ratio < 0.01 ? (Math.round(ratio * 1000) / 10).toFixed(1) : String(Math.round(ratio * 100));
+		pctNode.textContent = `${shown}%`;
+	}
 	const wrap = $("#ring-wrap");
 	if (wrap) wrap.title = target > 0 ? `目标 ${wordLabel(target)}，已写 ${wordLabel(total)}` : "按成稿章数算";
 }
