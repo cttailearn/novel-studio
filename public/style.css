@@ -997,6 +997,13 @@ body.is-ready .spine {
 	}
 }
 
+/* ---------- 工具类 ---------- */
+
+/* 账号门（auth-gate.js）靠 .hidden 切换面板：表单自身有 display 时 [hidden] 属性不管用。 */
+.hidden {
+	display: none !important;
+}
+
 /* ---------- 滚动容器通用 ---------- */
 
 .scroller {
