@@ -1370,13 +1370,44 @@ dialog.settings[open] {
 		top: auto;
 		left: 0;
 		right: 0;
-		bottom: 0;
+		bottom: calc(var(--nav-h) + env(safe-area-inset-bottom));
 		width: auto;
-		height: min(78vh, 640px);
+		height: auto;
+		max-height: min(64vh, 600px);
+		padding-top: var(--sp-2);
 		border-left: 0;
 		border-top: 1px solid var(--line);
 		border-radius: var(--r-4) var(--r-4) 0 0;
-		transform: translateY(102%);
+		box-shadow: var(--shadow-2);
+		/* 收起来要真的收干净：光挪自身高度还不够，底栏那 62px 会露一条边。 */
+		transform: translateY(calc(100% + 140px));
+	}
+	/* 窄屏默认只露一条：先说这一章，再把话摊开。 */
+	.dock .dock-stream {
+		display: none;
+	}
+	.dock.is-expanded {
+		height: min(64vh, 600px);
+	}
+	.dock.is-expanded .dock-stream {
+		display: flex;
+	}
+	.dock::before {
+		content: "";
+		position: absolute;
+		top: 5px;
+		left: 50%;
+		width: 34px;
+		height: 4px;
+		margin-left: -17px;
+		border-radius: 999px;
+		background: var(--line-strong);
+	}
+	#btn-dock-expand .ico {
+		transition: transform var(--fast) var(--ease);
+	}
+	#dock.is-expanded #btn-dock-expand .ico {
+		transform: rotate(180deg);
 	}
 	.dock.is-open {
 		transform: none;
@@ -2144,6 +2175,15 @@ dialog.settings {
 }
 
 @media (max-width: 620px) {
+	/* 手机上的副驾：收起时只留样板与输入框，要聊再拉满半屏。 */
+	.dock {
+		max-height: min(46vh, 420px);
+	}
+
+	.dock.is-expanded {
+		height: min(52vh, 480px);
+	}
+
 	/* 手机上抽屉就是一整屏，别留一条缝让底下的字透出来。 */
 	#drawer {
 		width: 100%;

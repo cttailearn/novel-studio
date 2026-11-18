@@ -230,6 +230,12 @@ function bindTopbar() {
 
 function bindSpine() {
 	const goes = async (nav) => {
+		// 窄屏上副驾是一张抽屉：换房间之前先把它收回去，别让它压在新页上。
+		const drawerWide = window.matchMedia("(max-width: 1160px)").matches;
+		const dockOpen = $("#app")?.classList.contains("dock-open");
+		if (drawerWide && dockOpen && nav !== "dock") {
+			void import("./app/dock.js").then((mod) => mod.closeDock());
+		}
 		if (nav === "desk") {
 			await ctx.flushSave();
 			ctx.setView("desk");
@@ -259,7 +265,11 @@ function bindSpine() {
 		}
 		ctx.setView("studio");
 		if (nav === "dock") {
-			// 窄屏是带遮罩的抽屉、宽屏是让出一列，交给副驾自己处理。
+			// 窄屏是带遮罩的抽屉、宽屏是让出一列，交给副驾自己处理；再点一下就收。
+			if (drawerWide && dockOpen) {
+				void import("./app/dock.js").then((mod) => mod.closeDock());
+				return;
+			}
 			void import("./app/dock.js").then((mod) => mod.openDock());
 			return;
 		}

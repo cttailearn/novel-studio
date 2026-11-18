@@ -30,6 +30,13 @@ let signature = "";
 let run = null;
 /** 刚换过台账的那一版：只用来闪一下，下一次重画就熄。 */
 let freshLedger = false;
+/**
+ * 手机上「改动区」默认折起来 —— 窄屏第一眼该看见的是正文，不是台账。
+ * null = 还没动过手，跟着屏宽走；true / false = 作者自己开合过。
+ */
+let changesOpen = null;
+
+const narrowAdapt = () => window.matchMedia("(max-width: 920px)").matches;
 
 const CHANGE_LABELS = {
 	character: "人物",
@@ -280,6 +287,8 @@ function stripNode(chapters) {
 							proposal = null;
 							proposalFor = "";
 							draftText = "";
+							// 换一章就重新按默认来：手机上先看正文。
+							changesOpen = null;
 							if (run?.status !== "running") run = null;
 							void render({ force: true });
 							scrollStripTo();
@@ -318,15 +327,40 @@ function scrollStripTo() {
 }
 
 function mainNode() {
-	const changeCol = el("section", { class: "adapt-col adapt-change-col" });
-	changeCol.append(
-		el(
-			"div",
-			{ class: "adapt-col-head" },
-			el("span", { class: "adapt-col-title", text: "改动区" }),
-			el("span", { class: "adapt-count", id: "adapt-ledger-count", text: ledgerCountLabel() }),
-		),
+	const narrow = narrowAdapt();
+	// 宽屏两栏并排，改动区就该一直摊着；窄屏默认收起来，把高度让给正文。
+	const open = narrow ? run?.status === "running" || changesOpen === true : true;
+	const changeCol = el("section", { class: `adapt-col adapt-change-col${open ? "" : " is-collapsed"}` });
+	const toggle = el(
+		"button",
+		{
+			class: "adapt-col-toggle only-narrow",
+			type: "button",
+			"aria-expanded": open ? "true" : "false",
+			title: open ? "收起改动区" : "展开改动区",
+		},
+		icon("chevron-down", "ico ico-sm"),
+		el("span", { class: "adapt-col-toggle-text", text: open ? "收起" : "展开" }),
 	);
+	const changeHead = el(
+		"div",
+		{ class: "adapt-col-head adapt-change-head" },
+		el("span", { class: "adapt-col-title", text: "改动区" }),
+		el("span", { class: "adapt-count", id: "adapt-ledger-count", text: ledgerCountLabel() }),
+		toggle,
+	);
+	// 整行都能点：手机上一个小小的箭头不好按。
+	changeHead.addEventListener("click", () => {
+		if (!narrowAdapt()) return;
+		const next = changeCol.classList.contains("is-collapsed");
+		changesOpen = next;
+		changeCol.classList.toggle("is-collapsed", !next);
+		toggle.setAttribute("aria-expanded", next ? "true" : "false");
+		toggle.title = next ? "收起改动区" : "展开改动区";
+		const label = toggle.querySelector(".adapt-col-toggle-text");
+		if (label) label.textContent = next ? "收起" : "展开";
+	});
+	changeCol.append(changeHead);
 	const changeScroll = el("div", { class: "adapt-scroll", id: "adapt-change-scroll" });
 	changeScroll.append(briefNode(), runNode(), ledgerNode(freshLedger));
 	changeCol.append(changeScroll);

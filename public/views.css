@@ -2993,6 +2993,33 @@ dialog.modal.is-polish {
 	font-variant-numeric: tabular-nums;
 }
 
+/* 窄屏上改动区自己开合；宽屏两栏并排，用不着这个开关。 */
+.adapt-col-toggle {
+	align-items: center;
+	gap: 3px;
+	padding: 2px 4px;
+	border: 0;
+	border-radius: var(--r-1);
+	background: none;
+	color: var(--ink-3);
+	font: inherit;
+	font-size: var(--fs-2xs);
+	cursor: pointer;
+	white-space: nowrap;
+}
+
+.adapt-col-toggle .ico {
+	transition: transform var(--fast) var(--ease);
+}
+
+.adapt-change-head .adapt-count {
+	margin-left: auto;
+}
+
+.adapt-change-head .adapt-col-toggle {
+	margin-left: var(--sp-1);
+}
+
 .adapt-rail-note {
 	display: none;
 	font-size: var(--fs-2xs);
@@ -3922,19 +3949,38 @@ dialog.modal.is-polish {
 		padding-inline: 8px;
 	}
 
-	/* 窄屏：章条照旧横滑，下面两栏改成上下——改动区在上，正文在下。 */
+	/* 窄屏：章条照旧横滑，下面两栏改成上下——正文在上，改动区折在下面。 */
 	.adapt-main {
 		grid-template-columns: minmax(0, 1fr);
-		grid-template-rows: auto minmax(0, 1fr);
+		grid-template-rows: minmax(0, 1fr) auto;
+	}
+
+	.adapt-paper-col {
+		grid-row: 1;
 	}
 
 	.adapt-change-col {
+		grid-row: 2;
 		border-right: 0;
-		border-bottom: 1px solid var(--line-soft);
+		border-top: 1px solid var(--line-soft);
+	}
+
+	.adapt-change-head {
+		cursor: pointer;
+		user-select: none;
+	}
+
+	/* 折起来就只剩一行抬头：正文才是这一屏的主角。 */
+	.adapt-change-col.is-collapsed .adapt-scroll {
+		display: none;
+	}
+
+	.adapt-change-col.is-collapsed .adapt-col-toggle .ico {
+		transform: rotate(-90deg);
 	}
 
 	.adapt-change-col .adapt-scroll {
-		max-height: 38vh;
+		max-height: 34vh;
 		padding-bottom: var(--sp-4);
 	}
 
@@ -4112,22 +4158,24 @@ dialog.modal.is-polish {
 }
 
 @media (max-width: 620px) {
-	/* 稿纸工具条：手机上分两行，页签一行、动作用一行，别把按钮挤出屏幕。 */
+	/* 稿纸工具条：手机上挤成一行——页签在左，动作在右横滑，把竖着的地方留给正文。 */
 	.paper-bar {
-		flex-wrap: wrap;
+		flex-wrap: nowrap;
 		height: auto;
-		min-height: var(--top-h);
-		padding-block: 6px;
+		min-height: 42px;
+		padding-block: 4px;
 		padding-inline: var(--sp-3);
-		gap: 6px 8px;
+		gap: var(--sp-2);
 	}
 
 	.paper-tabs {
 		order: 0;
+		flex: none;
 	}
 
 	.paper-tabs .tab {
-		padding-inline: 10px;
+		min-width: 34px;
+		padding-inline: 8px;
 	}
 
 	#btn-focus {
@@ -4135,11 +4183,16 @@ dialog.modal.is-polish {
 	}
 
 	.paper-actions {
-		order: 2;
-		width: 100%;
+		order: 0;
+		flex: 1 1 auto;
+		width: auto;
+		min-width: 0;
 		justify-content: flex-start;
 		overflow-x: auto;
 		scrollbar-width: none;
+		/* 右边淡出去一点：让人知道后面还有按钮，不是被切掉了。 */
+		-webkit-mask-image: linear-gradient(to right, var(--ink) calc(100% - 20px), transparent);
+		mask-image: linear-gradient(to right, var(--ink) calc(100% - 20px), transparent);
 	}
 
 	.paper-actions::-webkit-scrollbar {
@@ -4148,6 +4201,8 @@ dialog.modal.is-polish {
 
 	.paper-actions .btn {
 		flex: 0 0 auto;
+		height: 28px;
+		padding-block: 0;
 	}
 }
 

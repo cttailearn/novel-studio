@@ -80,3 +80,13 @@ npm run dev:tauri    # 桌面壳
 
 - 网页版：<https://novel.cttai.art>（部署在腾讯云，`systemctl restart novel-studio` 后生效）
 - 安装包：<https://github.com/cttailearn/novel-studio/releases/tag/v0.6.0>（预发布；桌面自动更新要等签名后的 `latest.json`）
+
+## 八、手机上以正文为主
+
+窄屏上先把这一章看清楚，其余都能收起来：
+
+- **稿纸工具条挤成一行**（≤620px）：页签在左，读稿 / 改稿 / 续写 在右横滑，右边缘淡出一点提示后面还有按钮。工具条从 103px 降到 51px，正文起点从 274px 提到 222px。
+- **副驾收成一条**：窄屏（≤920px）打开副驾时只露抬头、本章上下文与输入框，会话流先收着；点抬头那个箭头、或者直接发一句话，抽屉才拉满（平板 64vh、手机 52vh），并且停在底栏上方，不再盖住底栏。
+- **改编台的改动区默认折叠**：正文排在上面拿走整屏，改动区折成底下的一行「改动区 · 几条 · 展开」，点一下展开（最多 34vh，仍给正文留位置）。换一章回到默认折叠；正在跑改编时自动展开，让你看得见进度。
+
+截图：docs/screens/m-paper.png（稿纸一行工具条）、m-paper-dock.png / m-paper-dock-full.png（副驾收起与拉开）、m-adapt.png / m-adapt-open.png（改动区折叠与展开）、	-paper-dock.png（平板）。

@@ -499,6 +499,29 @@ check("本地模式与云端登录仍由 boot/auth-gate 接管", async () => {
 	expect(/installNativeSave|__mogengSaveFile/, boot, "Tauri 原生保存仍要装上");
 });
 
+check("手机上正文优先：副驾先收成一条，改编台的改动区默认折起来", () => {
+	// 副驾：手机上默认只露抬头与输入框，要聊再拉满；抽屉别压在底栏上。
+	expect(/btn-dock-expand/, html, "副驾抬头要有展开对话的开关");
+	expect(/setSheetExpanded/, modules.get("dock.js"), "副驾要能收放");
+	expect(/is-expanded/, modules.get("dock.js"));
+	expect(/sheetDock/, modules.get("dock.js"), "只在小屏上收放");
+	expect(/dock-expand/, overlays, "开关只在窄屏出现");
+	expect(/\.dock\s*\{[^}]*bottom:\s*calc\(var\(--nav-h\)/, overlays, "抽屉要停在底栏上方");
+	expect(/\.dock \.dock-stream\s*\{\s*display:\s*none/, overlays, "收起来时不显示会话流");
+	expect(/\.dock\.is-expanded \.dock-stream\s*\{\s*display:\s*flex/, overlays);
+	// 改编台：窄屏正文在上，改动区折在下面且默认收起，点抬头才展开。
+	expect(/\.adapt-paper-col\s*\{\s*grid-row:\s*1/, views, "正文排在上面");
+	expect(/\.adapt-change-col\s*\{\s*grid-row:\s*2/, views);
+	expect(/\.adapt-change-col\.is-collapsed \.adapt-scroll\s*\{\s*display:\s*none/, views, "折起来只剩一行抬头");
+	const adapt = modules.get("adapt.js");
+	expect(/changesOpen/, adapt, "记住作者自己开合过没有");
+	expect(/is-collapsed/, adapt);
+	expect(/adapt-col-toggle/, adapt);
+	expect(/window\.matchMedia\("\(max-width: 920px\)"\)\.matches/, adapt, "只在小屏上折叠");
+	// 稿纸工具条在手机上挤成一行，把竖着的地方让给正文。
+	expect(/\.paper-bar\s*\{[^}]*flex-wrap:\s*nowrap/, views, "手机稿纸工具条一行就够");
+});
+
 /* ------------------------------------------------------------- 收尾 */
 
 let failed = 0;

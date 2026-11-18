@@ -20,6 +20,32 @@ let abortCtl = null;
 // 副驾可以被搬进读稿台：记住原来的位置，收起时送回去。
 let embedded = false;
 const home = { parent: null, next: null };
+// 手机上副驾是一张半屏抽屉：默认收成一条，把稿纸让出来；要聊了再拉满。
+let sheetExpanded = false;
+
+const sheetDock = () => window.matchMedia("(max-width: 920px)").matches;
+
+/** 手机上把副驾拉开／收成一条。宽屏上什么也不做——那一栏本来就是常开的。 */
+export function setSheetExpanded(next) {
+	sheetExpanded = Boolean(next);
+	const node = $("#dock");
+	node?.classList.toggle("is-expanded", sheetExpanded);
+	const btn = $("#btn-dock-expand");
+	if (btn) {
+		btn.setAttribute("aria-expanded", sheetExpanded ? "true" : "false");
+		btn.title = sheetExpanded ? "收起对话" : "展开对话";
+	}
+	syncSheetScrim();
+}
+
+/** 收着的时候不压暗稿纸：那正是要读的字。拉开成了半屏抽屉，才放遮罩。 */
+function syncSheetScrim() {
+	if (embedded || !sheetDock()) return;
+	const scrim = $("#scrim");
+	if (!scrim) return;
+	scrim.hidden = !sheetExpanded;
+	scrim.classList.toggle("is-on", sheetExpanded);
+}
 
 const ROLE_LABEL = { writing: "执笔者", material: "设定官", polish: "润色" };
 const ROLE_HINT = {
@@ -41,6 +67,7 @@ export function initDock() {
 	}
 	$("#btn-dock-new")?.addEventListener("click", () => void newSession());
 	$("#btn-close-dock")?.addEventListener("click", () => closeDock());
+	$("#btn-dock-expand")?.addEventListener("click", () => setSheetExpanded(!sheetExpanded));
 	$("#btn-dock-send")?.addEventListener("click", () => void send());
 	$("#btn-dock-model")?.addEventListener("click", (event) => openModelMenu(event.currentTarget));
 
@@ -92,8 +119,11 @@ export function openDock() {
 	ctx.savePrefs({ dockOpen: true });
 	if (!embedded) {
 		$("#app").classList.add("dock-open");
-		// 窄屏上副驾是一张抽屉，得把遮罩也放下来。
-		if (window.matchMedia("(max-width: 1160px)").matches) {
+		if (sheetDock()) {
+			// 手机上先只露一条：正文还是主角，收起来的那一截随时可以拉回来。
+			setSheetExpanded(false);
+		} else if (window.matchMedia("(max-width: 1160px)").matches) {
+			// 平板那档还是整张抽屉，得把遮罩也放下来。
 			const scrim = $("#scrim");
 			if (scrim) {
 				scrim.hidden = false;
@@ -456,6 +486,8 @@ async function send(text) {
 
 	busy = true;
 	abortCtl = new AbortController();
+	// 说了一句话，就得看得见它怎么回：手机上这时把抽屉拉满。
+	if (sheetDock()) setSheetExpanded(true);
 	const roleName = ROLE_LABEL[mode];
 	// 这一轮的「它正在干什么」：摆在回复最上面，跑着有动效，跑完折起来还能点开看
 	// 读了哪一段正文、取了哪几条料；手里那段稿与料也能直接抄进输入框。
