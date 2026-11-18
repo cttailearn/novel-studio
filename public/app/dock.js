@@ -435,6 +435,26 @@ async function answer(block, text) {
 	}
 }
 
+/** 问题收尾：超时或被中止时，把那张卡片收掉，别让作者对着一个已经没人等的问题发呆。 */
+function closedQuestion(block, reason) {
+	if (block.answered || !block.node) return;
+	block.answered = true;
+	block.node.classList.add("is-answered");
+	block.node.append(
+		el("p", {
+			class: "ask-done",
+			text:
+				reason === "timeout"
+					? "没等到回答，它先照自己的判断往下写了。"
+					: reason === "aborted"
+						? "这一轮停了，问题也就散了。"
+						: reason === "run_end"
+							? "这一轮收了尾，这一问不算了。"
+							: "这一问收尾了。",
+		}),
+	);
+}
+
 function autosize() {
 	if (!inputEl) return;
 	inputEl.style.height = "auto";
@@ -582,11 +602,18 @@ async function send(text) {
 					card.finishStep(event);
 					return;
 				}
-				if (event.type === "ask") {
+				// 智能体发问：服务端发的是 "question"（src/server/ask.ts 的 AskQuestionEvent），
+				// 早先这里等的是 "ask"，两边对不上，于是问题永远不出现、这一轮一直吊到十分钟超时。
+				if (event.type === "question" || event.type === "ask") {
 					const block = { kind: "ask", id: event.id, question: event.question, options: event.options };
 					reply.blocks.push(block);
 					if (streamEl) streamEl.append(blockNode(block));
-					scrollToEnd();
+					scrollToEnd(true);
+					return;
+				}
+				if (event.type === "question_closed") {
+					const block = reply.blocks.find((one) => one.kind === "ask" && one.id === event.id);
+					if (block) closedQuestion(block, event.reason);
 					return;
 				}
 				if (event.type === "proposal") {
@@ -602,6 +629,10 @@ async function send(text) {
 					return;
 				}
 				if (event.type === "run_end") {
+					// 这一轮结束还有没答的问题，就把卡片收掉：答案不会再有人等了。
+					for (const block of reply.blocks) {
+						if (block.kind === "ask" && !block.answered) closedQuestion(block, "run_end");
+					}
 					if (event.usage) {
 						const block = { kind: "usage", text: usageText(event.usage, event.cost) };
 						reply.blocks.push(block);

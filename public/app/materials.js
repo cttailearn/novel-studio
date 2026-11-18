@@ -575,7 +575,13 @@ function modKeyNow() {
 
 /* ---------------------------------------------------------------- 从库取料 / 导文件 */
 
-async function openLibraryPicker() {
+/**
+ * 「从库里取」：把通用素材库里的几条搬进这一部。
+ *
+ * 导出是必须的：素材页那排按钮是 paper.js 拿去接的，少一个 export 它就
+ * 静默点不动（2026-11-18 端到端测试抓到的就是这个）。
+ */
+export async function openLibraryPicker() {
 	const project = ctx.state.project;
 	if (!project) return;
 	let data;
@@ -654,7 +660,8 @@ async function openLibraryPicker() {
 	});
 }
 
-function pickFile() {
+/** 「导个文件」：挑一份 .docx/.md，读完文字再当素材存。 */
+export function pickFile() {
 	const input = $("#material-file-input");
 	if (!input) return;
 	input.value = "";

@@ -508,7 +508,9 @@ async function fillChapterVersions(box, chapterId) {
 		const history = data?.chapter?.history || [];
 		box.replaceChildren();
 		if (!history.length) {
-			box.append(el("p", { class: "drawer-note", text: "这一章还没有存过稿。" }));
+			// 自动保存只续写同一版，不构成版本点 —— 这里要说清楚，
+			// 否则作者会以为存过稿却看不到历史（body 里明明有字）。
+			box.append(el("p", { class: "drawer-note", text: "这一章只自动存过，还没有留下版本。按 ⌘S 存一次稿，之后每次存稿都会留一版。" }));
 			return;
 		}
 		for (const entry of history.slice(0, 12)) {

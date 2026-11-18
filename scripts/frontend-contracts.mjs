@@ -27,6 +27,8 @@ const overlays = await read("overlays.css");
 const moduleNames = (await readdir(path.join(publicDir, "app"))).filter((name) => name.endsWith(".js")).sort();
 const modules = new Map();
 for (const name of moduleNames) modules.set(name, await read(path.join("app", name)));
+// 提问走的是服务端事件，前端认不认同一个名字只能对着源码比。
+const askSource = await readFile(path.join(root, "src/server/ask.ts"), "utf8");
 
 const allJs = [app, ...modules.values()].join("\n");
 const allCss = [style, views, overlays].join("\n");
@@ -520,6 +522,83 @@ check("手机上正文优先：副驾先收成一条，改编台的改动区默�
 	expect(/window\.matchMedia\("\(max-width: 920px\)"\)\.matches/, adapt, "只在小屏上折叠");
 	// 稿纸工具条在手机上挤成一行，把竖着的地方让给正文。
 	expect(/\.paper-bar\s*\{[^}]*flex-wrap:\s*nowrap/, views, "手机稿纸工具条一行就够");
+});
+
+check("动态 import 之后调的每个函数，目标模块都真的导出了", () => {
+	// 「从库里取」曾经点了没反应：paper.js 把 materials 模块 import 进来调
+	// openLibraryPicker()/pickFile()，而 materials.js 里这两个函数没写 export。
+	// 这类坏法在控制台只留一条 TypeError，界面上就是一颗死按钮，所以静态守一道。
+	const exportsOf = new Map();
+	for (const [name, text] of modules) {
+		exportsOf.set(
+			name,
+			new Set(
+				[...text.matchAll(/export\s+(?:async\s+)?function\s+(\w+)|export\s+const\s+(\w+)|export\s+let\s+(\w+)/g)].map(
+					(match) => match[1] || match[2] || match[3],
+				),
+			),
+		);
+	}
+	const missing = [];
+	// 从块首的 "{" 起按花括号配对，取出这一块自己，别让窗口漏到下一块去。
+	const blockBody = (text, braceAt) => {
+		let depth = 0;
+		for (let i = braceAt; i < text.length; i += 1) {
+			if (text[i] === "{") depth += 1;
+			else if (text[i] === "}") {
+				depth -= 1;
+				if (depth === 0) return text.slice(braceAt, i + 1);
+			}
+		}
+		return text.slice(braceAt, braceAt + 900);
+	};
+	for (const [name, text] of modules) {
+		for (const block of text.matchAll(/import\("\.\/(\w+)\.js"\)\.then\(\s*\((mod|m)\)\s*=>\s*\{/g)) {
+			const target = `${block[1]}.js`;
+			const braceAt = block.index + block[0].length - 1;
+			const body = blockBody(text, braceAt);
+			for (const call of body.matchAll(new RegExp(`(?:mod|m)\\.(\\w+)\\(`, "g"))) {
+				if (!exportsOf.get(target)?.has(call[1])) missing.push(`${name} → ${target}.${call[1]}()`);
+			}
+		}
+		for (const assign of text.matchAll(/const\s+(?:mod|m)\s*=\s*await\s+import\("\.\/(\w+)\.js"\)/g)) {
+			const target = `${assign[1]}.js`;
+			const start = assign.index + assign[0].length;
+			for (const call of text.slice(start, start + 1200).matchAll(/(?:mod|m)\.(\w+)\(/g)) {
+				if (!exportsOf.get(target)?.has(call[1])) missing.push(`${name} → ${target}.${call[1]}()`);
+			}
+		}
+	}
+	assert.deepEqual(missing, [], `这些调用目标模块没导出：${missing.join("、")}`);
+});
+
+check("素材页那两颗按钮真的接上了", () => {
+	const paper = modules.get("paper.js");
+	const materials = modules.get("materials.js");
+	expect(/export async function openLibraryPicker/, materials, "「从库里取」要导出");
+	expect(/export function pickFile/, materials, "「导个文件」要导出");
+	expect(/mod\.openLibraryPicker\(\)/, paper);
+	expect(/mod\.pickFile\(\)/, paper);
+});
+
+check("智能体发问：服务端与副驾认的是同一个事件名", () => {
+	// 服务端 AskQuestionEvent 发的是 type:"question"，副驾若只等 "ask"，
+	// 问题就不出现，那一轮会一路吊到十分钟超时才自己往下走。
+	const dock = modules.get("dock.js");
+	expect(/type:\s*"question"/, askSource, "服务端台头事件名");
+	expect(/"question_closed"/, askSource, "服务端收尾事件名");
+	expect(/"question"/, dock, "副驾要认 question");
+	expect(/"question_closed"/, dock, "副驾要认收尾事件");
+	expect(/answerQuestion\(/, dock, "答话要真的送到 /api/questions/:id/answer");
+	expect(/closedQuestion\(/, dock, "超时或这一轮收尾时要把卡片收掉");
+});
+
+check("副驾的提问卡有选项也有自由作答", () => {
+	const dock = modules.get("dock.js");
+	expect(/class:\s*"ask-card"/, dock);
+	expect(/class:\s*"ask-opt"/, dock, "选项按钮");
+	expect(/class:\s*"ask-custom"/, dock, "自由作答");
+	expect(/class:\s*"ask-done"/, dock, "答过之后留一句交代");
 });
 
 /* ------------------------------------------------------------- 收尾 */
