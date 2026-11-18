@@ -411,8 +411,10 @@ function renderHeader() {
 	}
 	state.header.avatar.textContent = "账";
 	if (state.mode === "connect") {
-		state.header.title.textContent = "连接云端账号";
-		state.header.sub.textContent = "这台设备还没有连接云端";
+		// 手机上先看到的是本机那一页——抬头就别写「连接云端账号」，
+		// 免得像一进门就被要求登录。
+		state.header.title.textContent = state.connectOpen ? "连接云端账号" : "账号";
+		state.header.sub.textContent = state.connectOpen ? "这台设备还没有连接云端" : "本机模式，不用登录";
 	} else if (state.mode === "expired") {
 		state.header.title.textContent = "账户";
 		state.header.sub.textContent = "登录已失效";
@@ -875,7 +877,7 @@ function localModeView() {
 	const actions = el("div", "account-form-actions");
 	const connect = button("连接云端账号", "btn btn-ink", () => {
 		state.connectOpen = true;
-		renderBody();
+		renderAll();
 	});
 	actions.append(connect);
 	wrap.append(actions);
@@ -896,7 +898,7 @@ function connectView() {
 	const backRow = el("div", "account-connect-back");
 	const back = button("先不连，用本机", "btn btn-quiet btn-sm", () => {
 		state.connectOpen = false;
-		renderBody();
+		renderAll();
 	});
 	backRow.append(back);
 	wrap.append(backRow);

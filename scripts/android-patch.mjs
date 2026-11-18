@@ -38,7 +38,7 @@ const PERMISSIONS = [
 
 const CLEARTEXT_ATTR = "android:usesCleartextTraffic";
 
-const INSETS_MARK = "MOGENG_INSETS";
+const INSETS_MARK = "MOGENG_INSETS_V2";
 
 /** 在 java/ 下找 MainActivity.kt；生成工程的包名由 identifier 决定，不能写死。 */
 function findMainActivity(root) {
@@ -98,7 +98,8 @@ class MainActivity : TauriActivity() {
         WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
       )
       view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
-      WindowInsetsCompat.CONSUMED
+      // 不吞掉 insets：软键盘的尺寸还要往下发给 WebView，输入框才会自己让开。
+      insets
     }
     ViewCompat.requestApplyInsets(root)
   }

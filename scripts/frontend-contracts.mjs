@@ -630,6 +630,10 @@ check("设置里能配服务器、能连能断，本机模式不逼人登录", (
 	expect(/state\.connectOpen \? connectView\(\) : localModeView\(\)/, account, "默认收起连接表单");
 	expect(/先不连，用本机/, account, "展开后能退回本机");
 	expect(/pendingBase/, account, "地址只在内存里等到登录成功");
+	// 抬头跟着状态走，别在本机模式写「连接云端账号」——两页互切时抬头也要刷新。
+	expect(/本机模式，不用登录/, account, "本机模式的抬头要说清不用登录");
+	expect(/state\.connectOpen = true;\n\s+renderAll\(\);/, account, "点开表单要连抬头一起重画");
+	expect(/state\.connectOpen = false;\n\s+renderAll\(\);/, account, "退回本机也要连抬头一起重画");
 });
 
 check("Android 包给系统栏让位，顶栏按钮点得到", () => {
