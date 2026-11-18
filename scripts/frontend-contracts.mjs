@@ -4,7 +4,7 @@
 // 启动顺序、挂点 id、高度链与滚动容器、设计令牌纪律、以及几条产品行为。
 // 交互本身不在这里验（scripts/workbench.ts 跑真服务，另用 jsdom 冒烟）。
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -634,6 +634,28 @@ check("设置里能配服务器、能连能断，本机模式不逼人登录", (
 	expect(/本机模式，不用登录/, account, "本机模式的抬头要说清不用登录");
 	expect(/state\.connectOpen = true;\n\s+renderAll\(\);/, account, "点开表单要连抬头一起重画");
 	expect(/state\.connectOpen = false;\n\s+renderAll\(\);/, account, "退回本机也要连抬头一起重画");
+});
+
+check("importmap 与构建脚本一致，本地模式才起得来", () => {
+	// 本地模式（浏览器 ?local=1、Tauri 桌面与手机）把同一份数据层跑在页面里，
+	// 裸说明符全靠这张表解析。少一条 typebox/partial-json，页面里只会看到
+	// 「没能连上本地服务」，真正的错在控制台里：Failed to resolve module specifier。
+	const buildSource = readFileSync(path.join(root, "scripts/browser-build.ts"), "utf8");
+	const block = buildSource.match(/const IMPORT_MAP = \{([\s\S]*?)\n\};/);
+	assert.ok(block, "构建脚本里要有 IMPORT_MAP");
+	const canonical = {};
+	for (const line of block[1].split("\n")) {
+		const hit = line.match(/"([^"]+)"\s*:\s*"([^"]+)"/);
+		if (hit) canonical[hit[1]] = hit[2];
+	}
+	const inline = html.match(/<script type="importmap">([\s\S]*?)<\/script>/);
+	assert.ok(inline, "index.html 里要有 importmap");
+	const declared = JSON.parse(inline[1]).imports;
+	for (const [specifier, target] of Object.entries(canonical)) {
+		assert.equal(declared[specifier], target, `importmap 里 ${specifier} 要指向 ${target}`);
+		const file = path.join(root, "public", target);
+		assert.ok(existsSync(file), `${target} 得真的在 public 里`);
+	}
 });
 
 check("Android 包给系统栏让位，顶栏按钮点得到", () => {

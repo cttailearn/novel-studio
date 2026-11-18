@@ -98,15 +98,18 @@
 		<link rel="stylesheet" href="/views.css" />
 		<link rel="stylesheet" href="/overlays.css" />
 		<link rel="stylesheet" href="/account.css" />
-		<!-- 浏览器本地模式要把同一份数据层跑在页面里：importmap 是 pi-ai 的入口。 -->
+		<!-- 浏览器本地模式要把同一份数据层跑在页面里：这张表要和 scripts/browser-build.ts 的 IMPORT_MAP 一致，
+		     少一条，本地模式就会在 import 时报「Failed to resolve module specifier」，界面上只看到「服务没接上」。 -->
 		<script type="importmap">
 			{
 				"imports": {
 					"@earendil-works/pi-ai": "/browser/vendor/pi-ai/shim.js",
+					"@earendil-works/pi-agent-core": "/browser/vendor/pi-agent-core/index.js",
+					"typebox/compile": "/browser/vendor/typebox/compile.js",
+					"typebox/value": "/browser/vendor/typebox/value.js",
+					"partial-json": "/browser/vendor/partial-json.js",
 					"@earendil-works/pi-ai/": "/browser/vendor/pi-ai/",
-					"@earendil-works/pi-agent-core": "/browser/vendor/pi-agent-core/shim.js",
-					"@earendil-works/pi-agent-core/": "/browser/vendor/pi-agent-core/",
-					"zod": "/browser/vendor/zod/shim.js"
+					"@earendil-works/pi-agent-core/": "/browser/vendor/pi-agent-core/"
 				}
 			}
 		</script>
