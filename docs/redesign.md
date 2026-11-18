@@ -104,3 +104,12 @@ npm run dev:tauri    # 桌面壳
 
 截图：`docs/screens/e2e-ask-card.png`（副驾的三连问）、`e2e-import-file.png`（导一份 .md 进素材表单）。
 
+### 起稿 / 续写的交代
+
+工具条上的「起稿」「续写」是快路：一点就交给执笔者，不打断正在写的东西。
+想先说一句「只写三句，停在雨停之前」时，走「更多」里的「带一句交代再续写」（空章是「带一句交代再起稿」）——
+弹窗里写的那句会作为 `note` 传进这一轮，和这一章挂着的料、大纲一起交给模型。
+`scripts/frontend-contracts.mjs` 里有一条同时盯着两条路：快路仍是 `runWrite("continue")` / `runWrite("create")`，
+带交代的那条必须走 `confirmWrite(...)` 且 `note` 真的进了 `/write` 请求。
+
+

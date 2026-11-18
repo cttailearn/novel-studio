@@ -601,6 +601,19 @@ check("副驾的提问卡有选项也有自由作答", () => {
 	expect(/class:\s*"ask-done"/, dock, "答过之后留一句交代");
 });
 
+check("起稿/续写想交代一句时，从「更多」里走", () => {
+	// 工具条上的「起稿」「续写」是快路：一点就交给执笔者。
+	// 想先交代一句的，走「更多」里的那条——两处最终都得调 runWrite(mode, note)。
+	const paper = modules.get("paper.js");
+	expect(/runWrite\("continue"\)/, paper, "续写快路还在");
+	expect(/runWrite\("create"\)/, paper, "起稿快路还在");
+	expect(/带一句交代再续写/, paper, "有稿时给带交代的续写");
+	expect(/带一句交代再起稿/, paper, "空章时给带交代的起稿");
+	expect(/confirmWrite\("continue"\)/, paper, "要开交代框");
+	expect(/confirmWrite\("create"\)/, paper, "要开交代框");
+	expect(/note:\s*note \|\| undefined/, paper, "交代要交给 /write 的 note");
+});
+
 /* ------------------------------------------------------------- 收尾 */
 
 let failed = 0;

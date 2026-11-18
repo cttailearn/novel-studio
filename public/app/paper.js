@@ -415,6 +415,14 @@ function paperMenu(anchor) {
 				},
 			}, icon(iconName), label),
 		);
+	// 起稿 / 续写这两个常用动作在工具条上一点就跑；想先交代一句的，从这里进去。
+	// 放在最上面：交代是动笔前的事，别排在存稿、导出后面。
+	const draft = ctx.state.draft;
+	const hasText = Boolean((draft?.content || "").trim());
+	if (draft) {
+		if (hasText) add("带一句交代再续写", "quill", () => void confirmWrite("continue"));
+		else add("带一句交代再起稿", "quill", () => void confirmWrite("create"));
+	}
 	add("存稿", "save", () => void ctx.saveDraft({ force: true }).then(() => toast("存好了。", "ok")));
 	add("导出这一章", "download", () => void exportCurrent());
 	add("看版本与记录", "history", async () => {
@@ -467,8 +475,14 @@ function ensureTextareaVisible() {
 async function confirmWrite(mode) {
 	const draft = ctx.state.draft;
 	if (!draft) return;
-	const labels = { rewrite: "整章重写", patch: "按你说的改", continue: "接着写下去" };
-	const noteInput = el("textarea", { class: "set-area", rows: 3, placeholder: mode === "patch" ? "要改哪儿、改成什么样" : "这一章想往哪儿走（可留空）" });
+	const labels = { rewrite: "整章重写", patch: "按你说的改", continue: "接着写下去", create: "从这儿起头" };
+	const hints = {
+		patch: "要改哪儿、改成什么样",
+		rewrite: "这一章想改成什么样（可留空）",
+		continue: "往下想怎么写（可留空）",
+		create: "这一章想怎么开头（可留空）",
+	};
+	const noteInput = el("textarea", { class: "set-area", rows: 3, placeholder: hints[mode] || "这一章想往哪儿走（可留空）" });
 	let picked = "";
 	if (mode === "patch") {
 		const sel = selectedText();
