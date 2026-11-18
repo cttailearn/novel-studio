@@ -124,3 +124,16 @@ npm run dev:tauri    # 桌面壳
 - **连不上服务器不再像报错**：本机模式本来不需要服务器；检查更新碰到网络问题也只说「这会儿连不上更新服务，不影响写稿；过一会儿再试也行。」
 
 截图：docs/screens/m-settings-server.png（手机上的「设置 → 服务器」）。
+
+
+
+## 十一、真机装上跑一遍（0.7.3）
+
+0.7.2 的包在模拟器上露了馅：打开就是一条红条「没能连上本地服务」。查下来不是服务器的问题，是 `public/index.html` 里那张 import map —— 本地模式把同一份数据层跑在页面里，裸模块名全靠它解析，而重写界面时这张表掉了 `typebox/compile`、`typebox/value`、`partial-json` 三行，`@earendil-works/pi-agent-core` 还指到一个不存在的 `shim.js`。界面上的症状只有「服务没接上」，真正的原因在控制台里：`Failed to resolve module specifier`。
+
+- **表对齐构建脚本**：`index.html` 的 import map 现在与 `scripts/browser-build.ts` 的 `IMPORT_MAP` 逐条一致；`scripts/frontend-contracts.mjs` 有一条契约把两边读出来比对，还顺带检查每个目标文件真的在 `public/` 里，改一处漏一处会当场失败。
+- **验证方式换成真模拟器**：`pnpm exec tauri android build --debug --apk --target x86_64` 装进 `emulator-5554`（1080×2400，状态栏 128px）。装上后：案头不再有红条，样书能摊开、进书能读到正文（《夜航船》「雨夜靠岸」275 字），顶栏那排图标完整落在状态栏下方，点「设置」能开、点「服务器」能看到「这台设备 / 连云端（可选）」；点进正文时软键盘弹起，纸面缩到键盘上方，输入框没有被挡住 —— 说明让位只补 padding、没有吞掉 IME insets。
+- **顺带**：账号面板的抬头跟着状态走（本机模式写「账号 / 本机模式，不用登录」），退回本机时抬头一起重画。
+
+截图：docs/screens/m-apk-desk.png（真机案头，本机模式）、m-apk-paper.png（真机稿纸与软键盘）、m-apk-server.png（真机「设置 → 服务器」）。
+
