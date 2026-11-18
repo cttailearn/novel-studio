@@ -175,7 +175,62 @@ location / {
 
 ---
 
-## 四、一句话总结
+## 四、部署到线上之后的复核（0.7.4）
+
+`/opt/novel-studio` 拉到 `a03a323`（v0.7.4）、`pnpm build:browser`（49 个文件 / 1429.8 KB 落进 `public/browser`）、重启服务后，重新量了一遍。
+
+### 1. 两处改动真的生效了
+
+```
+$ curl -sD- -o /dev/null https://novel.cttai.art/views.css
+cache-control: public, max-age=60, stale-while-revalidate=86400, stale-if-error=86400
+etag: W/"169b3-1a1ee65b030"
+
+$ curl -s https://novel.cttai.art/ | grep -c 'rel="modulepreload"'
+20
+
+$ curl -sD- -o /dev/null https://novel.cttai.art/
+cache-control: no-store          ← 页面仍旧不缓存，改配置不用清缓存
+```
+
+线上 20 条预载清单与 `app.js` 的 16 个静态 import 逐个比对，**无缺项、无 404**。
+
+### 2. 浏览器四种状态下的真实表现
+
+| 状态 | js/css 请求 | 本地命中 | 走网络 | DCL |
+| --- | --- | --- | --- | --- |
+| 冷启动（禁缓存） | 26 | 0 | 26 | 974ms |
+| 一分钟内再访 | 26 | 26 | 0 | 89–250ms |
+| **过期后首次**（等 75s） | 26 | 26 | 26（全是 304，后台验） | **219ms** |
+| 过期后来第二次 | 26 | 26 | 0 | 115–120ms |
+
+过期那一次是重点：26 个文件全部**先用本地副本渲染**（`deliveryType: cache`、`transferSize: 0`），26 个 304 在后台跑完，DCL 219ms —— 改造前同样的过期场景是 1188ms。也就是说 `stale-while-revalidate` 把「验 304」从关键路径上彻底摘掉了。
+
+不改造的话，这一项要付多少：从服务器上串行给 20 个 JS 各发一次条件请求，**1560ms**（`for f in ...; do curl -H "If-None-Match: $ET"; done`）。这就是原来每次刷新要背的债。
+
+### 3. 模拟跨境 200ms RTT
+
+用 CDP 的 `Network.emulateNetworkConditions{latency:200}` 给每个往返加 200ms：
+
+- 冷启动：26 个 js/css **同一波被发现**（都在 +400ms 那一桶），最后一个到齐 4254ms、DCL 4258ms。
+  改造前这里会分成 5 波（`+240ms×7 → +720ms×16 → +960ms → +1200ms → +1380ms`），到齐 1614ms 是本地 RTT 下的数字，跨境要乘三倍。
+- 温缓存：26 个全部本地命中，零往返。
+
+### 4. gzip 与体积（线上实测，wire 字节）
+
+| 路径 | wire | 说明 |
+| --- | --- | --- |
+| `/` | 9549 B | 34 KB HTML → 9.5 KB |
+| `/app.js` | 5924 B | 17.5 KB → 5.9 KB |
+| `/views.css` | 17764 B | 90.9 KB → 17.8 KB |
+| `/app/adapt.js` | 15527 B | 43.2 KB → 15.5 KB |
+| `/app/compare.js` | 1564 B | 新增文件，3.3 KB → 1.6 KB |
+
+全站首屏 wire 197 KB / 解压后 636 KB。nginx 直连 TTFB 稳定在 28–31ms，服务端 load 0.0 —— **仍然不是服务器的问题**。
+
+---
+
+## 五、一句话总结
 
 慢的不是服务器，是**跨境 205ms 的往返 × 首屏 30 个请求 × 5 层模块瀑布 × 每次刷新 25 个 304**。
 本次已把「5 波」压成「1 波」、把「每次 25 个 304」压成「一分钟内 0 个」；要再快就得动 nginx（静态直发 + 长缓存）和打包（21 个 JS 合成 1 个），或者直接上 CDN。
