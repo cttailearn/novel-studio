@@ -4014,6 +4014,16 @@ dialog.modal.is-polish {
 		min-width: 128px;
 	}
 
+	/* 手机屏就这么高：改动区让一让，正文才看得见几行。 */
+	.adapt-change-col .adapt-scroll {
+		max-height: 24vh;
+	}
+
+	.adapt-paper-body {
+		min-height: 52vh;
+		padding: var(--sp-3) var(--sp-4);
+	}
+
 	.adapt-strip-hint {
 		display: none;
 	}
