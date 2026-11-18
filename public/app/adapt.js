@@ -764,9 +764,10 @@ function paperNode() {
 		if (meta) meta.textContent = `${wordLabel(countWords(area.value))} · ${revisionLabel}`;
 	});
 	// 先摆抬头（这是哪一版、多少字），再说这一版动了什么，最后才是正文。
+	// 改成这一版改了什么的时候，那几条要压在正文上头：作者是照着这几条决定
+	// 「采用还是再改」的，藏在二十四行正文下面等于让人先滚动再判断。
 	wrap.append(head);
 	if (proposal?.summary) wrap.append(el("p", { class: "adapt-summary", text: proposal.summary }));
-	wrap.append(area);
 
 	const changes = proposal?.changes || [];
 	if (changes.length) {
@@ -783,6 +784,7 @@ function paperNode() {
 		}
 		wrap.append(el("p", { class: "eyebrow", text: "这一版改了什么" }), list);
 	}
+	wrap.append(area);
 
 	const actions = el("div", { class: "adapt-actions" });
 	if (mode === "proposal") {

@@ -3410,6 +3410,14 @@ dialog.modal.is-polish {
 	border-color: var(--seal-line);
 }
 
+/* 正文上头的「这一版改了什么」自己滚：条目再多也不该把正文挤到屏幕外面，
+   作者要的是一边看改动、一边看正文。 */
+.adapt-paper-col .changes-list {
+	max-height: 26vh;
+	overflow-y: auto;
+	padding-right: var(--sp-1);
+}
+
 .adapt-summary {
 	margin: 0;
 	padding: var(--sp-2) var(--sp-3);
