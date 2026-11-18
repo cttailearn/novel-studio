@@ -794,6 +794,12 @@ async function openPolish() {
 			});
 			// 这一轮改出来的字也留在卡里：再改一遍之后，上一版不至于一句话都找不回。
 			if (acc) card.setText(acc);
+			// 停在这一轮、或者干脆没改出来：那颗「再改一遍」还是 disable 的，弹窗里就没有能点的了。
+			if (!latest) {
+				actions.replaceChildren(
+					el("button", { class: "btn btn-ghost btn-sm", type: "button", text: "再改一遍", on: { click: () => void run() } }),
+				);
+			}
 		}
 	};
 

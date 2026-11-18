@@ -359,13 +359,16 @@ export async function createApp(config: AppConfig, publicDir: string): Promise<A
 		/*
 		 * 缓存策略：
 		 *   - 单机自用（fs）：一律 no-store —— 本机开发工具，改完刷新就该看到新版。
-		 *   - 多用户部署（idb/users）：脚本、样式、图标给 ETag + max-age=0, must-revalidate。
-		 *     没上文件名指纹，所以不敢标 immutable；没变就是 304，变了立刻拿到新版。
+		 *   - 多用户部署（idb/users）：脚本、样式、图标给 ETag + 短 max-age + 后台重验。
+		 *     没上文件名指纹，所以不敢标 immutable：部署后最多一分钟就能拿到新文件。
+		 *     但也绝不该让每次刷新都卡在「挨个回源验 304」上——服务器在境外时一条 304
+		 *     就是一个 200ms 的往返，二十几个文件叠起来就是一两秒白屏。
+		 *     stale-while-revalidate 让浏览器先用手里那份、后台悄悄验，用户感觉是瞬开。
 		 *     页面本身仍旧 no-store，免得部署方改了配置还得让所有人清缓存。
 		 */
 		const deploy = localOnly || multiUser;
 		const cacheable = deploy && !relative.endsWith(".html") && /\.(?:js|css|mjs|svg|json|webmanifest|woff2?)$/i.test(relative);
-		const cacheControl = cacheable ? "private, max-age=0, must-revalidate" : "no-store";
+		const cacheControl = cacheable ? "public, max-age=60, stale-while-revalidate=86400, stale-if-error=86400" : "no-store";
 		const info = cacheable ? await stat(target).catch(() => undefined) : undefined;
 		const etag = info ? `W/"${info.size.toString(16)}-${Math.floor(info.mtimeMs).toString(16)}"` : undefined;
 		if (etag && res.req.headers["if-none-match"] === etag) {

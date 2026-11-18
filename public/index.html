@@ -113,6 +113,30 @@
 				}
 			}
 		</script>
+		<!-- 整棵模块树的清单交给浏览器，别让它顺着 import 一层层问下去。
+		     不写这几行，浏览器要等 app.js 回来才知道它 import 了谁，等那批回来才知道下一层——
+		     四层就是四个来回。服务器在境外时一个来回 200ms，首屏为此白等六百毫秒。
+		     这一张表和 public/app.js 的静态 import 对齐，frontend-contracts 会核对。 -->
+		<link rel="modulepreload" href="/app.js" />
+		<link rel="modulepreload" href="/auth-gate.js" />
+		<link rel="modulepreload" href="/account.js" />
+		<link rel="modulepreload" href="/cloud-client.js" />
+		<link rel="modulepreload" href="/update.js" />
+		<link rel="modulepreload" href="/app/core.js" />
+		<link rel="modulepreload" href="/app/api.js" />
+		<link rel="modulepreload" href="/app/ctx.js" />
+		<link rel="modulepreload" href="/app/compare.js" />
+		<link rel="modulepreload" href="/app/run-card.js" />
+		<link rel="modulepreload" href="/app/desk.js" />
+		<link rel="modulepreload" href="/app/studio.js" />
+		<link rel="modulepreload" href="/app/paper.js" />
+		<link rel="modulepreload" href="/app/materials.js" />
+		<link rel="modulepreload" href="/app/outline.js" />
+		<link rel="modulepreload" href="/app/dock.js" />
+		<link rel="modulepreload" href="/app/adapt.js" />
+		<link rel="modulepreload" href="/app/settings-view.js" />
+		<link rel="modulepreload" href="/app/palette.js" />
+		<link rel="modulepreload" href="/app/reader.js" />
 	</head>
 	<body>
 		<div id="boot-skeleton" aria-hidden="true">

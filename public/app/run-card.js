@@ -285,6 +285,10 @@ export function createRunCard({ title = "执笔者", hint = "", useLabel = "抄�
 			state.status = "running";
 			state.startedAt = Date.now();
 			state.endedAt = 0;
+			// 同一张卡会跑第二遍（润色里「再改一遍」）：上一轮的「改好了」与报错都得先抹掉，
+			// 否则新一轮在跑，抬头还挂着上一轮的结果。
+			state.saved = "";
+			state.error = "";
 			paint();
 			clearInterval(state.timer);
 			state.timer = setInterval(() => {

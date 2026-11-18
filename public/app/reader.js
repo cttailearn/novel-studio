@@ -12,6 +12,7 @@
 import * as api from "./api.js";
 import * as ctx from "./ctx.js";
 import { $, $$, el, icon, toast, renderMarkdown, wordLabel, countWords } from "./core.js";
+import { paragraphBlocks, markedNodes } from "./compare.js";
 import { mountDock, unmountDock } from "./dock.js";
 
 const SCALE_KEY = "mogeng.reader-scale";
@@ -409,20 +410,7 @@ function emptyNode() {
 }
 
 function paragraphNodes(text) {
-	const blocks = String(text)
-		.split(/\n{2,}/)
-		.map((block) => block.trim())
-		.filter(Boolean);
-	if (!blocks.length) return [el("p", { class: "reader-p", text: "" })];
-	return blocks.map((block) =>
-		el(
-			"p",
-			{ class: "reader-p" },
-			...String(block)
-				.split("\n")
-				.flatMap((line, index) => (index === 0 ? [line] : [el("br"), line])),
-		),
-	);
+	return paragraphBlocks(text, "reader-p");
 }
 
 /* ---------------------------------------------------------------- 对照原文 */
@@ -479,19 +467,7 @@ function compareNodes(content) {
 			}),
 		),
 	);
-	for (const block of groupSegments(segments)) {
-		nodes.push(
-			el(
-				"p",
-				{ class: "reader-p" },
-				...block.flatMap((segment) =>
-					segment.changed
-						? [el("mark", { class: "reader-mark", text: segment.text })]
-						: [segment.text],
-				),
-			),
-		);
-	}
+	for (const node of markedNodes(segments, { paragraphClass: "reader-p", markClass: "reader-mark" })) nodes.push(node);
 	nodes.push(
 		el(
 			"details",
@@ -501,77 +477,6 @@ function compareNodes(content) {
 		),
 	);
 	return nodes;
-}
-
-/**
- * 句级对照：把原文与改编稿都切成句子，用最长公共子序列找出「原样保留」的句子，
- * 剩下的就是改编者动过的地方。只求能读，不求学术意义上的最小编辑距离。
- */
-function diffSegments(original, adapted) {
-	const before = splitSentences(original);
-	const after = splitSentences(adapted);
-	const table = lcsTable(before.map(normalize), after.map(normalize));
-	const kept = new Set();
-	let i = before.length;
-	let j = after.length;
-	while (i > 0 && j > 0) {
-		if (normalize(before[i - 1]) === normalize(after[j - 1])) {
-			kept.add(j - 1);
-			i -= 1;
-			j -= 1;
-		} else if (table[i - 1][j] >= table[i][j - 1]) {
-			i -= 1;
-		} else {
-			j -= 1;
-		}
-	}
-	return after.map((text, index) => ({ text, changed: !kept.has(index) }));
-}
-
-function splitSentences(text) {
-	const clean = String(text || "").replace(/\r\n?/g, "\n");
-	const parts = clean.match(/[^。！？!?\n]+[。！？!?]?|\n/g) || [];
-	return parts.map((part) => part.trim()).filter(Boolean);
-}
-
-function normalize(text) {
-	return String(text).replace(/\s+/g, "").replace(/[“”‘’"']/g, "");
-}
-
-function lcsTable(left, right) {
-	const rows = left.length + 1;
-	const cols = right.length + 1;
-	const table = Array.from({ length: rows }, () => new Array(cols).fill(0));
-	for (let i = 1; i < rows; i += 1) {
-		for (let j = 1; j < cols; j += 1) {
-			table[i][j] = left[i - 1] === right[j - 1] ? table[i - 1][j - 1] + 1 : Math.max(table[i - 1][j], table[i][j - 1]);
-		}
-	}
-	return table;
-}
-
-/** 句子按段换行重排：原稿的段落感比逐句排列更好读。 */
-function groupSegments(segments) {
-	const blocks = [];
-	let current = [];
-	let chars = 0;
-	for (const segment of segments) {
-		if (segment.text === "\n") {
-			if (current.length) blocks.push(current);
-			current = [];
-			chars = 0;
-			continue;
-		}
-		current.push(segment);
-		chars += segment.text.length;
-		if (chars > 220) {
-			blocks.push(current);
-			current = [];
-			chars = 0;
-		}
-	}
-	if (current.length) blocks.push(current);
-	return blocks.length ? blocks : [[]];
 }
 
 /* ---------------------------------------------------------------- 页眉页脚状态 */

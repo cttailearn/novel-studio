@@ -406,6 +406,34 @@ check("改编稿不落盘，采用才写", () => {
 	expectNot(/saveChapter\(/, adapt, "改编台不该直接存正文");
 });
 
+check("改编台点哪一章都能读到正文，改过的句子垫底色", () => {
+	const adapt = modules.get("adapt.js");
+	const compare = modules.get("compare.js");
+	const reader = modules.get("reader.js");
+	assert.ok(compare, "对照要有一份共用的 compare.js，别在两边各写一遍 diff");
+	expect(/export function diffSegments/, compare);
+	expect(/export function markedNodes/, compare);
+	expect(/export function paragraphBlocks/, compare);
+	expect(/from "\.\/compare\.js"/, reader, "读稿台的对照也走这一份");
+	// 还没改的章不再是空态：原书这一章直接摊出来。
+	expect(/originalText/, adapt, "要把原书这一章取回来");
+	expect(/readSourceChapter/, adapt);
+	expect(/paragraphBlocks\(/, adapt, "没有改编稿时按段落摊原书");
+	expect(/markedNodes\(/, adapt, "改过的章要标出改动");
+	expect(/adapt-mark/, adapt);
+	// 改动条目只归左栏：右栏不再列一遍「这一版改了什么」。
+	expectNot(/这一版改了什么/, adapt, "改动条目不要挂在正文那一栏");
+	expect(/adapt-ledger/, adapt, "台账留在左栏");
+	const css = allCss;
+	expect(/\.adapt-mark \{[^}]*background/, css, "高亮要看得出垫了底色");
+	expect(/\.adapt-paper-read \{[^}]*overflow-y:\s*auto/, css, "只读正文自己滚，别把按钮顶出屏幕");
+	expect(/\.adapt-run-brief \{[^}]*margin-left:\s*auto/, css, "「改编者」按钮挂在改编方向那条的右端");
+	// 「让改编者改这一章」改名成「改编者」，并且搬进了改编方向那一条里。
+	expectNot(/让改编者改这一章/, adapt, "顶栏那颗长名字的按钮退休了");
+	expect(/adapt-run-brief/, adapt);
+	expect(/el\(\s*"summary"[\s\S]{0,400}runBtn/, adapt, "按钮摆在改编方向那条的抬头里，不是又飘回顶栏");
+});
+
 check("润色走选区，替换要带预期值", () => {
 	const paper = modules.get("paper.js");
 	expect(/polishChapter/, paper);
@@ -670,6 +698,22 @@ check("Android 包给系统栏让位，顶栏按钮点得到", () => {
 		expect(/enableEdgeToEdge/, patch, "保留 edge-to-edge，靠 padding 让位");
 		expect(/MainActivity\.kt/, patch, "补的就是生成出来的 MainActivity");
 	})();
+});
+
+// 首屏那二十个模块不该让浏览器一层层问下去：部署在境外时，每个 import 往返
+// 都是 200ms，四层就是六百毫秒白屏。index.html 里要预先声明整棵静态模块树。
+check("首屏把模块树一次交代清楚，不让浏览器一层层问", () => {
+	const preloads = [...html.matchAll(/<link\s+rel="modulepreload"\s+href="(\/[^"]*\.js)"/g)].map((match) => match[1]);
+	assert.ok(preloads.length >= 15, `modulepreload 只有 ${preloads.length} 条`);
+	// 声明了的必须真存在，否则浏览器会为它白跑一趟 404。
+	const missing = preloads.filter((href) => !existsSync(path.resolve(root, "public", href.replace(/^\//, ""))));
+	assert.equal(missing.length, 0, `指向不存在的文件：${missing.join(" ")}`);
+	// app.js 里静态 import 的每个模块都得在清单里，漏一个就退化成瀑布。
+	// app.js 在 public/ 下，`./app/x.js` 指的是 /app/x.js，其余 `./x.js` 落在 public/ 根。
+	const imported = new Set();
+	for (const match of app.matchAll(/from\s+"\.\/([^"]+)"/g)) imported.add(`/${match[1]}`);
+	for (const href of preloads) imported.delete(href);
+	assert.equal(imported.size, 0, `这些模块没进 modulepreload：${[...imported].join(" ")}`);
 });
 
 /* ------------------------------------------------------------- 收尾 */

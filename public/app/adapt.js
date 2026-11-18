@@ -8,6 +8,7 @@
 import * as api from "./api.js";
 import * as ctx from "./ctx.js";
 import { $, el, icon, toast, openModal, confirmAction, excerpt, renderMarkdown, wordLabel, countWords, num, timeAgo } from "./core.js";
+import { diffSegments, markedNodes, paragraphBlocks } from "./compare.js";
 
 let mounted = false;
 let adaptation = null;
@@ -21,6 +22,14 @@ let abortCtl = null;
 let draftText = "";
 let chapterDraft = "";
 let chapterDraftFor = "";
+/**
+ * 这一章的原书正文：还没改的章也要能读，改过的章要靠它标出改动。
+ * 和改编稿一样按章缓存 —— 翻来翻去不该每翻一次就再取一遍。
+ */
+let originalText = "";
+let originalFor = "";
+/** 正文是摊着看的，还是就地改的：只有点「就地改」才换成输入框。 */
+let paperEditing = false;
 let signature = "";
 /**
  * 上一轮改编的现场：状态、每一步工具、流下来的正文。
@@ -135,6 +144,8 @@ async function render({ force = false } = {}) {
 		draftText.length,
 		chapterDraft.length,
 		adaptation?.cursor ?? "",
+		paperEditing,
+		proposal?.id ?? "",
 	].join("|");
 	if (!force && next === signature && host.childElementCount) return;
 	signature = next;
@@ -211,20 +222,7 @@ function barNode() {
 			el("span", { class: "btn-label", text: "读全篇" }),
 		),
 	);
-	actions.append(
-		el(
-			"button",
-			{
-				class: "btn btn-ghost btn-sm is-primary",
-				type: "button",
-				on: {
-					click: () => void runSelected(),
-				},
-			},
-			icon("quill"),
-			el("span", { class: "btn-label", text: "让改编者改这一章" }),
-		),
-	);
+	// 「改编者」不在这儿了：它挂在左栏「改编方向」那条上，离作者交代的方向最近。
 	bar.append(title, actions);
 	return bar;
 }
@@ -383,7 +381,11 @@ function mainNode() {
 
 function paperHeadLabel() {
 	const chapter = ctx.outlineItem(selected);
-	return chapter ? `改编正文 · ${chapter.title || ""}` : "改编正文";
+	const title = chapter?.title || "";
+	if (!title) return "正文";
+	// 还没改的章，这一栏摊的是原书：抬头就照实说原书，别把原书叫成改编正文。
+	const adapted = Boolean(proposal) || isReopened(selected);
+	return adapted ? `改编正文 · ${title}` : `原书 · ${title}`;
 }
 
 function paperStateLabel() {
@@ -393,18 +395,42 @@ function paperStateLabel() {
 }
 
 
-/** 改编方向是全书共用的，默认折起来：它一摊开就是半屏，把台账挤出视野。 */
+/**
+ * 改编方向是全书共用的，默认折起来：它一摊开就是半屏，把台账挤出视野。
+ * 「改编者」这颗按钮就挂在这一条上 —— 它是照着这份方向去改的那一方，
+ * 摆在顶栏隔着整块正文去按，等于让作者先跨半屏再回来。
+ */
 function briefNode() {
 	const text = adaptation?.brief || "";
 	const box = el("details", { class: "adapt-brief-wrap", id: "adapt-brief-fold" });
 	if (!text) box.setAttribute("open", "");
 	const peek = el("span", { class: "adapt-brief-peek", text: text ? excerpt(text, 60) : "还没写：先说清这一部改成什么样" });
+	const runBtn = el(
+		"button",
+		{
+			class: "btn btn-seal btn-sm adapt-run-brief",
+			type: "button",
+			title: "让改编者按这份方向改这一章",
+			on: {
+				click: (event) => {
+					// summary 里点一下会顺手开合 details，这颗按钮不该带这个副作用。
+					event.preventDefault();
+					event.stopPropagation();
+					void runSelected();
+				},
+			},
+		},
+		icon("quill", "ico ico-sm"),
+		el("span", { class: "btn-label", text: streaming ? "在改" : "改编者" }),
+	);
+	if (streaming) runBtn.setAttribute("disabled", "");
 	const head = el(
 		"summary",
 		{ class: "adapt-brief-head" },
 		icon("quill", "ico ico-sm"),
 		el("span", { class: "adapt-brief-label", text: "改编方向" }),
 		peek,
+		runBtn,
 	);
 	const brief = el("textarea", { class: "adapt-brief", rows: 3, placeholder: "这一部改成什么样：什么留下、什么拆掉，换成谁的眼睛看。" });
 	brief.value = text;
@@ -707,6 +733,10 @@ function pushNote(label, kind = "") {
 	run.steps.push({ name: "", label, kind, phase: "done", startedAt: Date.now(), durationMs: 0, isError: kind === "warn", preview: "" });
 }
 
+/**
+ * 右栏那一张稿：改编过的章摊改编稿（改过的句子垫底色），还没改的章就摊原书这一章。
+ * 章条上点哪一章，这里就显示哪一章的正文 —— 正在改的、待改的、改过的都一样。
+ */
 function paperNode() {
 	const wrap = el("div", { class: "adapt-paper-wrap", id: "adapt-paper" });
 	const chapters = ctx.state.project?.outline || [];
@@ -716,7 +746,13 @@ function paperNode() {
 	const cursorAt = cursorIndex();
 	const later = cursorAt < chapters.length && index > cursorAt;
 
-	if (!proposal && !done) {
+	const mode = proposal ? "proposal" : done ? "author" : "original";
+	const content = proposal ? proposal.content : done ? chapterDraft : "";
+	const shown = draftText || content;
+	const hasSomething = Boolean(shown || originalText);
+
+	if (!hasSomething) {
+		// 原书也没取到、稿子也没有：只剩一句「还没交稿」，原因写到点了。
 		const empty = el("div", { class: "adapt-empty" });
 		empty.append(icon(streaming ? "quill" : "book-open"));
 		empty.append(
@@ -740,96 +776,111 @@ function paperNode() {
 						: "让改编者读原书这一章与前面的台账，交一版给你过目；也可以自己先把这一章写出来。",
 			}),
 		);
-		const buttons = el("div", { class: "adapt-actions" });
-		// 正在写的时候不再摆「让改编者改这一章」：那一按只会换回一句「还在写」。
-		if (!streaming) {
-			if (!later) {
-				buttons.append(
-					el(
-						"button",
-						{ class: "btn btn-seal", type: "button", on: { click: () => void runSelected() } },
-						icon("quill"),
-						"让改编者改这一章",
-					),
-				);
-			} else {
-				buttons.append(
-					el(
-						"button",
-						{
-							class: "btn btn-primary",
-							type: "button",
-							on: { click: () => void jumpToCursor() },
-						},
-						icon("arrow-right"),
-						`先改第 ${cursorAt + 1} 章`,
-					),
-				);
-			}
-			buttons.append(
-				el(
-					"button",
-					{ class: "btn btn-ghost", type: "button", on: { click: () => void readSelected({ edit: true }) } },
-					icon("edit"),
-					"自己写这一章",
-				),
-			);
-		}
-		wrap.append(empty, buttons);
+		if (!streaming) wrap.append(paperButtons(mode, later, cursorAt, null));
+		wrap.append(empty);
 		return wrap;
 	}
 
-	const mode = proposal ? "proposal" : "author";
-	const value = draftText || (proposal ? proposal.content : chapterDraft);
+	// 抬头这一行只说「这是第几稿」，章名与状态在栏头上已经有了，不重复说一遍。
 	const revisionLabel = proposal
 		? `基线第 ${proposal.baseRevision} 稿`
-		: `第 ${ctx.chapterMeta(selected)?.revision || 1} 稿`;
+		: done
+			? `第 ${ctx.chapterMeta(selected)?.revision || 1} 稿`
+			: "原书原文";
 	const head = el(
 		"div",
 		{ class: "adapt-paper-head" },
-		el("span", { class: "eyebrow", text: mode === "proposal" ? "改编稿 · 等你定" : "这一章已改完" }),
-		el("span", { class: "adapt-paper-meta", text: `${wordLabel(value.length)} · ${revisionLabel}` }),
+		el("span", {
+			class: "eyebrow",
+			text: streaming && mode === "original" ? "改编者在写…" : revisionLabel,
+		}),
+		el("span", {
+			class: "adapt-paper-meta",
+			text: mode === "original" ? `${wordLabel(countWords(shown || originalText))} · 还没改` : wordLabel(countWords(shown || originalText)),
+		}),
 	);
-	const area = el("textarea", { class: "adapt-paper-body", rows: 22, spellcheck: "false" });
-	area.value = value;
-	area.addEventListener("input", () => {
-		draftText = area.value;
-		const meta = wrap.querySelector(".adapt-paper-meta");
-		if (meta) meta.textContent = `${wordLabel(countWords(area.value))} · ${revisionLabel}`;
-	});
-	// 先摆抬头（这是哪一版、多少字），再说这一版动了什么，最后才是正文。
-	// 改成这一版改了什么的时候，那几条要压在正文上头：作者是照着这几条决定
-	// 「采用还是再改」的，藏在二十四行正文下面等于让人先滚动再判断。
 	wrap.append(head);
+	// 摘要留着：那是改编者一句话说清这一版干了什么；改动条目只归左栏，
+	// 右栏再列一遍等于把正文挤到屏幕外面去。
 	if (proposal?.summary) wrap.append(el("p", { class: "adapt-summary", text: proposal.summary }));
+	wrap.append(paperBody(mode, shown));
+	wrap.append(paperButtons(mode, later, cursorAt));
+	return wrap;
+}
 
-	const changes = proposal?.changes || [];
-	if (changes.length) {
-		const list = el("div", { class: "changes-list" });
-		for (const change of changes) {
-			list.append(
+/**
+ * 正文：默认是「读」，改过的句子垫底色。
+ * 只想就地动两笔的时候才换成输入框 —— 改编台的正文首先是给人读的。
+ */
+function paperBody(mode, shown) {
+	// 改过的句子拿原书做底子对照；还没改的章原书就是正文本身，走段落摊开。
+	const base = originalText || "";
+	const text = shown || originalText || "";
+	if (paperEditing) {
+		const area = el("textarea", { class: "adapt-paper-body", rows: 22, spellcheck: "false" });
+		area.value = text;
+		area.addEventListener("input", () => {
+			draftText = area.value;
+			const meta = $("#adapt-paper")?.querySelector(".adapt-paper-meta");
+			if (meta && mode !== "original") meta.textContent = wordLabel(countWords(area.value));
+		});
+		return area;
+	}
+	const box = el("div", { class: "adapt-paper-body adapt-paper-read" });
+	if (!text.trim()) {
+		box.append(el("p", { class: "set-note", text: "这一章还没有字。" }));
+		return box;
+	}
+	// 原书这一章取到了才能标改动；取不到就老实按段落摊开，不假装对照过。
+	if (base && base.trim() && text !== base) {
+		const segments = diffSegments(base, text);
+		const changed = segments.filter((segment) => segment.changed).length;
+		if (changed) {
+			box.append(
 				el(
-					"div",
-					{ class: "change-row" },
-					el("span", { class: `change-kind kind-${change.kind}`, text: CHANGE_LABELS[change.kind] || "其他" }),
-					el("div", { class: "change-text" }, el("b", { text: change.summary }), change.detail ? el("span", { class: "change-detail", text: change.detail }) : null),
+					"p",
+					{ class: "adapt-legend" },
+					icon("wand", "ico ico-sm"),
+					el("span", { text: `对照原书：${changed} 处不同，垫底色的就是改过的地方。` }),
 				),
 			);
 		}
-		wrap.append(el("p", { class: "eyebrow", text: "这一版改了什么" }), list);
+		box.append(...markedNodes(segments, { paragraphClass: "adapt-p", markClass: "adapt-mark" }));
+	} else {
+		box.append(...paragraphBlocks(text, "adapt-p"));
 	}
-	wrap.append(area);
+	return box;
+}
 
+/** 正文底下那一排动作：按「这一版是提案 / 已改 / 还没改」给不同的下一步。 */
+function paperButtons(mode, later, cursorAt, area) {
 	const actions = el("div", { class: "adapt-actions" });
+	const editToggle = (label) =>
+		el(
+			"button",
+			{
+				class: "btn btn-quiet btn-sm",
+				type: "button",
+				on: {
+					click: () => {
+						paperEditing = !paperEditing;
+						renderPaper();
+					},
+				},
+			},
+			icon("edit"),
+			label,
+		);
 	if (mode === "proposal") {
 		actions.append(
 			el(
 				"button",
-				{ class: "btn btn-seal", type: "button", on: { click: () => void applyVersion(area) } },
+				{ class: "btn btn-seal", type: "button", on: { click: () => void applyVersion() } },
 				icon("check"),
 				"采用这一版",
 			),
 		);
+		actions.append(editToggle(paperEditing ? "收起笔" : "就地改"));
 		actions.append(
 			el(
 				"button",
@@ -854,15 +905,20 @@ function paperNode() {
 				"按现稿重交一版",
 			),
 		);
-	} else {
-		actions.append(
-			el(
-				"button",
-				{ class: "btn btn-seal", type: "button", on: { click: () => void saveAuthorVersion(area) } },
-				icon("save"),
-				"存下这一版",
-			),
-		);
+		return actions;
+	}
+	if (mode === "author") {
+		if (paperEditing) {
+			actions.append(
+				el(
+					"button",
+					{ class: "btn btn-seal", type: "button", on: { click: () => void saveAuthorVersion() } },
+					icon("save"),
+					"存下这一版",
+				),
+			);
+		}
+		actions.append(editToggle(paperEditing ? "收起笔" : "就地改"));
 		actions.append(
 			el(
 				"button",
@@ -874,22 +930,35 @@ function paperNode() {
 		actions.append(
 			el(
 				"button",
-				{ class: "btn btn-quiet btn-sm", type: "button", on: { click: () => void readSelected({ edit: true }) } },
-				icon("edit"),
-				"整屏改",
-			),
-		);
-		actions.append(
-			el(
-				"button",
 				{ class: "btn btn-quiet btn-sm", type: "button", on: { click: () => void runSelected(true) } },
 				icon("refresh"),
 				"让改编者再改一版",
 			),
 		);
+		return actions;
 	}
-	wrap.append(actions);
-	return wrap;
+	// 还没改的章：这里只有原书，能做的只有「自己写」或「先回去改轮到的章」。
+	if (!streaming) {
+		if (later) {
+			actions.append(
+				el(
+					"button",
+					{ class: "btn btn-primary", type: "button", on: { click: () => void jumpToCursor() } },
+					icon("arrow-right"),
+					`先改第 ${cursorAt + 1} 章`,
+				),
+			);
+		}
+		actions.append(
+			el(
+				"button",
+				{ class: "btn btn-ghost", type: "button", on: { click: () => void readSelected({ edit: true }) } },
+				icon("edit"),
+				"自己写这一章",
+			),
+		);
+	}
+	return actions;
 }
 
 async function jumpToCursor() {
@@ -904,8 +973,14 @@ async function jumpToCursor() {
 	await render({ force: true });
 }
 
-async function applyVersion(area) {
-	const content = area.value.trim();
+/** 正文现在这一版是什么：就地改过就是改后的，否则是提案或已存下的稿。 */
+function currentPaperText() {
+	if (draftText) return draftText;
+	return proposal ? proposal.content || "" : chapterDraft || "";
+}
+
+async function applyVersion() {
+	const content = currentPaperText().trim();
 	if (!content) {
 		toast("改编稿是空的，采用不了。", "warn");
 		return;
@@ -919,7 +994,7 @@ async function applyVersion(area) {
 	try {
 		await api.applyProposal(ctx.state.project.id, selected, {
 			proposalId: proposal?.id,
-			content: area.value,
+			content,
 			summary: proposal?.summary,
 			changes: proposal?.changes,
 		});
@@ -932,8 +1007,8 @@ async function applyVersion(area) {
 }
 
 /** 作者自己在改编稿上手改的那一版：不带 proposalId，服务端照样落盘、记台账。 */
-async function saveAuthorVersion(area) {
-	const content = area.value.trim();
+async function saveAuthorVersion() {
+	const content = currentPaperText().trim();
 	if (!content) {
 		toast("这一版还是空的。", "warn");
 		return;
@@ -949,7 +1024,7 @@ async function saveAuthorVersion(area) {
 	});
 	if (!yes) return;
 	try {
-		await api.applyProposal(ctx.state.project.id, selected, { content: area.value });
+		await api.applyProposal(ctx.state.project.id, selected, { content });
 		toast("存下了。", "ok");
 		await afterSave();
 	} catch (error) {
@@ -979,6 +1054,7 @@ async function afterSave() {
 	draftText = "";
 	chapterDraft = "";
 	chapterDraftFor = "";
+	paperEditing = false;
 	await ctx.reloadProjectStructure();
 	if (ctx.state.activeId === selected) await ctx.loadDraft(selected, { silent: true });
 	await ensureData(true);
@@ -1052,7 +1128,38 @@ async function loadProposal(chapterId) {
 		}
 	}
 	await loadChapterDraft(chapterId);
+	await loadOriginal(chapterId);
 	renderPaper();
+}
+
+/**
+ * 这一章的原书正文：章序与原书章节一一对齐（建工程时就是这么立的章目）。
+ * 待改的章靠它给作者看东西，改过的章靠它标出改动。
+ */
+async function loadOriginal(chapterId) {
+	const key = `${ctx.state.project.id}:${chapterId}`;
+	if (originalFor === key) return;
+	originalFor = key;
+	originalText = "";
+	const plan = ctx.state.project?.adaptation;
+	const sourceId = plan?.sourceId || source?.id || "";
+	if (!sourceId) return;
+	const chapters = ctx.state.project?.outline || [];
+	const index = chapters.findIndex((item) => item.id === chapterId);
+	if (index < 0) return;
+	try {
+		// source.chapters 是 getAdaptation 一并带回来的目录，省一次目录请求。
+		const catalog = source?.chapters || [];
+		if (!catalog.length) source = await api.getAdaptation(ctx.state.project.id).then((data) => data.source || source);
+		const list = source?.chapters || [];
+		const one = list[index];
+		if (!one) return;
+		const data = await api.readSourceChapter(sourceId, one.id);
+		const found = data?.chapter || {};
+		originalText = found.content || found.text || "";
+	} catch {
+		originalText = "";
+	}
 }
 
 /** 已经改过的章：把现在这一版正文取来，作者可以直接在上面改。 */

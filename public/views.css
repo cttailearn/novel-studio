@@ -3437,6 +3437,72 @@ dialog.modal.is-polish {
 	border-color: var(--seal-line);
 }
 
+/* 只读的那一版正文：和输入框柱在同一块纸上，只是把光标收起来。
+   高一点、自己滚 —— 章再长也不该把下面的动作按钮顶出屏幕。 */
+.adapt-paper-body.adapt-paper-read {
+	max-height: 62vh;
+	overflow-y: auto;
+	white-space: normal;
+	cursor: auto;
+}
+
+.adapt-p {
+	margin: 0 0 0.85em;
+	font-family: var(--song);
+	font-size: var(--fs-lg);
+	line-height: 1.95;
+	color: var(--ink);
+	text-indent: 2em;
+}
+
+.adapt-p:last-child {
+	margin-bottom: 0;
+}
+
+/* 改过的句子垫底色：和读稿台的 .reader-mark 同一套，只是底色更实一点，
+   因为改编台的纸面亮度比读稿台高。 */
+.adapt-mark {
+	padding: 0 1px;
+	border-radius: 2px;
+	background: var(--seal-wash);
+	color: inherit;
+	box-shadow: inset 0 -1px 0 var(--seal-line);
+}
+
+.adapt-legend {
+	display: flex;
+	align-items: center;
+	gap: var(--sp-2);
+	margin: 0 0 var(--sp-3);
+	padding: var(--sp-2) var(--sp-3);
+	border: 1px dashed var(--line);
+	border-radius: var(--r-2);
+	font-size: var(--fs-2xs);
+	color: var(--ink-3);
+	text-indent: 0;
+}
+
+/* 「改编者」挂在「改编方向」那条上：它是这一栏的主按钮，
+   但不能把 summary 撑开、也不能抢走 summary 的点击。 */
+.adapt-run-brief {
+	flex: none;
+	margin-left: auto;
+	height: 24px;
+	padding: 0 var(--sp-2);
+	gap: 4px;
+	font-size: var(--fs-2xs);
+}
+
+.adapt-run-brief .ico {
+	width: 12px;
+	height: 12px;
+}
+
+.adapt-run-brief[disabled] {
+	opacity: 0.55;
+	cursor: default;
+}
+
 /* 正文上头的「这一版改了什么」自己滚：条目再多也不该把正文挤到屏幕外面，
    作者要的是一边看改动、一边看正文。 */
 .adapt-paper-col .changes-list {
@@ -4914,6 +4980,9 @@ body.is-reading {
 	overflow: hidden;
 	min-width: 0;
 	max-width: 100%;
+	/* overflow:hidden 会把 min-height:auto 变成 0：副驾那种纵向 flex 栏里，
+	   卡会被挤成一条 2px 的缝（内容全被裁掉）。别让它缩。 */
+	flex: none;
 }
 
 .run-card-head,
