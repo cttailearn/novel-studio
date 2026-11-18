@@ -10,11 +10,11 @@
 
 ## 下载
 
-当前版本 **v0.7.2**（云端账号版：服务端可以部署到服务器，Web / 桌面 / Android 三端登录同一账号读写同一份数据；手机默认用本机数据，想连云端时在「设置 → 服务器」里填地址登录）：
+当前版本 **v0.7.3**（云端账号版：服务端可以部署到服务器，Web / 桌面 / Android 三端登录同一账号读写同一份数据；手机默认用本机数据，想连云端时在「设置 → 服务器」里填地址登录）：
 
-- [Windows x64 安装版](https://github.com/cttailearn/novel-studio/releases/download/v0.7.2/novel-studio-v0.7.2-windows-x64-setup.exe)：NSIS 安装包；未做 Authenticode 签名，SmartScreen 可能提示。
-- [Android arm64 APK](https://github.com/cttailearn/novel-studio/releases/download/v0.7.2/novel-studio-v0.7.2-android-arm64.apk)：Android 7.0+；release 优化版，使用测试签名，需允许安装未知来源应用；可在应用内「设置 → 关于」直接下载安装。
-- [发布说明](https://github.com/cttailearn/novel-studio/releases/tag/v0.7.2) · [更新日志](CHANGELOG.zh.md)
+- [Windows x64 安装版](https://github.com/cttailearn/novel-studio/releases/download/v0.7.3/novel-studio-v0.7.3-windows-x64-setup.exe)：NSIS 安装包；未做 Authenticode 签名，SmartScreen 可能提示。
+- [Android arm64 APK](https://github.com/cttailearn/novel-studio/releases/download/v0.7.3/novel-studio-v0.7.3-android-arm64.apk)：Android 7.0+；release 优化版，使用测试签名，需允许安装未知来源应用；可在应用内「设置 → 关于」直接下载安装。
+- [发布说明](https://github.com/cttailearn/novel-studio/releases/tag/v0.7.3) · [更新日志](CHANGELOG.zh.md)
 
 > 网页版已经更新：<https://novel.cttai.art>。这一版先按预发布发（自动更新读的 `latest.json` 要带签名的安装包，
 > 签名口令到位后再补），`latest` 仍指 v0.5.1。
