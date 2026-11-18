@@ -60,6 +60,14 @@ const AUDIT_LABELS = {
 
 let uid = 0;
 
+/**
+ * 设置面板里填好服务器地址、点「连上并登录」时暂存在这里。
+ *
+ * 地址只记在内存里、不写 localStorage：没登录成功就写进配置的话，
+ * 下次冷启动会直接进云端模式，网络不通就卡在登录页上。
+ */
+let pendingBase = "";
+
 const state = {
 	booted: false,
 	button: null,
@@ -76,6 +84,14 @@ const state = {
 	sessions: [],
 	authConfig: { ...DEFAULT_AUTH_CONFIG },
 	connectMode: "login",
+	/**
+	 * 连接云端表单是否展开。
+	 *
+	 * 原生壳里默认收起：先让人看清「这台设备用本机数据，什么都写得了」，
+	 * 想连云端再展开。手机上装完第一次打开就撞见一串服务器/账号字段，
+	 * 会被当成"必须先登录"，登录不进去就以为应用坏了。
+	 */
+	connectOpen: false,
 	flash: null,
 	notice: null,
 	admin: {
@@ -458,7 +474,7 @@ function renderBody() {
 		return;
 	}
 	if (state.mode === "connect") {
-		body.append(connectView());
+		body.append(state.connectOpen ? connectView() : localModeView());
 		return;
 	}
 	if (state.mode === "expired") {
@@ -505,6 +521,12 @@ async function openAccount() {
 	renderAll();
 	if (!state.dialog.open) state.dialog.showModal();
 	await loadAccount();
+	// 用户在「设置 → 服务器」里明确点了「连上并登录」：即便这台机器平时
+	// 走单机模式，也该把连接表单摊开，而不是回一句「当前是单机模式」。
+	if (state.connectOpen && state.mode === "single") {
+		state.mode = "connect";
+		renderAll();
+	}
 }
 
 async function loadAccount() {
@@ -825,6 +847,44 @@ function logoutSection() {
 
 // ── 连接云端 ────────────────────────────────────────────────
 
+/**
+ * 本机模式的说明页（原生壳默认看到的就是这一页）。
+ *
+ * 不写「请连接服务器」这种硬话：这个应用本来就是本地优先的——
+ * 稿子落在本机，写稿、改编、润色都不需要服务器。云端只是多设备同步与备份。
+ */
+function localModeView() {
+	const wrap = el("div", "account-page account-local-page");
+	wrap.append(
+		pageHead(
+			"这台设备用本机数据",
+			"稿子、素材、改写记录都在这个应用里，不连服务器也照常写。想让自己几台设备共用同一个账号，再连云端。",
+		),
+	);
+
+	const facts = el("ul", "account-local-facts");
+	for (const line of [
+		"本机模式：不用登录，打开就能写。",
+		"云端模式：作品存在你自己的服务器上，多台设备同一账号。",
+		"两种模式的稿子互不覆盖，随时可以切回来。",
+	]) {
+		facts.append(el("li", "account-local-fact", line));
+	}
+	wrap.append(facts);
+
+	const actions = el("div", "account-form-actions");
+	const connect = button("连接云端账号", "btn btn-ink", () => {
+		state.connectOpen = true;
+		renderBody();
+	});
+	actions.append(connect);
+	wrap.append(actions);
+
+	wrap.append(el("p", "account-note", "不着急也行：先这么写着，想连的时候到「设置 → 服务器」里填地址也一样。"));
+
+	return wrap;
+}
+
 function connectView() {
 	const wrap = el("div", "account-page");
 	wrap.append(
@@ -833,6 +893,13 @@ function connectView() {
 			"这台设备现在用的是本地数据。填入云端服务器地址并登录后，作品会保存到云端，多台设备共用同一个账号。",
 		),
 	);
+	const backRow = el("div", "account-connect-back");
+	const back = button("先不连，用本机", "btn btn-quiet btn-sm", () => {
+		state.connectOpen = false;
+		renderBody();
+	});
+	backRow.append(back);
+	wrap.append(backRow);
 
 	const form = document.createElement("form");
 	form.className = "account-form account-connect-form";
@@ -842,8 +909,10 @@ function connectView() {
 	server.autocapitalize = "off";
 	// 预填官方地址；上次连过的服务器优先，用户手填的地址会覆盖默认值。
 	const remembered =
+		pendingBase ||
 		(getCloudConfig() && getCloudConfig().base) ||
 		(typeof window.__NOVEL_CLOUD__?.base === "string" ? window.__NOVEL_CLOUD__.base : "");
+	pendingBase = "";
 	server.value = remembered || DEFAULT_CLOUD_BASE;
 	const serverField = field(
 		"服务器地址",
@@ -1614,4 +1683,26 @@ export function bindAccount() {
 		void openAccount();
 	});
 	void refreshButton();
+}
+
+/**
+ * 打开账户面板（设置里的「账号与用量」也走这里）。
+ *
+ * 与 #account-btn 的差别只是能被别的模块调用：面板本身、加载逻辑都不变。
+ */
+export function openAccountPanel() {
+	void openAccount();
+}
+
+/**
+ * 直接打开「连接云端账号」表单。
+ *
+ * 设置 → 服务器 里点「连上并登录」时用：省掉本机说明页，
+ * 地址栏用传进来的地址（其次才是上次连过的服务器），不用重填。
+ */
+export function openCloudConnect(base = "") {
+	const wanted = normalizeCloudBase(base);
+	if (wanted) pendingBase = wanted;
+	state.connectOpen = true;
+	void openAccount();
 }

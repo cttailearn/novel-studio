@@ -391,13 +391,29 @@ async function checkForUpdates(silent) {
 		}
 	} catch (error) {
 		// 后台静默检查失败只记日志，不把「尚未检查」的干净状态改成红字；
-		// 用户主动点检查时仍然要把失败原因说清楚。
+		// 用户主动点检查时也只是把话说软一点——连不上更新服务不该像报错。
 		if (silent) console.warn("自动检查更新失败", error);
-		else state.error = error instanceof Error ? error.message : String(error);
+		else state.error = friendlyCheckError(error);
 	} finally {
 		state.checking = false;
 		sync();
 	}
+}
+
+/** 检查更新失败时的说法：网络问题说人话，其余照原样。 */
+function friendlyCheckError(error) {
+	const raw = error instanceof Error ? error.message : String(error || "");
+	const text = raw.toLowerCase();
+	const offline =
+		text.includes("failed to fetch") ||
+		text.includes("network") ||
+		text.includes("offline") ||
+		text.includes("dns") ||
+		text.includes("timed out") ||
+		text.includes("timeout") ||
+		text.includes("connection");
+	if (offline) return "这会儿连不上更新服务，不影响写稿；过一会儿再试也行。";
+	return raw || "检查更新没有成功，过一会儿再试。";
 }
 
 /** 状态行文字：下载阶段给百分比与已下载量，安装阶段说明会重启。 */

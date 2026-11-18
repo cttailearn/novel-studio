@@ -8,6 +8,14 @@
 import * as api from "./api.js";
 import * as ctx from "./ctx.js";
 import { $, $$, el, icon, toast, openModal, confirmAction, timeAgo, num } from "./core.js";
+import { openAccountPanel, openCloudConnect } from "../account.js";
+import {
+	DEFAULT_CLOUD_BASE,
+	clearCloudConfig,
+	cloudBase as readCloudBase,
+	getCloudConfig as getStoredCloud,
+	normalizeCloudBase,
+} from "../cloud-client.js";
 
 let mounted = false;
 let panel = "model";
@@ -86,6 +94,7 @@ function renderModeLine() {
 async function renderPanel() {
 	if (panel === "model") await renderModelPanel();
 	if (panel === "prefs") renderPrefsPanel();
+	if (panel === "server") renderServerPanel();
 	if (panel === "data") await renderDataPanel();
 	if (panel === "about") renderAboutPanel();
 }
@@ -644,6 +653,182 @@ function applyFontScale(scale) {
 function applyLineHeight(lh) {
 	ctx.savePrefs({ lineHeight: lh });
 	document.documentElement.style.setProperty("--paper-lh", String(lh));
+}
+
+/* ---------------------------------------------------------------- 服务器 */
+
+/**
+ * 服务器：这一台把稿子放在哪儿。
+ *
+ * 默认是「本机」——不连服务器也能把一本书写完，手机上装完就能用。
+ * 想让自己几台设备共用一个账号时，在这里填地址、连上并登录；
+ * 连过之后这一页显示连的是哪台，并给一个「断开，回到本机」。
+ *
+ * 地址在登录成功之前不写进 localStorage：写早了，下次冷启动会直接
+ * 进云端模式，网络不通就卡在登录页上——这是本地优先最不该出现的样子。
+ */
+function renderServerPanel() {
+	const host = $("#settings-panel-server");
+	if (!host) return;
+	host.replaceChildren();
+
+	const base = readCloudBase();
+	const auth = window.__NOVEL_AUTH_STATE__ || {};
+	const who = auth.user ? auth.user.name || auth.user.email || "已登录" : "";
+
+	if (base) {
+		const card = el("div", { class: "set-card" });
+		card.append(
+			el("p", { class: "set-note", text: "这台设备连着云端，作品保存在下面这台服务器上。" }),
+			el("div", { class: "set-row" },
+				el("div", { class: "set-row-main" },
+					el("div", { class: "set-row-label", text: "服务器" }),
+					el("div", { class: "set-row-hint", text: base }),
+				),
+			),
+			el("div", { class: "set-row" },
+				el("div", { class: "set-row-main" },
+					el("div", { class: "set-row-label", text: "账号" }),
+					el("div", { class: "set-row-hint", text: who || "已经连上，账号信息还没读到" }),
+				),
+			),
+		);
+		card.append(
+			el("div", { class: "set-actions" },
+				el("button", {
+					class: "btn btn-ghost btn-sm",
+					type: "button",
+					text: "账号与用量",
+					on: { click: () => openAccountPanel() },
+				}),
+				el("button", {
+					class: "btn btn-quiet btn-sm",
+					type: "button",
+					text: "断开，回到本机",
+					on: {
+						click: async () => {
+							const ok = await confirmAction({
+								title: "断开云端，回到本机？",
+								message: "断开后这台设备切回本机模式，现在的稿子还在本机；云端上的作品不会被删掉，下次登录还在。",
+								confirmLabel: "断开",
+								danger: true,
+							});
+							if (!ok) return;
+							clearCloudConfig();
+							window.location.reload();
+						},
+					},
+				}),
+			),
+		);
+		host.append(section("云端账号", card));
+		host.append(note("想换一台服务器，先「断开，回到本机」，再填新地址登录。"));
+		return;
+	}
+
+	if (window.__NOVEL_MULTIUSER__) {
+		const origin = window.location.origin;
+		const card = el("div", { class: "set-card" });
+		card.append(
+			el("p", { class: "set-note", text: "这个页面由服务器直接提供，账号就是这台服务器的账号。" }),
+			el("div", { class: "set-row" },
+				el("div", { class: "set-row-main" },
+					el("div", { class: "set-row-label", text: "服务器" }),
+					el("div", { class: "set-row-hint", text: origin }),
+				),
+			),
+			el("div", { class: "set-actions" },
+				el("button", {
+					class: "btn btn-ghost btn-sm",
+					type: "button",
+					text: "账号与用量",
+					on: { click: () => openAccountPanel() },
+				}),
+			),
+		);
+		host.append(section("这台服务器", card));
+		return;
+	}
+
+	// 单机部署的服务器：页面由服务器提供，数据也在服务器上，没有账号这回事。
+	// 这一页要说清「你不用登录」，而不是摆一张连云端的表把人弄糊涂。
+	if (window.__DSH_LOCAL_MODE__ !== true) {
+		const card = el("div", { class: "set-card" });
+		card.append(
+			el("p", { class: "set-note", text: "这个页面由服务器提供，稿子也存在这台服务器上，不用登录。" }),
+			el("div", { class: "set-row" },
+				el("div", { class: "set-row-main" },
+					el("div", { class: "set-row-label", text: "服务器" }),
+					el("div", { class: "set-row-hint", text: window.location.origin }),
+				),
+			),
+			el("p", { class: "set-note", text: "手机上的应用默认用本机数据，不连服务器也能写；想连，请在那台设备上装应用后在「设置 → 服务器」里填地址。" }),
+		);
+		host.append(section("这台服务器", card));
+		return;
+	}
+
+	// 本机模式：这是原生应用（手机/桌面）的默认样子。
+	const localCard = el("div", { class: "set-card" });
+	localCard.append(
+		el("p", { class: "set-note", text: "本机模式：稿子留在这台设备上。写稿、改编、润色都不用服务器，断网也照常写。" }),
+		el("p", { class: "set-note", text: "想多台设备共用一个账号，才需要连云端。不连也一直能用。" }),
+	);
+	host.append(section("这台设备", localCard));
+
+	const remembered = (getStoredCloud() && getStoredCloud().base) || "";
+	const addr = el("input", {
+		class: "set-input",
+		type: "url",
+		inputmode: "url",
+		value: remembered || DEFAULT_CLOUD_BASE,
+		placeholder: DEFAULT_CLOUD_BASE,
+		spellcheck: "false",
+		autocomplete: "off",
+		"aria-label": "服务器地址",
+	});
+	const connect = el("button", {
+		class: "btn btn-primary btn-sm",
+		type: "button",
+		text: "连上并登录",
+		on: {
+			click: () => {
+				const next = normalizeCloudBase(addr.value) || DEFAULT_CLOUD_BASE;
+				if (!next) {
+					toast("先填一个服务器地址。", "error");
+					addr.focus();
+					return;
+				}
+				openCloudConnect(next);
+			},
+		},
+	});
+	const cloudCard = el("div", { class: "set-card" });
+	cloudCard.append(
+		el("div", { class: "set-row" },
+			el("div", { class: "set-row-main" },
+				el("div", { class: "set-row-label", text: "服务器地址" }),
+				el("div", { class: "set-row-hint", text: "默认是官方地址；用自建服务器就换成自己的域名。" }),
+			),
+			el("div", { class: "set-row-control" }, addr),
+		),
+		el("div", { class: "set-actions" },
+			connect,
+			el("button", {
+				class: "btn btn-quiet btn-sm",
+				type: "button",
+				text: "用默认地址",
+				on: {
+					click: () => {
+						addr.value = DEFAULT_CLOUD_BASE;
+						addr.focus();
+					},
+				},
+			}),
+		),
+		el("p", { class: "set-note", text: "登录成功之后才会切到云端；连不上就一直留在本机，什么都不影响。" }),
+	);
+	host.append(section("连云端（可选）", cloudCard));
 }
 
 /* ---------------------------------------------------------------- 数据 */

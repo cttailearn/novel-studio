@@ -23,6 +23,7 @@ const manifest = JSON.parse(await read("manifest.json"));
 const style = await read("style.css");
 const views = await read("views.css");
 const overlays = await read("overlays.css");
+const accountJs = await read("account.js");
 
 const moduleNames = (await readdir(path.join(publicDir, "app"))).filter((name) => name.endsWith(".js")).sort();
 const modules = new Map();
@@ -612,6 +613,37 @@ check("起稿/续写想交代一句时，从「更多」里走", () => {
 	expect(/confirmWrite\("continue"\)/, paper, "要开交代框");
 	expect(/confirmWrite\("create"\)/, paper, "要开交代框");
 	expect(/note:\s*note \|\| undefined/, paper, "交代要交给 /write 的 note");
+});
+
+check("设置里能配服务器、能连能断，本机模式不逼人登录", () => {
+	// 手机装上先看到的是本机模式：账号面板只说明「本机也能写」，
+	// 想连云端得自己点开表单；服务器地址与登录都在 设置 → 服务器 里。
+	const settings = modules.get("settings-view.js");
+	const account = accountJs;
+	expect(/data-panel="server"/, html, "设置里要有「服务器」这一页");
+	expect(/id="settings-panel-server"/, html, "要留一个容器给服务器面板");
+	expect(/renderServerPanel\(\)/, settings, "面板要有人画");
+	expect(/openCloudConnect\(/, settings, "「连上并登录」交给账号面板");
+	expect(/openAccountPanel\(/, settings, "云端模式要能打开账号与用量");
+	expect(/clearCloudConfig\(\)/, settings, "断开云端要真的清配置");
+	expect(/localModeView\(\)/, account, "没有云端配置时先给本机说明页");
+	expect(/state\.connectOpen \? connectView\(\) : localModeView\(\)/, account, "默认收起连接表单");
+	expect(/先不连，用本机/, account, "展开后能退回本机");
+	expect(/pendingBase/, account, "地址只在内存里等到登录成功");
+});
+
+check("Android 包给系统栏让位，顶栏按钮点得到", () => {
+	// Android 15 起强制 edge-to-edge，WebView 里 env(safe-area-inset-*) 是 0：
+	// 顶栏那排按钮会正落在状态栏底下，手指按不到。必须在生成的 MainActivity
+	// 里按系统栏尺寸补 padding——而 gen/android 不入库，只能写进构建前补丁。
+	return (async () => {
+		const patch = await readFile(path.join(root, "scripts/android-patch.mjs"), "utf8");
+		expect(/MOGENG_INSETS/, patch, "补丁要自带标记，重复执行不重复插");
+		expect(/setOnApplyWindowInsetsListener/, patch, "要按 insets 让位");
+		expect(/android\.R\.id\.content/, patch, "补在外壳根视图上，WebView 才跟着缩");
+		expect(/enableEdgeToEdge/, patch, "保留 edge-to-edge，靠 padding 让位");
+		expect(/MainActivity\.kt/, patch, "补的就是生成出来的 MainActivity");
+	})();
 });
 
 /* ------------------------------------------------------------- 收尾 */
