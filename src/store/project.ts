@@ -401,6 +401,80 @@ export interface AdaptationChange {
 }
 
 /**
+ * 这条「章名」改动到底算不算改动。
+ *
+ * 模型有时会把「本章章名维持《…》」也当成一条改动交上来。说"没变"不算改动：
+ * 进了台账只会把真改动淹掉，后面几章按章名检索也检索不出东西来。
+ * 只有明确说出「旧名 → 新名」的那种才算数。
+ */
+export function isTitleChangeSummary(summary: string): boolean {
+	return /改为|改名为|改成|换成|→|->/.test(summary);
+}
+
+/**
+ * 一条「章名」改动到底改了哪个名字。
+ *
+ * 只认「《旧名》改为《新名》」这种写清前后名的说法。有了它，采用这一步
+ * 就能把名字补上 —— 模型交稿时说了改名、却忘了调 rename_chapter 的情形
+ * 真会发生；不补，台账写着新名、章目还印着旧名，后面几章照着分裂的设定写。
+ */
+export function renamedTitleFromSummary(summary: string): { before: string; after: string } | undefined {
+	const quoted = summary.match(/《([^》]+)》\s*(?:改为|改名为|改成|换成|变为)\s*《([^》]+)》/);
+	if (quoted) return { before: quoted[1]!.trim(), after: quoted[2]!.trim() };
+	const arrow = summary.match(/《([^》]+)》\s*(?:→|->)\s*(?:《([^》]+)》|([^》\s]+))/);
+	if (arrow) {
+		const after = (arrow[2] ?? arrow[3] ?? "").trim();
+		if (after) return { before: arrow[1]!.trim(), after };
+	}
+	return undefined;
+}
+
+/**
+ * 题目去掉「第 N 章」这一层。
+ *
+ * 从原书拆出来的章目常常带着「第1章 开端」这样的编号前缀，而模型在台账里
+ * 只会写《开端》。比对前后名时两边都先剥掉编号，否则「改名没改成」会被
+ * 误判成「作者自己改过名字」，白白丢掉一次改名。
+ */
+export function titleCore(title: string): string {
+	return title
+		.replace(/\s+/g, " ")
+		.trim()
+		.replace(/^第[0-9０-９零〇一二三四五六七八九十百千两]+[章节回][\s·、:：.,，。\-—_]*/, "")
+		.trim();
+}
+
+/**
+ * 清掉台账里显然不是改动的条目，并去掉一字不差说过两遍的那几条。
+ *
+ * 这两个毛病都有真实来路：
+ *   · rename_chapter 当场记一条，模型又在提案的 changes 里照抄一条 —— 同一句话两行；
+ *   · 把「章名维持《…》」当改动写进来 —— 那不是改动。
+ * 只清理这两类：顺序、id、理由、前后名原样留着。台账是后文认前文的唯一入口，
+ * 多清一条比多留一条更伤。重复条目合并时留下带理由的那条，位置按第一次出现算。
+ */
+export function pruneAdaptationChanges(changes: readonly AdaptationChange[]): AdaptationChange[] {
+	const kept: AdaptationChange[] = [];
+	const byKey = new Map<string, number>();
+	for (const change of changes) {
+		const summary = change.summary.trim();
+		if (!summary) continue;
+		if (change.kind === "title" && !isTitleChangeSummary(summary)) continue;
+		const key = change.chapterId + "\u0000" + change.kind + "\u0000" + summary;
+		const at = byKey.get(key);
+		if (at === undefined) {
+			byKey.set(key, kept.length);
+			kept.push(change);
+			continue;
+		}
+		// 同一句话说了两遍：留下带理由的那条，别让"改章名"在台账里丢掉为什么改。
+		const existing = kept[at]!;
+		if (!existing.detail && change.detail) kept[at] = { ...existing, detail: change.detail };
+	}
+	return kept;
+}
+
+/**
  * 改编计划：原书从哪来、总体要求是什么、已经改过哪些。
  *
  * 存在骨架里而不是另开文件，是因为它必须与大纲/草稿一起原子落盘 ——
@@ -552,7 +626,8 @@ function normalizeAdaptation(raw: unknown): AdaptationPlan | undefined {
 		sourceTitle: typeof input.sourceTitle === "string" ? input.sourceTitle : "",
 		brief: typeof input.brief === "string" ? input.brief : "",
 		...(typeof input.cursor === "string" ? { cursor: input.cursor } : {}),
-		changes,
+		// 老数据里可能已经躺着「章名维持」与一字不差的重复条目，读进来时就地清一遍。
+		changes: pruneAdaptationChanges(changes),
 		createdAt: typeof input.createdAt === "number" ? input.createdAt : now,
 		updatedAt: typeof input.updatedAt === "number" ? input.updatedAt : now,
 	};

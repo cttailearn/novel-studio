@@ -105,6 +105,10 @@ const ADAPT_BODY = [
 ].join("\n\n");
 // 附言里出现这句话，假模型就先把章名改了再交稿：用来验证智能体改名这条路。
 const ADAPT_RENAME_NOTE = "顺带改个名";
+// 附言里出现这句话，假模型交上来的改动清单里就故意混进两种脏数据：
+// 一字不差说了两遍的那条，和「本章章名维持《…》」这种根本没改的空话。
+// 真模型两种都犯过 —— 台账里留着它们，"改了哪几处"就再也说不清了。
+const ADAPT_TITLE_NOISE_NOTE = "题目再定一定";
 // 局部修改可以指向别的章（比如没装料的空渡章），所以目标由用例在发请求前设定。
 let patchTarget = { chapterId: "ch01", find: PATCH_FIND, replace: PATCH_REPLACE };
 const mockServer = createServer((req, res) => {
@@ -234,7 +238,13 @@ const mockServer = createServer((req, res) => {
 							arguments: JSON.stringify({
 								content: ADAPT_BODY,
 								summary: "换了主角的名字，其余照原文。",
-								changes: [{ kind: "character", summary: "主角阿青改名青禾" }],
+								changes: body.includes(ADAPT_TITLE_NOISE_NOTE)
+									? [
+											{ kind: "character", summary: "主角阿青改名青禾" },
+											{ kind: "character", summary: "主角阿青改名青禾" },
+											{ kind: "title", summary: "本章章名维持《船底有洞》", detail: "题目没动。" },
+										]
+									: [{ kind: "character", summary: "主角阿青改名青禾" }],
 							}),
 						},
 					},
@@ -1638,6 +1648,73 @@ try {
 	// 改编的每一轮也进记录，作者能按记录接着改。
 	const adaptRecords = await req("GET", `/api/records?projectId=${adaptId}&role=adapt`);
 	check("改编轮次写进记录", adaptRecords.status === 200 && adaptRecords.data.records.length >= 2, String(adaptRecords.data.records?.length));
+
+	// 台账里只说了一遍、只记真事：
+	// 真模型会把 rename_chapter 记过的那次改名在提案 changes 里再抄一遍，
+	// 也会把「本章章名维持《…》」当改动交上来。重复与空话会淹掉真改动，
+	// 后面几章按关键词检索台账就什么也捞不着。
+	const noiseId = (await req("POST", "/api/projects", {
+		title: "台账去重用例",
+		adaptation: { sourceId: adaptSourceId, brief: "同一件事只说一遍。" },
+	})).data.project?.id as string;
+	check("另起一部改编工程验证台账去重", Boolean(noiseId));
+	const noiseRun = await streamPost(`/api/projects/${noiseId}/chapters/ch001/adapt`, {
+		modelRef: "mock/mock",
+		requestId: "workbench-adapt-noise-0001",
+		note: ADAPT_TITLE_NOISE_NOTE,
+	});
+	const noiseProposalId = String(noiseRun.events.find((event) => event.type === "proposal")?.proposal?.id ?? "");
+	check(
+		"带脏数据的那一版照样交上来了",
+		Boolean(noiseProposalId) &&
+			(noiseRun.events.find((event) => event.type === "proposal")?.proposal?.changes?.length ?? 0) === 3,
+		JSON.stringify(noiseRun.events.find((event) => event.type === "proposal")?.proposal?.changes),
+	);
+	const noiseAdopted = await req("POST", `/api/projects/${noiseId}/chapters/ch001/adapt/apply`, { proposalId: noiseProposalId });
+	check("采用之后返回 200", noiseAdopted.status === 200, String(noiseAdopted.status) + JSON.stringify(noiseAdopted.data));
+	const noiseLedger = (noiseAdopted.data.adaptation?.changes ?? []) as Record<string, any>[];
+	const noiseChapter = noiseLedger.filter((change) => change.chapterId === "ch001");
+	check(
+		"同一句话只留一条",
+		noiseChapter.filter((change) => String(change.summary).includes("改名青禾")).length === 1,
+		JSON.stringify(noiseChapter.map((change) => change.kind + ":" + change.summary)),
+	);
+	check(
+		"「章名维持」不算改动，没进台账",
+		noiseChapter.every((change) => change.kind !== "title"),
+		JSON.stringify(noiseChapter.filter((change) => change.kind === "title")),
+	);
+	// 换一版就换一套说法：这一章的旧条目要被新一版替掉，章名那几条例外（改名史留查）。
+	const renameNeeded = await req("POST", `/api/projects/${noiseId}/chapters/ch001/adapt/apply`, {
+		content: ADAPT_BODY + "\n\n（第二版）",
+		changes: [
+			{ kind: "plot", summary: "结局改成青禾没有上岸" },
+			{ kind: "title", summary: "《开端》改为《渡口》" },
+		],
+	});
+	check("换一版照样能存下", renameNeeded.status === 200, String(renameNeeded.status) + JSON.stringify(renameNeeded.data));
+	const afterRename = (await req("GET", `/api/projects/${noiseId}/adaptation`)).data.adaptation?.changes ?? [];
+	const afterRenameChapter = afterRename.filter((change: Record<string, any>) => change.chapterId === "ch001");
+	check(
+		"模型只说了改名没调工具：采用时把章名补上",
+		String(afterRenameChapter.find((change: Record<string, any>) => change.kind === "title")?.summary ?? "").includes("渡口"),
+		JSON.stringify(afterRenameChapter.map((change: Record<string, any>) => change.summary)),
+	);
+	check(
+		"章名真的落到了章目上",
+		String(
+			((await req("GET", `/api/projects/${noiseId}`)).data.project?.outline ?? []).find(
+				(chapter: Record<string, any>) => chapter.id === "ch001",
+			)?.title ?? "",
+		) === "渡口",
+		JSON.stringify((await req("GET", `/api/projects/${noiseId}`)).data.project?.outline?.[0]?.title),
+	);
+	check(
+		"上一版的正文改动被这一版替掉，不叠成两套",
+		afterRenameChapter.some((change: Record<string, any>) => String(change.summary).includes("没有上岸")) &&
+			!afterRenameChapter.some((change: Record<string, any>) => String(change.summary).includes("改名青禾")),
+		JSON.stringify(afterRenameChapter.map((change: Record<string, any>) => change.summary)),
+	);
 
 	mockMode = "stream";
 

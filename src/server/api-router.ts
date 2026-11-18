@@ -68,9 +68,12 @@ import {
 	linkMaterials,
 	MATERIAL_KINDS,
 	nextAdaptChapterId,
+	pruneAdaptationChanges,
 	registerCustomKinds,
 	removeMaterial,
 	renameChapterTitle,
+	renamedTitleFromSummary,
+	titleCore,
 	type ChapterDraft,
 	type ChapterMeta,
 	type ChapterStatus,
@@ -2729,8 +2732,26 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 				// 作者手改那一版前端不带小结：留上一版的小结，后面几章要靠它认这一章。
 				const keptSummary = summary || latest.drafts[chapterId]?.summary || "";
 				const beforeContent = (await store.readDraftBody(projectId, chapterId))?.content ?? "";
+				// 模型有时只在 changes 里说了改名、并没有真的调 rename_chapter：
+				// 台账写着新名、章目还印着旧名，后面几章就照着分裂的设定写。
+				// 采用这一步把名字补上 —— 只认「《旧名》改为《新名》」，而且必须对得上
+				// 当前章名才动手，作者后来自己改过的名字不该被这一次采用覆盖。
+				let finalTitle = planned.title;
+				const titlePair = changes
+					.map((change) => (change.kind === "title" ? renamedTitleFromSummary(change.summary) : undefined))
+					.find((pair): pair is { before: string; after: string } => Boolean(pair));
+				if (titlePair && titlePair.after !== titlePair.before) {
+					const current = store.get(projectId)?.outline.find((chapter) => chapter.id === chapterId);
+					const sameName = current ? titleCore(current.title) === titleCore(titlePair.before) : false;
+					if (current && sameName) {
+						finalTitle = titlePair.after;
+						store.mutate(projectId, (draft) => {
+							renameChapterTitle(draft, chapterId, titlePair.after);
+						});
+					}
+				}
 				const savedMeta = await store.saveDraftBody(projectId, chapterId, {
-					title: planned.title,
+					title: finalTitle,
 					content,
 					summary: keptSummary,
 					materialIds: latest.drafts[chapterId]?.materialIds ?? planned.materialIds,
@@ -2768,6 +2789,10 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 							createdAt: now,
 						});
 					}
+					// 收尾清一遍：模型有时会把 rename_chapter 记过的那次改名在 changes 里
+					// 再抄一遍，也会把「章名维持《…》」当改动交上来。重复与空话都清掉，
+					// 台账里只留真改过的事。
+					draft.adaptation.changes = pruneAdaptationChanges(draft.adaptation.changes);
 					draft.adaptation.updatedAt = now;
 					const target = draft.outline.find((chapter) => chapter.id === chapterId);
 					if (target) target.status = "drafted";
