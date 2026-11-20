@@ -64,7 +64,7 @@ export function initPaper() {
 	$("#btn-focus")?.addEventListener("click", () => toggleFocus());
 
 	ctx.onChange((scope) => {
-		if (scope === "draft" || scope === "active" || scope === "project") {
+		if (scope === "draft" || scope === "active" || scope === "project" || scope === "draftLoading") {
 			renderPage();
 			renderActions();
 		}
@@ -245,6 +245,21 @@ function renderPage() {
 	chapterCards.delete(draft.id);
 
 	const hasText = Boolean((draft.content || "").trim());
+	// 这一章还没从服务器回来时，纸面上先摆一条"正在取"——
+	// 点了章目就该有反应，哪怕正文还要等一个来回。
+	// 注意这里比的是 activeId：等的时候 draft 还是上一章的那一份。
+	const waiting = Boolean(ctx.state.draftLoading) && ctx.state.draftLoading === ctx.state.activeId;
+	let banner = $("#ms-loading");
+	if (!banner) {
+		banner = el(
+			"div",
+			{ id: "ms-loading", class: "ms-loading" },
+			el("span", { class: "ms-loading-bar" }),
+			el("span", { class: "ms-loading-text", text: "正在取这一章…" }),
+		);
+		$("#ms-page")?.prepend(banner);
+	}
+	banner.hidden = !waiting;
 	if (textarea) {
 		textarea.placeholder = hasText ? "" : "从这里落下第一句。";
 	}

@@ -21,6 +21,8 @@ export const state = {
 	stats: null,
 	activeId: "",
 	draft: null,
+	/** 正在从服务器取的那一章：点了章目、正文还没到，界面靠它显示"正在取"。 */
+	draftLoading: "",
 	tab: "paper",
 	railFilter: "all",
 	railQuery: "",
@@ -109,7 +111,14 @@ function rememberProject(id) {
 /* ---------- 启动 ---------- */
 
 export async function bootstrapApp() {
-	const data = await api.bootstrap();
+	const data = await api.bootstrapCached((fresh) => absorbBoot(fresh));
+	absorbBoot(data);
+	return state.boot;
+}
+
+/** 把开屏数据装进 state。缓存先来一次、刷新回来再来一次，所以单独拎出来。 */
+function absorbBoot(data) {
+	if (!data) return;
 	state.boot = data;
 	state.projects = data.projects || [];
 	state.models = data.models || [];
@@ -119,7 +128,6 @@ export async function bootstrapApp() {
 	state.ready = true;
 	notify("boot");
 	notify("projects");
-	return data;
 }
 
 export async function refreshProjects() {
@@ -135,11 +143,18 @@ export function projectById(id) {
 
 /* ---------- 进出一部作品 ---------- */
 
+/**
+ * 打开一部作品。
+ *
+ * 先把缓存里的那一份铺出来（通常是 0 往返），同时后台去取新的；
+ * 取回来确实变了才重画 —— 从案头点开一本书不该先看半秒空白。
+ */
 export async function openProject(id, { silent = false } = {}) {
 	if (!id) return;
+	prefetched.clear();
 	let data;
 	try {
-		data = await api.getProject(id);
+		data = await api.getProjectCached(id, (fresh) => absorbProject(fresh));
 	} catch (error) {
 		if (error?.status === 404) {
 			toast("这部作品不在了。", "error");
@@ -149,29 +164,37 @@ export async function openProject(id, { silent = false } = {}) {
 		}
 		throw error;
 	}
-	state.project = data.project;
-	state.chapters = data.chapters || [];
-	state.stats = data.stats || null;
-	state.outline = data.project?.outline || [];
-	state.volumes = data.project?.volumes || [];
-	state.materials = data.project?.materials || [];
+	absorbProject(data);
 	state.draft = null;
+	state.draftLoading = "";
 	state.saving = "idle";
-	state.prefs.adapted = Boolean(data.project?.adaptation);
 	rememberProject(id);
 
 	// 回到这部作品上次写到的地方；没有就挑第一个能接着写的。
 	const target = pickResumeChapter() || state.chapters[0]?.id || state.outline[0]?.id || "";
 	state.activeId = target;
 	setView(state.prefs.adapted ? "adapt" : "studio", { silent: true });
+	if (target) await loadDraft(target, { silent: true });
+	notify("draft");
+	if (!silent) notify("view");
+	prefetchNeighbors();
+	return state.project;
+}
+
+/** 把一本书的结构装进 state（不含正文）。 */
+function absorbProject(data) {
+	if (!data || !data.project) return;
+	state.project = data.project;
+	state.chapters = data.chapters || [];
+	state.stats = data.stats || null;
+	state.outline = data.project?.outline || [];
+	state.volumes = data.project?.volumes || [];
+	state.materials = data.project?.materials || [];
+	state.prefs.adapted = Boolean(data.project?.adaptation);
 	notify("project");
 	notify("chapters");
 	notify("materials");
 	notify("outline");
-	if (target) await loadDraft(target, { silent: true });
-	notify("draft");
-	if (!silent) notify("view");
-	return state.project;
 }
 
 /** 想接着写的章：有正文但状态还没到「已完稿」的第一章；否则第一个没动笔的章。 */
@@ -233,14 +256,7 @@ export function chapterLabel(id) {
 	return index >= 0 ? `第 ${index + 1} 章` : "";
 }
 
-export async function loadDraft(id, { silent = false } = {}) {
-	if (!state.project || !id) return;
-	let data = null;
-	try {
-		data = await api.getDraft(state.project.id, id);
-	} catch (error) {
-		if (error?.status !== 404) throw error;
-	}
+function applyDraft(id, data, { silent = false } = {}) {
 	const item = outlineItem(id);
 	const meta = chapterMeta(id);
 	const content = data?.chapter?.content ?? "";
@@ -260,13 +276,66 @@ export async function loadDraft(id, { silent = false } = {}) {
 	return state.draft;
 }
 
+function endDraftLoading(id) {
+	if (state.draftLoading !== id) return;
+	state.draftLoading = "";
+	notify("draftLoading");
+}
+
+/**
+ * 取一章正文。
+ *
+ * 缓存里有就立刻给（切回刚看过的章是 0 往返）；没有才显示"正在取"。
+ * 后台刷新回来时，只有还停在这一章、并且没在改字，才会把正文换掉 ——
+ * 不然作者正打着字，字会被取回来的旧稿覆盖。
+ */
+export async function loadDraft(id, { silent = false } = {}) {
+	if (!state.project || !id) return null;
+	const pid = state.project.id;
+	let peeked = null;
+	try {
+		peeked = await api.peekDraft(pid, id);
+	} catch {
+		/* 没缓存而已，不该挡住正文 */
+	}
+	if (!peeked) {
+		state.draftLoading = id;
+		notify("draftLoading");
+	}
+	try {
+		const data = await api.getDraftCached(pid, id, (fresh) => {
+			if (state.activeId !== id || state.draft?.id !== id) return;
+			if (state.saving === "dirty") return;
+			applyDraft(id, fresh);
+			notify("draft");
+			notify("chapters");
+		});
+		if (state.activeId !== id) return state.draft;
+		return applyDraft(id, data, { silent });
+	} catch (error) {
+		if (error?.status !== 404) throw error;
+		if (state.activeId !== id) return state.draft;
+		return applyDraft(id, null, { silent });
+	} finally {
+		endDraftLoading(id);
+	}
+}
+
 export async function openChapter(id) {
 	if (!state.project || !id) return;
 	if (id === state.activeId && state.draft?.id === id) {
 		notify("active");
 		return;
 	}
-	await flushSave();
+	// 先亮灯：跨境一次来回三百毫秒，点完不该毫无反应。
+	state.draftLoading = id;
+	notify("draftLoading");
+	try {
+		await flushSave();
+	} catch (error) {
+		endDraftLoading(id);
+		throw error;
+	}
 	state.activeId = id;
 	state.tab = "paper";
 	notify("active");
@@ -274,6 +343,36 @@ export async function openChapter(id) {
 	await loadDraft(id);
 	notify("draft");
 	notify("tab");
+	prefetchNeighbors();
+}
+
+/* ---------- 预取相邻章 ---------- */
+
+const prefetched = new Set();
+
+/** 把一章悄悄取回缓存（鼠标划过章目、或切到这一章之后）。 */
+export function prefetchChapter(id) {
+	const pid = state.project?.id;
+	if (!pid || !id || id === state.activeId) return;
+	if (prefetched.has(id)) return;
+	prefetched.add(id);
+	api.warmDraft(pid, id)
+		.catch(() => {})
+		.finally(() => {
+			// 取失败也要放开，下次划过再试
+			setTimeout(() => prefetched.delete(id), 3000);
+		});
+}
+
+/** 前后各一章：下一章是大概率要去的，上一章是回头改的。 */
+export function prefetchNeighbors() {
+	const index = chapterIndex(state.activeId);
+	if (index < 0) return;
+	const ids = [state.outline[index + 1]?.id, state.outline[index - 1]?.id].filter(Boolean);
+	if (!ids.length) return;
+	const run = () => ids.forEach((id) => prefetchChapter(id));
+	if (typeof requestIdleCallback === "function") requestIdleCallback(run, { timeout: 1500 });
+	else setTimeout(run, 600);
 }
 
 /* ---------- 存稿 ---------- */

@@ -716,6 +716,56 @@ check("首屏把模块树一次交代清楚，不让浏览器一层层问", () =
 	assert.equal(imported.size, 0, `这些模块没进 modulepreload：${[...imported].join(" ")}`);
 });
 
+/* ------------------------------------------- 读缓存：先把上次的铺出来 */
+
+// 跨境一次往返三四百毫秒，开书要等两次、换章要等一次。缓存只存"读"，
+// 写仍然直传服务端（服务端是唯一真相），所以冲突面是 0 —— 但这条链很容易
+// 在重构里被悄悄改回去，于是把几个关键接点钉住。
+check("打开书和章先给缓存，后台再去取新的", () => {
+	const cache = modules.get("cache.js");
+	assert.ok(cache, "缺 app/cache.js");
+	expect(/indexedDB\.open\(/, cache, "缓存要落在 IndexedDB，刷新页面还在");
+	expect(/DB_NAME\s*=\s*"novel-studio-cache"/, cache, "库名固定，别每次升级换个库");
+	expect(/__NOVEL_AUTH_STATE__/, cache, "缓存键要带账号，换账号不能串库");
+	expect(/__DSH_LOCAL_MODE__\s*!==\s*true/, cache, "本机模式的 /api 本来就快，不该再缓存一层");
+
+	const api = modules.get("api.js");
+	expect(/from "\.\/cache\.js"/, api, "api.js 要接上缓存");
+	expect(/export async function getCached/, api, "要有一个「缓存先出」的读函数");
+	expect(/bootstrapCached/, api, "开屏也要缓存先出");
+	expect(/getProjectCached/, api, "开书要缓存先出");
+	expect(/getDraftCached/, api, "取正文要缓存先出");
+	expect(/peekDraft/, api, "要先问一句「缓存里有没有」，才知道要不要显示正在取");
+	expect(/warmDraft/, api, "相邻章要能预取");
+	expect(/invalidateAfterWrite/, api, "写完要让对应缓存失效，不然会看到旧字");
+
+	const ctx = modules.get("ctx.js");
+	expect(/api\.bootstrapCached/, ctx, "开屏走缓存");
+	expect(/api\.getProjectCached/, ctx, "开书走缓存");
+	expect(/api\.getDraftCached/, ctx, "取正文走缓存");
+	expect(/draftLoading/, ctx, "要有一个「正在取」的状态");
+	expect(/export function prefetchChapter/, ctx, "划过章目就预取");
+	expect(/requestIdleCallback/, ctx, "预取放在空闲里，别抢正文");
+});
+
+check("点了章目马上有反应，取回来也不会盖掉正在写的字", () => {
+	const ctx = modules.get("ctx.js");
+	// openChapter 先亮灯再落盘：跨境来回三百毫秒，点完不能毫无动静。
+	expect(/state\.draftLoading = id;\s*\n\s*notify\("draftLoading"\);[\s\S]{0,260}await flushSave\(\)/, ctx, "换章要先亮灯再等");
+	// 后台刷新回来时，只要人在改字就不许覆盖。
+	expect(/state\.saving === "dirty"\)\s*return;/, ctx, "正在改字时，后台刷新不许覆盖正文");
+
+	const studio = modules.get("studio.js");
+	expect(/is-loading/, studio, "章目那一行要能显示「正在取」");
+	expect(/pointerenter:\s*\(\)\s*=>\s*ctx\.prefetchChapter/, studio, "鼠标划过章目就该预取");
+
+	const paper = modules.get("paper.js");
+	expect(/ms-loading/, paper, "纸面上要有一句「正在取这一章」");
+
+	expect(/\.ch-row\.is-loading/, views, "章目加载态要有样式");
+	expect(/\.ms-loading\b/, views, "纸面加载条要有样式");
+});
+
 /* ------------------------------------------------------------- 收尾 */
 
 let failed = 0;

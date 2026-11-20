@@ -34,7 +34,7 @@ export function initStudio() {
 	$("#btn-open-rail")?.addEventListener("click", () => toggleRail());
 
 	ctx.onChange((scope) => {
-		if (scope === "project" || scope === "chapters" || scope === "active" || scope === "outline") renderRail();
+		if (scope === "project" || scope === "chapters" || scope === "active" || scope === "outline" || scope === "draftLoading") renderRail();
 		if (scope === "stats") renderHead();
 	});
 	renderFilterButton();
@@ -187,11 +187,12 @@ function chapterRow(item, meta, index) {
 	const active = item.id === ctx.state.activeId;
 	const words = meta?.words || 0;
 	const row = el("div", {
-		class: `ch-row${active ? " is-active" : ""}`,
+		class: `ch-row${active ? " is-active" : ""}${ctx.state.draftLoading === item.id ? " is-loading" : ""}`,
 		role: "button",
 		tabindex: "0",
 		dataset: { chapter: item.id },
 		on: {
+			pointerenter: () => ctx.prefetchChapter(item.id),
 			click: (event) => {
 				if (event.target.closest(".ch-more")) return;
 				if (window.matchMedia("(max-width: 920px)").matches) closeRail();

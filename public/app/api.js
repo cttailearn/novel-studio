@@ -6,6 +6,8 @@
  * 所以这里不需要知道自己在哪种模式下，只管拼路径。
  */
 
+import { CACHE_TTL, cacheDelete, cacheDeletePrefix, cacheRead, cacheWrite, isStale } from "./cache.js";
+
 export class ApiError extends Error {
 	constructor(message, status, payload) {
 		super(message || "请求失败");
@@ -81,7 +83,92 @@ async function request(method, path, { body, json, query, signal } = {}) {
 		throw new ApiError(errorMessage(data, response.status), response.status, data);
 	}
 	if (response.status === 204) return null;
-	return readPayload(response);
+	const data = await readPayload(response);
+	if (method !== "GET") invalidateAfterWrite(method, path);
+	return data;
+}
+
+/* ------------------------------------------------------------------ 读缓存 */
+
+/**
+ * 写完一个东西之后，把相关的读缓存作废。
+ *
+ * 规则只有两条：整本的元信息（章目、字数、状态）一律作废；
+ * 正文缓存只有在"不是作者手存"时才作废 —— 手存那一路由 saveChapter
+ * 直接把新正文写回缓存，这样存完再切章回来看还是 0 等待。
+ */
+function invalidateAfterWrite(method, path) {
+	const pid = /^\/api\/projects\/([\w-]+)/.exec(path)?.[1] || "";
+	const manualSave = method === "PATCH" && /^\/api\/projects\/[\w-]+\/chapters\/[^/]+$/.test(path);
+	if (pid) {
+		void cacheDelete(`/api/projects/${pid}`);
+		if (!manualSave) void cacheDeletePrefix(`/api/projects/${pid}/chapters/`);
+	} else if (path.startsWith("/api/projects")) {
+		void cacheDeletePrefix("/api/projects");
+	}
+	if (path.startsWith("/api/library")) void cacheDeletePrefix("/api/library");
+	if (path.startsWith("/api/material-sources")) void cacheDeletePrefix("/api/material-sources");
+	if (path.startsWith("/api/kinds")) void cacheDeletePrefix("/api/kinds");
+	if (path.startsWith("/api/records")) void cacheDeletePrefix("/api/records");
+	if (path.startsWith("/api/settings")) void cacheDeletePrefix("/api/settings");
+}
+
+const refreshing = new Map();
+
+/**
+ * 读一个 GET：有缓存就先给缓存（0 往返），同时后台去取新的；
+ * 取回来确实变了，才叫 onFresh —— 界面不会无谓地重画一遍。
+ */
+export async function getCached(path, { query, ttl = CACHE_TTL, onFresh } = {}) {
+	const key = withQuery(path, query);
+	const entry = await cacheRead(key).catch(() => null);
+	if (entry) {
+		if (onFresh && isStale(entry, ttl)) void revalidate(key, path, query, onFresh);
+		return entry.value;
+	}
+	const value = await request("GET", path, { query });
+	void cacheWrite(key, value).catch(() => {});
+	return value;
+}
+
+/** 只看缓存，不碰网络：界面先铺出来用。 */
+export async function peekCached(path, { query } = {}) {
+	const entry = await cacheRead(withQuery(path, query)).catch(() => null);
+	return entry ? entry.value : null;
+}
+
+/** 预热：把一条 GET 悄悄取回缓存，供"下一下"用（预取相邻章）。 */
+export async function warmCached(path, { query } = {}) {
+	const key = withQuery(path, query);
+	if (refreshing.has(key)) return refreshing.get(key);
+	const task = request("GET", path, { query })
+		.then((value) => cacheWrite(key, value))
+		.catch(() => {})
+		.finally(() => refreshing.delete(key));
+	refreshing.set(key, task);
+	return task;
+}
+
+function revalidate(key, path, query, onFresh) {
+	if (refreshing.has(key)) return refreshing.get(key);
+	const task = request("GET", path, { query })
+		.then(async (value) => {
+			const before = await cacheRead(key).catch(() => null);
+			await cacheWrite(key, value).catch(() => {});
+			const changed = !before || JSON.stringify(before.value) !== JSON.stringify(value);
+			if (changed) {
+				try {
+					onFresh(value);
+				} catch (error) {
+					console.error("[cache]", error);
+				}
+			}
+			return value;
+		})
+		.catch(() => {})
+		.finally(() => refreshing.delete(key));
+	refreshing.set(key, task);
+	return task;
 }
 
 export const http = {
@@ -170,11 +257,19 @@ async function streamNdjson(path, { method = "POST", json, query, signal, onEven
 export const bootstrap = () => http.get("/api/bootstrap");
 export const models = () => http.get("/api/models");
 
+/** 开屏用：有缓存先铺案头，再后台刷新。 */
+export const bootstrapCached = (onFresh) => getCached("/api/bootstrap", { onFresh });
+
 /* ---------------------------------------------------------------- projects */
 
 export const listProjects = () => http.get("/api/projects");
 export const createProject = (json) => http.post("/api/projects", json);
 export const getProject = (pid) => http.get(`/api/projects/${encodeURIComponent(pid)}`);
+/** 打开一本书：缓存先出，后台刷新；刷新到位再回调。 */
+export const getProjectCached = (pid, onFresh) =>
+	getCached(`/api/projects/${encodeURIComponent(pid)}`, { onFresh });
+/** 只看缓存里的这本书，没有就 null（用来先画骨架）。 */
+export const peekProject = (pid) => peekCached(`/api/projects/${encodeURIComponent(pid)}`);
 export const patchProject = (pid, json) => http.patch(`/api/projects/${encodeURIComponent(pid)}`, json);
 export const deleteProject = (pid) => http.del(`/api/projects/${encodeURIComponent(pid)}`);
 export const listTrash = () => http.get("/api/projects/trash");
@@ -183,12 +278,50 @@ export const restoreProject = (pid) => http.post(`/api/projects/trash/${encodeUR
 export const purgeProject = (pid) => http.del(`/api/projects/trash/${encodeURIComponent(pid)}`);
 
 export const addChapter = (pid, json) => http.post(`/api/projects/${encodeURIComponent(pid)}/chapters`, json);
-export const saveChapter = (pid, cid, json) =>
-	http.patch(`/api/projects/${encodeURIComponent(pid)}/chapters/${encodeURIComponent(cid)}`, json);
+
+/**
+ * 存一章。手存会把新正文写回缓存 —— 作者刚写完切走再切回来，
+ * 不该再等一个来回；元信息（字数、章目）照旧作废，后台重新取。
+ */
+export async function saveChapter(pid, cid, json) {
+	const path = `/api/projects/${encodeURIComponent(pid)}/chapters/${encodeURIComponent(cid)}`;
+	const data = await http.patch(path, json);
+	const key = `/api/projects/${encodeURIComponent(pid)}/chapters/${encodeURIComponent(cid)}/draft`;
+	const entry = await cacheRead(key).catch(() => null);
+	const chapter = data?.chapter;
+	if (entry && entry.value && typeof entry.value === "object") {
+		const cached = entry.value;
+		if (cached.chapter && typeof cached.chapter === "object") {
+			cached.chapter = {
+				...cached.chapter,
+				content: typeof json?.content === "string" ? json.content : cached.chapter.content,
+				title: chapter?.title || json?.title || cached.chapter.title,
+				revision: chapter?.revision ?? cached.chapter.revision,
+				updatedAt: chapter?.updatedAt ?? cached.chapter.updatedAt,
+				words: chapter?.words ?? cached.chapter.words,
+			};
+			await cacheWrite(key, cached).catch(() => {});
+		}
+	}
+	return data;
+}
+
 export const getDraft = (pid, cid, { history = false } = {}) =>
 	http.get(`/api/projects/${encodeURIComponent(pid)}/chapters/${encodeURIComponent(cid)}/draft`, {
 		query: { history: history ? 1 : undefined },
 	});
+
+/** 取一章正文：缓存先出，后台刷新。history 那一路不进缓存（版本列表要最新的）。 */
+export const getDraftCached = (pid, cid, onFresh) =>
+	getCached(`/api/projects/${encodeURIComponent(pid)}/chapters/${encodeURIComponent(cid)}/draft`, { onFresh });
+
+/** 预取一章（切章前把它悄悄取回来）。 */
+export const warmDraft = (pid, cid) =>
+	warmCached(`/api/projects/${encodeURIComponent(pid)}/chapters/${encodeURIComponent(cid)}/draft`);
+
+/** 只看缓存里有没有这一章：有就不用显示"正在取"。 */
+export const peekDraft = (pid, cid) =>
+	peekCached(`/api/projects/${encodeURIComponent(pid)}/chapters/${encodeURIComponent(cid)}/draft`);
 
 export const addVolume = (pid, json) => http.post(`/api/projects/${encodeURIComponent(pid)}/volumes`, json);
 export const patchVolume = (pid, vid, json) =>
