@@ -766,6 +766,23 @@ check("点了章目马上有反应，取回来也不会盖掉正在写的字", (
 	expect(/\.ms-loading\b/, views, "纸面加载条要有样式");
 });
 
+check("读稿台对照要的 diffSegments 真的 import 进来了", () => {
+	// 「用了却没 import」在模块里不是语法错误，只在跑到那一句时才 ReferenceError。
+	// 读稿台对照就这么整段被 try/catch 吞掉，页面永远停在「正在取原书这一章」。
+	const compare = modules.get("compare.js");
+	for (const name of ["diffSegments", "paragraphBlocks", "markedNodes"]) {
+		assert.ok(new RegExp(`export function ${name}\\b`).test(compare), `compare.js 要导出 ${name}`);
+	}
+	const reader = modules.get("reader.js");
+	const imported = reader.match(/import \{([^}]+)\} from "\.\/compare\.js";/);
+	assert.ok(imported, "reader.js 要从 compare.js 取名");
+	const names = imported[1].split(",").map((item) => item.trim());
+	for (const name of ["diffSegments", "paragraphBlocks", "markedNodes"]) {
+		if (!new RegExp(`\\b${name}\\(`).test(reader)) continue;
+		assert.ok(names.includes(name), `reader.js 用到了 ${name}，import 里就得有它`);
+	}
+});
+
 /* ------------------------------------------------------------- 收尾 */
 
 let failed = 0;

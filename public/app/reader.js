@@ -12,7 +12,7 @@
 import * as api from "./api.js";
 import * as ctx from "./ctx.js";
 import { $, $$, el, icon, toast, renderMarkdown, wordLabel, countWords } from "./core.js";
-import { paragraphBlocks, markedNodes } from "./compare.js";
+import { diffSegments, paragraphBlocks, markedNodes } from "./compare.js";
 import { mountDock, unmountDock } from "./dock.js";
 
 const SCALE_KEY = "mogeng.reader-scale";
