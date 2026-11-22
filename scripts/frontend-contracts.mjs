@@ -434,6 +434,37 @@ check("改编台点哪一章都能读到正文，改过的句子垫底色", () =
 	expect(/el\(\s*"summary"[\s\S]{0,400}runBtn/, adapt, "按钮摆在改编方向那条的抬头里，不是又飘回顶栏");
 });
 
+check("改编台：稿纸摊开就能改，能退回原文，能翻全书章目", () => {
+	const adapt = modules.get("adapt.js");
+	const api = modules.get("api.js");
+	const ctx = modules.get("ctx.js");
+	// ① 不再有「就地改」这一档：正文一直是输入框，生成出来就能下笔。
+	expectNot(/就地改/, adapt, "「就地改」这颗按钮退休了：正文一直是可写的");
+	expectNot(/收起笔/, adapt, "「收起笔」跟着一起退休");
+	expect(/adapt-paper-write/, adapt, "正文要有一个「可写」的那一态");
+	expect(/textarea/, adapt, "可写的那一态是输入框，不是又一层按钮");
+	expect(/paperDirty/, adapt, "要有一个「这一版还没存」的标记");
+	// ② 退回原文：按钮在，必须过确认，走的同一条 apply 接口。
+	expect(/restoreOriginal/, adapt, "正文底下要能「恢复为最初原文」");
+	expect(/restore: true/, api, "退回原书走 apply，带 restore 标记");
+	expect(/confirmAction[\s\S]{0,400}restoreOriginal|restoreOriginal[\s\S]{0,600}confirmAction/, adapt, "退回原文要二次确认");
+	// ③ 章条最右边那一颗是全书章目。
+	expect(/adapt-strip-more/, adapt, "章条右端要有「全部章目」");
+	expect(/openChapterPicker/, adapt);
+	expect(/\.adapt-strip-more \{[^}]*margin-left:\s*auto/, views, "那颗按钮贴在章条行尾");
+	expect(/\.adapt-picker\b/, views, "全书章目要有自己的样式");
+	// ④ 打开改编工程落在正在改的那一章，而不是「上次读到的那一章」。
+	expect(/export function adaptCursorChapterId/, ctx, "改编工程要另有一套挑章的办法");
+	expect(/adaptCursorChapterId\(\) \|\| pickResumeChapter\(\)/, ctx, "打开书时改编工程先认游标");
+	// ⑤ 图 2 红框那两行不再显示：稿次抬头与摘要都不摊在正文顶上。
+	// 注意 `#adapt-paper-head` 是右栏那一列的标题（还在用），这里钉的是正文顶上那个 class。
+	expectNot(/adapt-paper-meta/, adapt, "「基线第 N 稿 / 1747 字」那一行不再摊在正文上");
+	expectNot(/\.adapt-paper-head\s*\{/, views, "那层抬头的样式跟着一起退休");
+	expectNot(/\.adapt-paper-meta\s*\{/, views);
+	expectNot(/adapt-summary/, adapt, "摘要不再占正文顶上那一块");
+	expectNot(/\.adapt-summary\s*\{/, views);
+});
+
 check("润色走选区，替换要带预期值", () => {
 	const paper = modules.get("paper.js");
 	expect(/polishChapter/, paper);

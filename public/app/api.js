@@ -456,6 +456,11 @@ export const moveAdaptCursor = (pid, chapterId) =>
 	);
 export const applyProposal = (pid, cid, json) =>
 	http.post(`/api/projects/${encodeURIComponent(pid)}/chapters/${encodeURIComponent(cid)}/adapt/apply`, json || {});
+/** 把这一章退回原书：正文写空，台账清掉，改编的笔落回这一章。 */
+export const restoreOriginal = (pid, cid) =>
+	http.post(`/api/projects/${encodeURIComponent(pid)}/chapters/${encodeURIComponent(cid)}/adapt/apply`, {
+		restore: true,
+	});
 
 /* ---------------------------------------------------------------- polish */
 

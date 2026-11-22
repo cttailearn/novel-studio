@@ -171,7 +171,9 @@ export async function openProject(id, { silent = false } = {}) {
 	rememberProject(id);
 
 	// 回到这部作品上次写到的地方；没有就挑第一个能接着写的。
-	const target = pickResumeChapter() || state.chapters[0]?.id || state.outline[0]?.id || "";
+	// 改编工程另有一套：笔落在哪一章，打开就该看见哪一章 —— 而不是「上次读的那一章」。
+	const target =
+		adaptCursorChapterId() || pickResumeChapter() || state.chapters[0]?.id || state.outline[0]?.id || "";
 	state.activeId = target;
 	setView(state.prefs.adapted ? "adapt" : "studio", { silent: true });
 	if (target) await loadDraft(target, { silent: true });
@@ -208,6 +210,26 @@ export function pickResumeChapter() {
 	const fresh = state.outline.find((item) => !metaById.get(item.id)?.hasDraft);
 	if (fresh) return fresh.id;
 	return "";
+}
+
+/**
+ * 改编工程打开时翻到哪一章：游标落在哪，就翻到哪。
+ *
+ * 与「接着写」是两回事 —— 写作要回到手头那一章，改编要回到还没确认的那一章。
+ * 用写作那套挑法，打开改编工程会落在一章早就改完的旧稿上，然后得自己找回来。
+ * 非改编工程返回空串，让调用方退回原来的挑法。
+ */
+export function adaptCursorChapterId() {
+	const project = state.project;
+	if (!project?.adaptation) return "";
+	const chapters = project.outline || [];
+	const recorded = project.adaptation.cursor;
+	if (typeof recorded === "string") {
+		if (!recorded) return "";
+		if (chapters.some((chapter) => chapter.id === recorded)) return recorded;
+	}
+	const metaById = new Map(state.chapters.map((item) => [item.id, item]));
+	return chapters.find((chapter) => !metaById.get(chapter.id)?.hasDraft)?.id || "";
 }
 
 export function leaveProject() {
@@ -354,6 +376,9 @@ const prefetched = new Set();
 export function prefetchChapter(id) {
 	const pid = state.project?.id;
 	if (!pid || !id || id === state.activeId) return;
+	// 连 meta 都没有的章：还没动笔，服务端只会回 404。改编工程打开时落在待改章，
+	// 前后多半就是这种 —— 不为它们白跑两趟，控制台也不必刷一屏红字。
+	if (!state.chapters.some((item) => item.id === id)) return;
 	if (prefetched.has(id)) return;
 	prefetched.add(id);
 	api.warmDraft(pid, id)

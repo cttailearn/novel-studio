@@ -1716,6 +1716,27 @@ try {
 		JSON.stringify(afterRenameChapter.map((change: Record<string, any>) => change.summary)),
 	);
 
+	// 「恢复为最初原文」：正文退回去、台账清干净、笔落回这一章。
+	// 走的是同一条 apply，只是带 restore 标记 —— 所以游标不能像「采用」那样往下推，
+	// 章的 status 也要退回「还没改」，否则章目上还挂着「已改」，点进去却是空的。
+	const backToOriginal = await req("POST", `/api/projects/${noiseId}/chapters/ch001/adapt/apply`, { restore: true });
+	check("能退回原书", backToOriginal.status === 200, String(backToOriginal.status) + " " + JSON.stringify(backToOriginal.data));
+	check(
+		"退回之后笔落回这一章，不往下推",
+		backToOriginal.data.adaptation?.cursor === "ch001",
+		JSON.stringify(backToOriginal.data.adaptation?.cursor),
+	);
+	const restoredDraft = (await req("GET", `/api/projects/${noiseId}/chapters/ch001/draft`)).data.chapter;
+	check("退回之后正文是空的", String(restoredDraft?.content ?? "") === "", JSON.stringify(restoredDraft?.content));
+	const restoredLedger = (backToOriginal.data.adaptation?.changes ?? []).filter(
+		(change: { chapterId: string }) => change.chapterId === "ch001",
+	);
+	check("退回之后这一章的台账条目清空（含章名那几条）", restoredLedger.length === 0, JSON.stringify(restoredLedger));
+	const restoredOutline = ((await req("GET", `/api/projects/${noiseId}`)).data.project?.outline ?? []).find(
+		(chapter: { id: string }) => chapter.id === "ch001",
+	);
+	check("退回之后章目上又变回待改", restoredOutline?.status === "planned", JSON.stringify(restoredOutline?.status));
+
 	mockMode = "stream";
 
 	// ---- 会话 ----

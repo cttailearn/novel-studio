@@ -2236,11 +2236,33 @@
 	color: var(--ink-2);
 }
 
-.adapt-strip-hint {
+/* 章条只横着摊得下几章：最右边这一颗是全书的门，点开就是完整章目。
+   它贴在行尾，前面的「章目 · N 章」「轮到第 N 章」「N/M 已改」自己让位。 */
+.adapt-strip-more {
 	margin-left: auto;
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	height: 26px;
+	padding: 0 var(--sp-2);
+	border: 1px solid var(--line-soft);
+	border-radius: var(--r-2);
+	background: var(--paper-hi);
+	font-family: var(--ui);
 	font-size: var(--fs-2xs);
-	color: var(--ink-4);
-	letter-spacing: 0.04em;
+	color: var(--ink-2);
+	cursor: pointer;
+	white-space: nowrap;
+}
+
+.adapt-strip-more:hover {
+	border-color: var(--seal-line);
+	color: var(--ink);
+}
+
+.adapt-strip-more .ico {
+	width: 13px;
+	height: 13px;
 }
 
 .adapt-strip-list {
@@ -3469,23 +3491,6 @@ dialog.modal.is-polish {
 	gap: var(--sp-2);
 }
 
-.adapt-paper-head {
-	display: flex;
-	align-items: baseline;
-	justify-content: space-between;
-	gap: var(--sp-2);
-	font-size: var(--fs-2xs);
-	letter-spacing: 0.1em;
-	text-transform: uppercase;
-	color: var(--ink-4);
-}
-
-.adapt-paper-meta {
-	letter-spacing: 0;
-	text-transform: none;
-	font-variant-numeric: tabular-nums;
-}
-
 .adapt-paper-body {
 	width: 100%;
 	min-height: 44vh;
@@ -3513,6 +3518,15 @@ dialog.modal.is-polish {
 	overflow-y: auto;
 	white-space: normal;
 	cursor: auto;
+}
+
+/* 可写的那一版：正文一直是输入框，生成出来就能下笔，不再有「就地改」那一步。
+   高度定死在 52vh —— 让它自己按行数长，底下那排动作（存下、对照、退回原文）
+   会被顶到屏幕外面去，作者得先在栏里滚一屏才找得着。 */
+.adapt-paper-body.adapt-paper-write {
+	height: clamp(240px, 52vh, 620px);
+	min-height: 0;
+	cursor: text;
 }
 
 .adapt-p {
@@ -3580,16 +3594,6 @@ dialog.modal.is-polish {
 	padding-right: var(--sp-1);
 }
 
-.adapt-summary {
-	margin: 0;
-	padding: var(--sp-2) var(--sp-3);
-	border-radius: var(--r-2);
-	background: var(--jade-wash);
-	font-size: var(--fs-sm);
-	line-height: 1.7;
-	color: var(--ink-2);
-}
-
 .adapt-actions {
 	display: flex;
 	flex-wrap: wrap;
@@ -3623,6 +3627,41 @@ dialog.modal.is-polish {
 	overflow: auto;
 	border-right: 1px solid var(--line-soft);
 	padding-right: var(--sp-2);
+}
+
+/* 全书章目：章条横着只摊得下七八章，几十上百章的时候得有一处能一眼看全。
+   顶上一条搜索框，底下按章序排到底 —— 跟原书目录是同一个读法。 */
+.adapt-picker-body {
+	display: grid;
+	gap: var(--sp-2);
+	min-height: 0;
+}
+
+.adapt-picker {
+	max-height: 62vh;
+}
+
+.adapt-picker-row {
+	align-items: center;
+	/* pick-row 是 button，浏览器默认把字居中；章目要左对齐才好按章序扫下来。 */
+	text-align: left;
+}
+
+.adapt-picker-row.is-current {
+	background: var(--seal-wash);
+}
+
+/* 提要那一行只在有提要时占位置：十几章全是「还没有提要」，一屏就摊不完几章。 */
+.adapt-picker-row .pick-sub:empty {
+	display: none;
+}
+
+.adapt-picker-ord {
+	flex: none;
+	font-family: var(--mono);
+	font-size: var(--fs-2xs);
+	font-variant-numeric: tabular-nums;
+	color: var(--ink-4);
 }
 
 .change-detail {
@@ -4203,10 +4242,6 @@ dialog.modal.is-polish {
 	.adapt-paper-body {
 		min-height: 52vh;
 		padding: var(--sp-3) var(--sp-4);
-	}
-
-	.adapt-strip-hint {
-		display: none;
 	}
 
 	.adapt-col-head {

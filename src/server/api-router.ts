@@ -690,6 +690,8 @@ function adaptInstruction(context: AdaptContext, note?: string): string {
 	const lines = [
 		`这一章：第 ${context.index + 1} 章《${context.chapter.title}》，原文 ${context.original.chars || context.original.content.length} 字。`,
 		"请按总要求与我的交代在原文上改编这一章；改完用 propose_adaptation 呈上完整稿与改动清单。",
+		// 这一句每一轮都再点一遍：一轮跑久了，模型容易从「改」滑到「重写」。
+		"记住：以原文为主 —— 我点名的之外，原句原样保留，不要顺手润色。",
 	];
 	if (note) lines.push("", "我这一轮的交代：", note);
 	return lines.join("\n");
@@ -2685,7 +2687,10 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 			content?: string;
 			summary?: string;
 			changes?: AdaptProposalChangeInput[];
+			/** 把这一章退回原书：正文清空，读稿时看到的就是原书原文。 */
+			restore?: boolean;
 		}>(req);
+		const restoring = body.restore === true;
 		const proposal =
 			typeof body.proposalId === "string" ? ctx.adaptProposals.get(body.proposalId) : undefined;
 		// 带 proposalId 就得是这一章挂着的那一版；不带也认 —— 作者自己写的这一章同样要落盘、同样往前走一步。
@@ -2695,8 +2700,12 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 		) {
 			return json(sink, 404, { error: "这一版的提案不在了（可能已过期）；让改编者重新交一版再采用。" });
 		}
-		const content = (typeof body.content === "string" ? body.content : proposal?.content ?? "").trim();
-		if (!content) return json(sink, 400, { error: "改编稿是空的，采用不了" });
+		// 退回原书：正文写空、台账清空 —— 这一章从此又算「还没改」，
+		// 但旧稿照例进历史，改坏了也找得回来。
+		const content = restoring
+			? ""
+			: (typeof body.content === "string" ? body.content : proposal?.content ?? "").trim();
+		if (!restoring && !content) return json(sink, 400, { error: "改编稿是空的，采用不了" });
 		const summary = (typeof body.summary === "string" ? body.summary : proposal?.summary ?? "").trim();
 		const changes = (Array.isArray(body.changes) ? body.changes : proposal?.changes ?? [])
 			.filter((change) => change && typeof change.summary === "string" && change.summary.trim())
@@ -2730,7 +2739,8 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 				const reopened = Boolean(latest.drafts[chapterId]?.hasDraft);
 				if (cursorId !== chapterId && !reopened) throw new HttpError(409, adaptSequenceError(latest, cursorId));
 				// 作者手改那一版前端不带小结：留上一版的小结，后面几章要靠它认这一章。
-				const keptSummary = summary || latest.drafts[chapterId]?.summary || "";
+				// 退回原书是例外 —— 这一章又成了原文，旧小结再留着就骗了后面几章。
+				const keptSummary = restoring ? "" : summary || latest.drafts[chapterId]?.summary || "";
 				const beforeContent = (await store.readDraftBody(projectId, chapterId))?.content ?? "";
 				// 模型有时只在 changes 里说了改名、并没有真的调 rename_chapter：
 				// 台账写着新名、章目还印着旧名，后面几章就照着分裂的设定写。
@@ -2740,7 +2750,7 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 				const titlePair = changes
 					.map((change) => (change.kind === "title" ? renamedTitleFromSummary(change.summary) : undefined))
 					.find((pair): pair is { before: string; after: string } => Boolean(pair));
-				if (titlePair && titlePair.after !== titlePair.before) {
+				if (!restoring && titlePair && titlePair.after !== titlePair.before) {
 					const current = store.get(projectId)?.outline.find((chapter) => chapter.id === chapterId);
 					const sameName = current ? titleCore(current.title) === titleCore(titlePair.before) : false;
 					if (current && sameName) {
@@ -2764,8 +2774,9 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 					// 一章的台账就是"这一章最新一版相对原文改了什么"：
 					// 换一版就替换这一章的条目，不叠成两套说法。
 					// 章名那几条留着 —— 换稿不等于把改过的名字退回去，改名史仍要能查。
+					// 退回原书连章名那几条也清掉：这一章已经回到原文，台账里不该再有它的痕迹。
 					draft.adaptation.changes = draft.adaptation.changes.filter(
-						(change) => change.chapterId !== chapterId || change.kind === "title",
+						(change) => change.chapterId !== chapterId || (!restoring && change.kind === "title"),
 					);
 					for (const change of changes) {
 						draft.adaptation.changes.push({
@@ -2779,7 +2790,8 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 					}
 					// 作者亲手落笔的那一版也进台账：台账是后文认前文的唯一入口，
 					// 只躺在正文里的话，隔一章的改编者就看不见了。
-					if (!proposal && beforeContent !== content) {
+					// 退回原书不算「落笔」，本来就不该在台账里留条目。
+					if (!restoring && !proposal && beforeContent !== content) {
 						draft.adaptation.changes.push({
 							id: randomUUID(),
 							chapterId,
@@ -2795,11 +2807,14 @@ async function handleRoutes(ctx: RouterContext, req: ApiRequest, sink: ApiSink):
 					draft.adaptation.changes = pruneAdaptationChanges(draft.adaptation.changes);
 					draft.adaptation.updatedAt = now;
 					const target = draft.outline.find((chapter) => chapter.id === chapterId);
-					if (target) target.status = "drafted";
+					// 退回原书：这一章又回到「还没改」，章目上不该还挂着「已改」。
+					if (target) target.status = restoring ? "planned" : "drafted";
 					// 确认一章，笔就落到下一章：这一章从此只可读、可查。
 					// 回头修老章不算"确认下一章"，进度原地不动 —— 不然改一次第一章，
 					// 后面几章的确认就统统被抹回去了。
-					if (cursorId === chapterId) draft.adaptation.cursor = nextAdaptChapterId(draft, chapterId);
+					// 退回原书例外：这一章重新变成"还没改"，笔应该落回它身上。
+					if (restoring) draft.adaptation.cursor = chapterId;
+					else if (cursorId === chapterId) draft.adaptation.cursor = nextAdaptChapterId(draft, chapterId);
 				});
 			});
 		} catch (error) {
