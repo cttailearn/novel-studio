@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Novel Studio",
+    "description": "Writes novels in the harness: a project holds chapters, materials and continuity notes as plain files, the workbench edits them side by side, and the agent reads the same store through its tools. Prose is saved with a revision guard, so two writers never overwrite each other silently.",
+    "detail": "docs/DETAIL.md"
+  }
+}

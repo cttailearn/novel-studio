@@ -1,0 +1,10 @@
+# Test scratch roots: every test creates one and removes it, but a crashed run
+# leaves one behind. They are never content.
+.test-*/
+.dbg*/
+.count-check/
+
+# Host reference dumps pulled out of app.asar by asar-grep.mjs. Useful while
+# reading the shipped implementations, 160 KB of someone else's code otherwise.
+.asar-ref/
+*-ref.js
