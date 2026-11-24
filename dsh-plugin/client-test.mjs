@@ -201,10 +201,10 @@ const regs = [];
 let pickCalls = 0;
 const sessions = [];
 const panels = [];
-captured.factory((id) => {
-  if (id === 'react') return React;
-  throw new Error('unexpected require: ' + id);
-}).apply({
+// A shell that reports Workspaces. The last case empties this list to prove the
+// panel refuses to claim a session it could not open.
+const shell = { workspaceCount: 1 };
+const ctx = {
   slots: {
     inject: (key, cb) => { regs.push([key, cb]); return () => {}; },
     register: (options, component) => ({ options, component }),
@@ -228,10 +228,17 @@ captured.factory((id) => {
     if (n === 'layout') {
       return { selectPanel: (panel) => { panels.push(panel); } };
     }
+    if (n === 'workspaces') {
+      return { list: { getSnapshot: () => ({ items: new Array(shell.workspaceCount).fill(null) }) } };
+    }
     return undefined;
   },
   effect: (fn) => fn(),
-});
+};
+captured.factory((id) => {
+  if (id === 'react') return React;
+  throw new Error('unexpected require: ' + id);
+}).apply(ctx);
 
 const resolved = regs.map(([, cb]) => cb());
 const panelReg = resolved.find((r) => r.options.name === 'sidebar.panellist');
@@ -630,4 +637,25 @@ if (!(byLabel(idleLabels, idleAi, /装配/) || {}).props?.disabled) throw new Er
 if (!(byLabel(idleLabels, idleAi, /落笔/) || {}).props?.disabled) throw new Error('drafting without a chapter makes no sense');
 
 console.log('12) api calls:', JSON.stringify([...new Set(urls)]));
+
+// ---- 7. a shell with no Workspace
+//
+// `startSession` only shows a notice when it has nowhere to put the session, so
+// the panel would otherwise report success for a session that never existed.
+// The refusal has to be visible here, before the button claims anything.
+sessions.length = 0;
+shell.workspaceCount = 0;
+tree = await press(tree, 'ns-item', reopenRow);
+await new Promise((r) => setTimeout(r, 8));
+tree = await settle();
+const emptyAi = buttonsIn(tree, 'ns-airow');
+(emptyAi[0] || { props: {} }).props.onClick?.({ preventDefault() {} });
+await new Promise((r) => setTimeout(r, 8));
+tree = await settle();
+const refusal = /工作区/.test(textOf(tree));
+console.log('27) no workspace: sessions opened:', sessions.length, '| notice mentions the workspace:', refusal);
+if (sessions.length) throw new Error('a session was pushed with no Workspace to hold it');
+if (!refusal) throw new Error('the panel claimed success with nowhere to put the session');
+shell.workspaceCount = 1;
+
 console.log('CLIENT OK');

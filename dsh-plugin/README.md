@@ -97,6 +97,13 @@ a chat window), and the brief is a starting point, not a contract. Keep talking
 to the agent there; when it finishes, come back to the panel and the change is
 already on disk.
 
+The row stays visible when no chapter is open, because "fill in the materials"
+is a whole-book errand. Assembly and drafting disable themselves until a chapter
+is picked — neither can mean anything for a chapter that does not exist yet. If
+the shell has no Workspace to put a session in, the row says so instead of
+quietly doing nothing: `startSession` only raises a notice in that case, so the
+panel would otherwise report success for a session that was never created.
+
 ## The three presets
 
 `novel-material` (设定官) writes settings, not prose: it can create materials,

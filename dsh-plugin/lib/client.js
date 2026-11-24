@@ -111,6 +111,7 @@ window.__ModuleLoader__.load({
         aiAdapt: 'AI 改编',
         aiStarted: '已经开了角色会话，去对话里看进度。',
         aiUnavailable: '这个界面拿不到会话服务，开不了角色会话。',
+      aiNoWorkspace: '还没有工作区：先在左侧打开或新建一个工作区，角色会话需要它。',
       },
       en: {
         title: 'Novel Studio',
@@ -202,6 +203,7 @@ window.__ModuleLoader__.load({
         aiAdapt: 'AI adapt',
         aiStarted: 'A role session is open — follow it in the conversation.',
         aiUnavailable: 'This shell exposes no session service, so a role session cannot be opened.',
+      aiNoWorkspace: 'No Workspace is open yet — a role session needs one. Open or create a Workspace in the sidebar first.',
       },
     };
 
@@ -340,6 +342,12 @@ window.__ModuleLoader__.load({
   text-transform: uppercase;
   color: var(--dsw-alias-label-secondary);
   padding-right: 2px;
+}
+.ns-notice {
+  padding: 6px 16px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+  flex: none;
 }
 .ns-title-input {
   flex: 1; min-width: 0;
@@ -605,6 +613,29 @@ label.ns-btn { display: inline-block; }
     }
 
     /**
+     * Whether a new Session has somewhere to live.
+     *
+     * `startSession` needs a Workspace: it reuses the current Session's
+     * Workspace, or the most recent one, and when neither exists it only shows
+     * a notice and opens nothing. Answering that here keeps the panel from
+     * claiming "a role session is open" about a session that was never created.
+     *
+     * A shell without the service is treated as "unknown, let the host try" —
+     * the absence of the query API says nothing about the absence of Workspaces.
+     */
+    function workspaceAvailable() {
+      const workspaces = clientService('workspaces');
+      try {
+        const list = workspaces && workspaces.list;
+        const state = list && typeof list.getSnapshot === 'function' ? list.getSnapshot() : undefined;
+        if (state && Array.isArray(state.items)) return state.items.length > 0;
+      } catch {
+        return true;
+      }
+      return true;
+    }
+
+    /**
      * Hand the currently open book and chapter to one of the three role agents.
      *
      * The roles are ordinary DSH agent presets (`novel-material`, `novel-writing`,
@@ -620,11 +651,12 @@ label.ns-btn { display: inline-block; }
      * author is looking at right now even if the pointer is one render behind.
      *
      * @param {{ preset: string, brief: string }} request preset id and first line.
-     * @returns {boolean} whether a session was opened.
+     * @returns {'' | 'unavailable' | 'noWorkspace'} empty when a Session opened.
      */
     function startRoleSession(request) {
       const workspace = clientService('uiWorkspace');
-      if (!workspace || typeof workspace.startSession !== 'function') return false;
+      if (!workspace || typeof workspace.startSession !== 'function') return 'unavailable';
+      if (!workspaceAvailable()) return 'noWorkspace';
       try {
         // Replace a stale unsent draft only when it is ours: a draft the author
         // is writing by hand is the one thing this button must never eat.
@@ -634,13 +666,12 @@ label.ns-btn { display: inline-block; }
           whenDraftExists: 'keep',
         });
       } catch {
-        // A shell with no Workspace at all refuses the creation here rather
-        // than through a notice, and there is nothing to open in that case.
-        return false;
+        // A shell that refuses the creation outright has nothing to open.
+        return 'unavailable';
       }
       const layout = clientService('layout');
       if (layout && typeof layout.selectPanel === 'function') layout.selectPanel(null);
-      return true;
+      return '';
     }
 
     /**
@@ -1065,7 +1096,12 @@ label.ns-btn { display: inline-block; }
         try {
           if (dirty) await save();
           const preset = task === 'adapt' ? 'novel-adapt' : task === 'writing' ? 'novel-writing' : 'novel-material';
-          if (!startRoleSession({ preset, brief: roleBrief(task, subjectOf()) })) {
+          const failure = startRoleSession({ preset, brief: roleBrief(task, subjectOf()) });
+          if (failure === 'noWorkspace') {
+            setNotice({ kind: 'error', text: t.aiNoWorkspace });
+            return;
+          }
+          if (failure) {
             setNotice({ kind: 'error', text: t.aiUnavailable });
             return;
           }
@@ -1461,6 +1497,26 @@ label.ns-btn { display: inline-block; }
           )
         : null;
 
+      // The toolbar owns the notice while a chapter is open. Without a chapter
+      // the toolbar is not rendered at all, but the AI row still is — so the
+      // answers to those buttons ("no workspace", "session opened") need a place
+      // of their own, or the click looks like it did nothing.
+      const noticeRow = notice
+        ? h(
+            'div',
+            {
+              className: 'ns-notice',
+              style: {
+                color:
+                  notice.kind === 'error'
+                    ? 'var(--dsw-alias-state-error-primary)'
+                    : 'var(--dsw-alias-state-success-primary)',
+              },
+            },
+            notice.text
+          )
+        : null;
+
       let main;
       if (!projectId) {
         main = h(
@@ -1473,6 +1529,7 @@ label.ns-btn { display: inline-block; }
           'div',
           { className: 'ns-main' },
           aiRow,
+          noticeRow,
           h(
             'div',
             { className: 'ns-center' },

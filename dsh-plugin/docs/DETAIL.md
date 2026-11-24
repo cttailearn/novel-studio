@@ -204,6 +204,12 @@ Anything unsaved in the editor is saved first: the role prompt is assembled from
 the *stored* chapter, so uncommitted prose would be invisible to the agent. With
 no edits, that save does not touch the disk.
 
+The row stays visible with no chapter open — "fill in the materials" is a
+whole-book errand — and assembly and drafting disable themselves until a chapter
+is picked. When the shell has no Workspace to hold a session, the row says so
+instead of going quiet: `startSession` only raises a notice in that case, so a
+panel that assumed success would report a session that was never created.
+
 ## The adaptation ledger
 
 An adaptation project is a project bound to a book in the raw-material library.
