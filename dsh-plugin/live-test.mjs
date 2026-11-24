@@ -43,6 +43,7 @@ async function raw(method, path, bytes, headers = {}) {
 }
 
 const created = [];
+const uploadedSources = [];
 
 try {
   console.log(`live host: ${BASE}`);
@@ -159,6 +160,7 @@ try {
   ok(upload.status === 201, `source upload is 201 (got ${upload.status})`);
   const sourceId = upload.body?.source?.id;
   ok(Boolean(sourceId), 'uploaded source has an id');
+  if (sourceId) uploadedSources.push(sourceId);
   ok(upload.body?.source?.chapterCount === 2, `source split into two chapters (got ${upload.body?.source?.chapterCount})`);
   ok(upload.body?.source?.splitMode === 'chapters', 'source used the chapter heading split');
 
@@ -227,6 +229,12 @@ try {
 } finally {
   for (const id of created) {
     try { await call('DELETE', `/projects/${id}`); } catch { /* best effort */ }
+  }
+  // The uploaded book belongs to the shared library, not to the throwaway
+  // project, so deleting the project leaves it behind. Every run would then
+  // add another copy of the same test book to the author's shelf.
+  for (const id of uploadedSources) {
+    try { await call('DELETE', `/sources/${encodeURIComponent(id)}`); } catch { /* best effort */ }
   }
   if (failures.length) {
     console.log(`failed checks:\n- ${failures.join('\n- ')}`);
