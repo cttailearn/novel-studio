@@ -622,17 +622,21 @@ label.ns-btn { display: inline-block; }
      *
      * A shell without the service is treated as "unknown, let the host try" —
      * the absence of the query API says nothing about the absence of Workspaces.
+     * The same goes for a list that has not loaded yet: `phase` is only 'ready'
+     * once the Host has answered, and refusing on the strength of an empty
+     * placeholder would break the very first click after a reload.
      */
     function workspaceAvailable() {
       const workspaces = clientService('workspaces');
       try {
         const list = workspaces && workspaces.list;
         const state = list && typeof list.getSnapshot === 'function' ? list.getSnapshot() : undefined;
-        if (state && Array.isArray(state.items)) return state.items.length > 0;
+        if (!state || !Array.isArray(state.items)) return true;
+        if (state.phase !== undefined && state.phase !== 'ready') return true;
+        return state.items.length > 0;
       } catch {
         return true;
       }
-      return true;
     }
 
     /**

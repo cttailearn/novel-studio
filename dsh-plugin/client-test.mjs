@@ -229,7 +229,14 @@ const ctx = {
       return { selectPanel: (panel) => { panels.push(panel); } };
     }
     if (n === 'workspaces') {
-      return { list: { getSnapshot: () => ({ items: new Array(shell.workspaceCount).fill(null) }) } };
+      return {
+        list: {
+          getSnapshot: () => ({
+            items: new Array(shell.workspaceCount).fill(null),
+            ...(shell.phase === undefined ? {} : { phase: shell.phase }),
+          }),
+        },
+      };
     }
     return undefined;
   },
@@ -656,6 +663,27 @@ const refusal = /工作区/.test(textOf(tree));
 console.log('27) no workspace: sessions opened:', sessions.length, '| notice mentions the workspace:', refusal);
 if (sessions.length) throw new Error('a session was pushed with no Workspace to hold it');
 if (!refusal) throw new Error('the panel claimed success with nowhere to put the session');
+shell.workspaceCount = 1;
+
+// ---- 8. a shell whose workspace list has not loaded yet
+//
+// `phase` is only 'ready' once the Host has answered. An empty list at any
+// other phase is a placeholder, not a fact — refusing on it would break the
+// first click after a reload, when the panel is already on screen.
+sessions.length = 0;
+shell.workspaceCount = 0;
+shell.phase = 'loading';
+tree = await press(tree, 'ns-item', reopenRow);
+await new Promise((r) => setTimeout(r, 8));
+tree = await settle();
+const loadingAi = buttonsIn(tree, 'ns-airow');
+(loadingAi[0] || { props: {} }).props.onClick?.({ preventDefault() {} });
+await new Promise((r) => setTimeout(r, 8));
+tree = await settle();
+console.log('28) list still loading: sessions opened:', sessions.length, '| preset:', sessions[0] && sessions[0].agentPreset);
+if (sessions.length !== 1) throw new Error('an unloaded list must not be read as "no workspaces"');
+if (sessions[0].agentPreset !== 'novel-material') throw new Error('wrong preset while loading');
+shell.phase = undefined;
 shell.workspaceCount = 1;
 
 console.log('CLIENT OK');
