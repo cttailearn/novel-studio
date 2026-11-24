@@ -24,7 +24,16 @@ const ctx = {
   get(name) { return services.get(name); },
   inject() {},
 };
-apply(ctx);
+// cordis refuses unknown properties (`cannot get property "config" without
+// inject`), and reading one is what broke the plugin in the real host, so the
+// double refuses them too instead of quietly returning undefined.
+const guarded = new Proxy(ctx, {
+  get(target, prop) {
+    if (prop in target) return target[prop];
+    throw new Error(`cannot get property "${String(prop)}" without inject`);
+  },
+});
+apply(guarded);
 console.log('routes:', routes.map((r) => `${r.kind} ${r.path}`).join(','));
 
 const server = http.createServer((req, res) => {

@@ -100,8 +100,12 @@ function pick(input, keys) {
 
 const PROJECT_FIELDS = ['title', 'genre', 'logline', 'synopsis', 'styleGuide', 'targetWords'];
 
-export function apply(ctx) {
-  const configured = ctx.config?.root;
+export function apply(ctx, config) {
+  // The patch row's `config:` block arrives as the second apply argument, NOT as
+  // `ctx.config`: cordis resolves only services (and the built-in `logger`,
+  // `effect`, ...) through the context proxy, so reading `ctx.config` throws
+  // `cannot get property "config" without inject` and leaves this fiber failed.
+  const configured = config?.root;
   const root = configured && String(configured).trim() ? String(configured).trim() : defaultRoot();
   const store = new ProjectStore(root);
   const sources = new SourceLibrary(root);
@@ -336,13 +340,32 @@ export function apply(ctx) {
     }
 
     // DELETE /projects/:id/outline/:chapterId
+    //
+    // Only for the empty shells the settings agent leaves behind: a chapter that
+    // has been written to keeps its row, because deleting it would orphan the
+    // prose, its revision history and the material index in three places at once
+    // — and a reused chapter id would resurrect the old draft.
     match = path.match(/^\/projects\/([\w-]+)\/outline\/([^/]+)$/);
     if (match && method === 'DELETE') {
       const projectId = match[1];
       const chapterId = decodeURIComponent(match[2]);
-      const project = await store.update(projectId, (current) => {
-        current.outline = current.outline.filter((item) => item.id !== chapterId);
-        delete current.drafts[chapterId];
+      const current = await store.read(projectId);
+      if (!current.outline.some((item) => item.id === chapterId)) throw new StoreError(404, '章节不存在');
+      const meta = current.drafts[chapterId];
+      if (meta && (meta.words > 0 || meta.hasDraft || meta.revision > 0)) {
+        throw new StoreError(409, '这一章已经动过笔了，不能整章撤掉；要留着标题改就别用撤销。');
+      }
+      const project = await store.update(projectId, (draft) => {
+        draft.outline = draft.outline.filter((item) => item.id !== chapterId);
+        delete draft.drafts[chapterId];
+        // The "attached to" index on each material card points at chapter ids:
+        // leaving a deleted chapter there leaves a card claiming a chapter that
+        // no longer exists.
+        for (const material of draft.materials) {
+          if (material.chapterIds.includes(chapterId)) {
+            material.chapterIds = material.chapterIds.filter((id) => id !== chapterId);
+          }
+        }
         return undefined;
       });
       sendJson(req, res, 200, { ok: true, project, chapters: chapterList(project) });

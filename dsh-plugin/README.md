@@ -84,11 +84,34 @@ project and what the harness replaced.
 Each layer has one, and they run without the harness:
 
 ```bash
-node smoke.mjs         # store: atomic writes, locks, 409 on a stale write
-node http-test.mjs     # every route through a real HTTP server
-node tools-test.mjs    # every tool, against a real store
-node source-test.mjs   # splitting, the library on disk, the four source tools
-node role-test.mjs     # the snapshot cache and what each role registers
-node host-test.mjs     # apply(): the route, the service, the presets, end to end
-node client-test.mjs   # the panel component, with a React stand-in
+node smoke.mjs            # store: atomic writes, locks, 409 on a stale write
+node http-test.mjs        # every route through a real HTTP server
+node tools-test.mjs       # every tool, against a real store
+node source-test.mjs      # splitting, the library on disk, the four source tools
+node role-test.mjs        # the snapshot cache and what each role registers
+node host-test.mjs        # apply(): the route, the service, the presets, end to end
+node client-test.mjs      # the panel component, with a React stand-in
+node integration-test.mjs # the real router and the real component, together
+node routes-test.mjs      # every path the client calls is a path the host answers
+node guard-test.mjs       # the doubles refuse unknown ctx properties like cordis
+node live-test.mjs        # against a running harness (needs DSH_WEB_URL)
 ```
+
+`integration-test.mjs` is the one that catches what the others cannot: it serves
+the real router on a real socket and lets the real component talk to it over
+real `fetch`, so a payload shape the two sides disagree about shows up as a
+failed assertion instead of an empty panel.
+
+`routes-test.mjs` exists because a call the host does not answer is invisible
+everywhere else — `client-test.mjs` fakes the reply, and the host tests invent
+their own paths. It reads the call sites out of `lib/client.js` and drives each
+one through the router.
+
+`live-test.mjs` is the only one that needs the harness running, and it is worth
+running before saying a change works: the route prefix, the config argument and
+the fiber state are things only the real loader can get wrong.
+
+After editing `lib/index.js`, toggle the plugin once (`plugin_manager`
+`set_plugin`) — the loader does not restart a failed or already-active fiber by
+itself.
+

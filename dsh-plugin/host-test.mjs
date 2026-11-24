@@ -35,7 +35,6 @@ function makeHost() {
   const warnings = [];
 
   const ctx = {
-    config: {},
     logger: { info: () => {}, warn: (message) => warnings.push(message) },
     effect(execute, label) {
       const stop = execute();
@@ -69,7 +68,18 @@ function makeHost() {
       },
     },
   };
-  return { ctx, effects, routes, presets, services, warnings };
+
+  // cordis throws `cannot get property "x" without inject` for anything it does
+  // not own, and that is what actually felled the plugin in the real host: the
+  // loader had it reading `ctx.config`. A plain object would have let that pass,
+  // so the double refuses unknown reads the same way.
+  const guarded = new Proxy(ctx, {
+    get(target, prop) {
+      if (prop in target) return target[prop];
+      throw new Error(`cannot get property "${String(prop)}" without inject`);
+    },
+  });
+  return { ctx: guarded, effects, routes, presets, services, warnings };
 }
 
 try {

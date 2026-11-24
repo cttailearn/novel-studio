@@ -303,6 +303,10 @@ export class ProjectStore {
         if (outline && (outline.status === 'planned' || outline.status === 'outlined')) {
           outline.status = content.trim() ? 'drafted' : 'drafting';
         }
+        // The outline row carries the material list too: the workbench draws its
+        // chapter list and its side panel from the skeleton alone, so a chapter
+        // that remembers its materials only in the body file would look bare.
+        if (outline) outline.materialIds = materialIds.slice();
         await this.#write(project);
         return { ...record, words };
       })
