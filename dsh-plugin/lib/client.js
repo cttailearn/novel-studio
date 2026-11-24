@@ -104,6 +104,13 @@ window.__ModuleLoader__.load({
         confirmDeleteProjectKept: '确认删除《{title}》？这本书在自己的文件夹里，工作台只会把它从列表里移除，文件夹和里面的一切都留着。',
         deletedProject: '已删除',
         unlistedProject: '已从列表移除，文件夹还在',
+        aiTitle: 'AI',
+        aiMaterial: 'AI 补素材',
+        aiAssemble: 'AI 装配',
+        aiWrite: 'AI 落笔',
+        aiAdapt: 'AI 改编',
+        aiStarted: '已经开了角色会话，去对话里看进度。',
+        aiUnavailable: '这个界面拿不到会话服务，开不了角色会话。',
       },
       en: {
         title: 'Novel Studio',
@@ -188,6 +195,13 @@ window.__ModuleLoader__.load({
         confirmDeleteProjectKept: 'Delete "{title}"? This book lives in its own folder — the workbench only takes it off the list; the folder and everything in it stay.',
         deletedProject: 'Deleted',
         unlistedProject: 'Taken off the list; the folder is still there',
+        aiTitle: 'AI',
+        aiMaterial: 'AI materials',
+        aiAssemble: 'AI assemble',
+        aiWrite: 'AI draft',
+        aiAdapt: 'AI adapt',
+        aiStarted: 'A role session is open — follow it in the conversation.',
+        aiUnavailable: 'This shell exposes no session service, so a role session cannot be opened.',
       },
     };
 
@@ -314,6 +328,19 @@ window.__ModuleLoader__.load({
   flex: none;
 }
 .ns-grow { flex: 1; }
+.ns-airow {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 16px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+  flex: none;
+}
+.ns-ai-label {
+  font-size: 11px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--dsw-alias-label-secondary);
+  padding-right: 2px;
+}
 .ns-title-input {
   flex: 1; min-width: 0;
   background: transparent; border: none; outline: none;
@@ -566,6 +593,105 @@ label.ns-btn { display: inline-block; }
           .match(/[A-Za-z0-9]+(?:['\u2019-][A-Za-z0-9]+)*/g) || []
       ).length;
       return cjk + latin;
+    }
+
+    /** One optional Client service, or undefined when this shell lacks it. */
+    function clientService(name) {
+      try {
+        return services.ctx && typeof services.ctx.get === 'function' ? services.ctx.get(name) : undefined;
+      } catch {
+        return undefined;
+      }
+    }
+
+    /**
+     * Hand the currently open book and chapter to one of the three role agents.
+     *
+     * The roles are ordinary DSH agent presets (`novel-material`, `novel-writing`,
+     * `novel-adapt`), so the native way to reach one is a normal Session running
+     * that preset — not a private LLM call inside this plugin. `uiWorkspace`
+     * opens (or reuses) a blank Session in the current Workspace under that
+     * preset, seeds the composer with the brief, and reveals the Conversation;
+     * the author presses send, so an accidental click never spends tokens.
+     *
+     * Why the prompt carries the ids: the role prompt already summarises the
+     * open book and chapter from the Host-side snapshot, but that snapshot is a
+     * convenience pointer. Naming both ids here means the agent acts on what the
+     * author is looking at right now even if the pointer is one render behind.
+     *
+     * @param {{ preset: string, brief: string }} request preset id and first line.
+     * @returns {boolean} whether a session was opened.
+     */
+    function startRoleSession(request) {
+      const workspace = clientService('uiWorkspace');
+      if (!workspace || typeof workspace.startSession !== 'function') return false;
+      try {
+        // Replace a stale unsent draft only when it is ours: a draft the author
+        // is writing by hand is the one thing this button must never eat.
+        workspace.startSession(undefined, {
+          agentPreset: request.preset,
+          prompt: request.brief,
+          whenDraftExists: 'keep',
+        });
+      } catch {
+        // A shell with no Workspace at all refuses the creation here rather
+        // than through a notice, and there is nothing to open in that case.
+        return false;
+      }
+      const layout = clientService('layout');
+      if (layout && typeof layout.selectPanel === 'function') layout.selectPanel(null);
+      return true;
+    }
+
+    /**
+     * The brief each role receives as its first message. It names the book and
+     * the chapter by id so the agent acts on what the author is looking at even
+     * if the Host-side "current chapter" pointer is one render behind, and it
+     * says plainly what to do, because the role prompt alone describes the job
+     * but not this particular errand.
+     *
+     * @param {'material'|'assemble'|'writing'|'adapt'} task
+     * @param {{ project?: unknown, chapterId?: string, chapterTitle?: string, count?: number }} subject
+     */
+    function roleBrief(task, subject) {
+      const book = (subject.project && subject.project.title) || t.untitled;
+      const chapter = subject.chapterTitle || '';
+      const chapterId = subject.chapterId || '';
+      const where = chapter
+        ? `当前打开的是《${book}》的《${chapter}》（id: ${chapterId}）。`
+        : `当前打开的是《${book}》。`;
+      if (task === 'material') {
+        return (
+          `${where}\n\n`
+          + '请先看这一部的骨架：还缺哪些设定、人物、场景、情节线，章目要不要调整。\n'
+          + '用 list_chapters / list_materials / get_project_brief 看清楚现状，'
+          + '然后补齐这一部最要紧的几条素材（upsert_material），需要立章就 update_outline。\n'
+          + '不要写正文 —— 你手上没有写正文的工具，那是执笔者的活。'
+        );
+      }
+      if (task === 'assemble') {
+        return (
+          `${where}\n\n`
+          + '把这一部里和这一章相关的素材装配到这一章（attach_materials）。\n'
+          + '先用 read_chapter 读这一章的要略和现有正文，再用 list_materials / search_materials '
+          + '挑出真正会用到的那几条 —— 装料是挑料，不是把整部素材都堆上去。\n'
+          + '装完用一两句话说清你装了哪几条、为什么。'
+        );
+      }
+      if (task === 'adapt') {
+        return (
+          `${where}\n\n`
+          + '照原书把这一章改编下来：读原文，按改编总要求动手，'
+          + '用 propose_adaptation 交一版提案。作者在改编台看过点「采用」，正文才会落地。'
+        );
+      }
+      return (
+        `${where}\n\n`
+        + '照这一章已装配的素材把正文写出来。\n'
+        + '先确认本章装配了哪些素材（read_chapter 会给出 materialIds），'
+        + '素材不够就先用 add_note 记下来，不要凭空发明设定。\n'
+        + `目标篇幅：${subject.count ? `${subject.count} 字左右` : '按素材与要略自行判断'}。`
+      );
     }
 
     // ------------------------------------------------------- icon component
@@ -913,6 +1039,42 @@ label.ns-btn { display: inline-block; }
         }
       }
 
+      // ---- the three AI steps
+      //
+      // Materials, assembly and prose are all produced by a role agent, so each
+      // button only has to hand the open book/chapter to the right preset and
+      // let the Conversation do the work. Going through a real Session — rather
+      // than calling the model from here — keeps the transcript, the tool cards
+      // and the cancellation the author already knows.
+      //
+      // Saving first is deliberate: the role prompt is assembled from the stored
+      // chapter, so unsaved prose in the textarea would be invisible to the
+      // agent. `save()` is a no-op without edits, and its 409 keeps the author's
+      // conflict flow intact.
+      function subjectOf() {
+        return {
+          project,
+          chapterId: chapterId || '',
+          chapterTitle: (chapter && chapter.title) || title || '',
+          count: (chapter && chapter.targetWords) || 0,
+        };
+      }
+
+      async function openRole(task) {
+        if (!projectId) return;
+        try {
+          if (dirty) await save();
+          const preset = task === 'adapt' ? 'novel-adapt' : task === 'writing' ? 'novel-writing' : 'novel-material';
+          if (!startRoleSession({ preset, brief: roleBrief(task, subjectOf()) })) {
+            setNotice({ kind: 'error', text: t.aiUnavailable });
+            return;
+          }
+          setNotice({ kind: 'ok', text: t.aiStarted });
+        } catch (error) {
+          setNotice({ kind: 'error', text: error.message });
+        }
+      }
+
       // ---- raw-material library
       const loadSources = React.useCallback(async () => {
         try {
@@ -1248,6 +1410,57 @@ label.ns-btn { display: inline-block; }
         )
       );
 
+      // The three steps the product is built around — materials, assembly and
+      // prose — each come from a role agent, so each button opens a session
+      // running that role instead of pretending to be the model. The row sits
+      // outside the editor so it is still reachable before a chapter is picked:
+      // "fill in the materials" is a whole-book errand, not a chapter errand.
+      //
+      // An adaptation project gets the adapter's button instead of the writer's:
+      // those two never share a tool set, so the wrong button would only produce
+      // an agent that cannot do the job.
+      const aiRow = projectId
+        ? h(
+            'div',
+            { className: 'ns-airow' },
+            h('span', { className: 'ns-ai-label' }, t.aiTitle),
+            h(
+              'button',
+              { className: 'ns-btn', type: 'button', onClick: () => openRole('material') },
+              t.aiMaterial
+            ),
+            isAdapt
+              ? null
+              : h(
+                  'button',
+                  {
+                    className: 'ns-btn',
+                    type: 'button',
+                    disabled: !chapterId,
+                    onClick: () => openRole('assemble'),
+                  },
+                  t.aiAssemble
+                ),
+            isAdapt
+              ? h(
+                  'button',
+                  { className: 'ns-btn ns-btn-primary', type: 'button', onClick: () => openRole('adapt') },
+                  t.aiAdapt
+                )
+              : h(
+                  'button',
+                  {
+                    className: 'ns-btn ns-btn-primary',
+                    type: 'button',
+                    disabled: !chapterId,
+                    onClick: () => openRole('writing'),
+                  },
+                  t.aiWrite
+                ),
+            h('span', { className: 'ns-grow' })
+          )
+        : null;
+
       let main;
       if (!projectId) {
         main = h(
@@ -1259,6 +1472,7 @@ label.ns-btn { display: inline-block; }
         main = h(
           'div',
           { className: 'ns-main' },
+          aiRow,
           h(
             'div',
             { className: 'ns-center' },
@@ -1270,6 +1484,7 @@ label.ns-btn { display: inline-block; }
         main = h(
           'div',
           { className: 'ns-main' },
+          aiRow,
           h(
             'div',
             { className: 'ns-toolbar' },

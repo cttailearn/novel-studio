@@ -71,6 +71,32 @@ editing the book inside it.
 The panel remembers what was open and restores it on load; that pointer is also
 what lets a role agent answer "write this chapter" without being told which one.
 
+## The three AI steps
+
+Under the editor toolbar sits one row of buttons — that row is the whole
+workflow the product is built around:
+
+1. **AI materials** (AI 补素材) — opens a `novel-material` session and asks it to
+   read the outline and the existing materials, then fill the gaps.
+2. **AI assemble** (AI 装配) — opens the same preset and asks it to pick the
+   materials this chapter actually needs and attach them.
+3. **AI draft** (AI 落笔) — opens a `novel-writing` session that writes the
+   chapter from the materials just attached. On an adaptation project this
+   button becomes **AI adapt** (AI 改编) and opens `novel-adapt` instead, because
+   the writer and the adapter never share a tool set.
+
+Each button opens a real Session running that preset and seeds the composer with
+a brief naming the open book and chapter; it does not send. The author presses
+send, so a mis-click costs nothing. Anything unsaved in the editor is saved
+first — the role prompt is assembled from the stored chapter, so uncommitted
+prose would be invisible to the agent.
+
+Two consequences worth knowing: the work moves to the **Conversation** (that is
+where the transcript, the tool cards and the stop button live — the panel is not
+a chat window), and the brief is a starting point, not a contract. Keep talking
+to the agent there; when it finishes, come back to the panel and the change is
+already on disk.
+
 ## The three presets
 
 `novel-material` (设定官) writes settings, not prose: it can create materials,
@@ -142,6 +168,12 @@ one through the router.
 `live-test.mjs` is the only one that needs the harness running, and it is worth
 running before saying a change works: the route prefix, the config argument and
 the fiber state are things only the real loader can get wrong.
+
+`client-test.mjs` also covers the three AI buttons. It cannot click a real
+Conversation, so it asserts what the panel is responsible for: the preset id each
+button asks for, that the brief names the actual book and chapter, that
+`whenDraftExists` is `keep` (a hand-written draft must never be eaten), and that
+an adaptation project shows the adapter's button instead of the writer's.
 
 `dir-test.mjs` guards the one promise a path in a title bar cannot keep on its
 own: that the files are really there. It writes a book into a picked folder and

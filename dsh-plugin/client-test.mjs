@@ -199,6 +199,8 @@ console.log('module id:', captured.id);
 
 const regs = [];
 let pickCalls = 0;
+const sessions = [];
+const panels = [];
 captured.factory((id) => {
   if (id === 'react') return React;
   throw new Error('unexpected require: ' + id);
@@ -213,7 +215,18 @@ captured.factory((id) => {
     // a real path, so the workbench must reach it through ctx rather than
     // through a file input.
     if (n === 'uiWorkspace') {
-      return { pickDirectory: async () => { pickCalls += 1; return 'D:\\小说\\雨夜'; } };
+      return {
+        pickDirectory: async () => { pickCalls += 1; return 'D:\\小说\\雨夜'; },
+        // The three AI steps open a role Session rather than calling a model
+        // from here, so this is the one call that proves they are wired to the
+        // shipped agent presets.
+        startSession: (workspaceId, options) => {
+          sessions.push({ workspaceId: workspaceId === undefined ? null : workspaceId, ...options });
+        },
+      };
+    }
+    if (n === 'layout') {
+      return { selectPanel: (panel) => { panels.push(panel); } };
     }
     return undefined;
   },
@@ -240,6 +253,12 @@ function flat(node, out = []) {
 const textOf = (tree) => flat(tree).map((n) => n.text || (n.props && n.props.value) || '').join('\u0001');
 const buttons = (tree, cls) =>
   flat(tree).filter((n) => n.type === 'button' && (!cls || String(n.props.className).split(' ').includes(cls)));
+// Buttons living inside the first element carrying `cls`. The AI row is a div,
+// so asking for `button.ns-airow` would find nothing.
+const buttonsIn = (tree, cls) => {
+  const host = flat(tree).find((n) => n.props && String(n.props.className || '').split(' ').includes(cls));
+  return host ? flat(host.props.children).filter((n) => n.type === 'button') : [];
+};
 const label = (node) => flat(node.props.children || []).map((n) => n.text || '').join('');
 
 async function settle() {
@@ -506,6 +525,109 @@ console.log('19) removed:', removedProject && removedProject.id, '| keptFiles:',
 if (!removedProject) throw new Error('delete never posted');
 if (!removedProject.keptFiles) throw new Error('this fixture book lives in its own folder');
 if (!/文件夹/.test(confirms[0] || '')) throw new Error('the confirmation did not warn that the folder survives');
+
+// ---- 5. the three AI steps
+//
+// Materials, assembly and prose are each produced by a role agent, so the panel
+// must hand the open book and chapter to the matching preset through
+// `uiWorkspace.startSession` — not call a model itself. The assertions below
+// check the preset id, that the brief names the actual chapter, and that the
+// three buttons appear only where they make sense.
+const bookRow = buttons(tree, 'ns-item').map(label).findIndex((l) => l.includes('雨夜') && !l.includes('改编'));
+if (bookRow < 0) throw new Error('the writing book is not in the rail');
+tree = await press(tree, 'ns-item', bookRow);
+await new Promise((r) => setTimeout(r, 8));
+tree = await settle();
+const chapterRow = buttons(tree, 'ns-item').map(label).findIndex((l) => l.includes('第一章'));
+tree = await press(tree, 'ns-item', chapterRow);
+await new Promise((r) => setTimeout(r, 8));
+tree = await settle();
+
+const aiRow = buttonsIn(tree, 'ns-airow');
+const aiLabels = aiRow.map(label);
+console.log('20) ai row:', JSON.stringify(aiLabels));
+if (aiRow.length !== 3) throw new Error(`expected three AI buttons, got ${aiRow.length}`);
+
+const aiMaterial = aiRow.find((b) => /补素材/.test(label(b)));
+const aiAssemble = aiRow.find((b) => /装配/.test(label(b)));
+const aiWrite = aiRow.find((b) => /落笔/.test(label(b)));
+if (!aiMaterial || !aiAssemble || !aiWrite) throw new Error('an AI button is missing');
+
+aiMaterial.props.onClick({ preventDefault() {} });
+await new Promise((r) => setTimeout(r, 8));
+tree = await settle();
+console.log('21) materials session:', sessions.length, sessions[0] && sessions[0].agentPreset,
+  '| brief names the book:', /雨夜/.test((sessions[0] || {}).prompt || ''),
+  '| draft policy:', (sessions[0] || {}).whenDraftExists);
+if (!sessions.length) throw new Error('materials button opened no session');
+if (sessions[0].agentPreset !== 'novel-material') throw new Error('wrong preset: ' + sessions[0].agentPreset);
+if (!/雨夜/.test(sessions[0].prompt)) throw new Error('brief does not name the book');
+if (sessions[0].whenDraftExists !== 'keep') throw new Error('a hand-written draft must never be replaced');
+if (panels[0] !== null) throw new Error('the panel should have switched to the conversation');
+
+sessions.length = 0;
+aiAssemble.props.onClick({ preventDefault() {} });
+await new Promise((r) => setTimeout(r, 8));
+tree = await settle();
+console.log('22) assemble session:', sessions[0] && sessions[0].agentPreset,
+  '| names the chapter:', /第一章/.test((sessions[0] || {}).prompt || ''));
+if (!sessions.length) throw new Error('assemble button opened no session');
+if (sessions[0].agentPreset !== 'novel-material') throw new Error('assembly is still a materials-layer errand');
+if (!/第一章/.test(sessions[0].prompt)) throw new Error('assembly brief does not name the chapter');
+
+sessions.length = 0;
+aiWrite.props.onClick({ preventDefault() {} });
+await new Promise((r) => setTimeout(r, 8));
+tree = await settle();
+console.log('23) writing session:', sessions[0] && sessions[0].agentPreset,
+  '| brief says no invention:', /不要凭空发明/.test((sessions[0] || {}).prompt || ''));
+if (!sessions.length) throw new Error('writing button opened no session');
+if (sessions[0].agentPreset !== 'novel-writing') throw new Error('wrong preset: ' + sessions[0].agentPreset);
+
+// An adaptation project never gets the writing button: the adapter has no
+// writing tool at all, and the writer may not touch an adaptation chapter.
+sessions.length = 0;
+const adaptRow = buttons(tree, 'ns-item').map(label).findIndex((l) => l.includes('旧雨·改编'));
+tree = await press(tree, 'ns-item', adaptRow);
+await new Promise((r) => setTimeout(r, 8));
+tree = await settle();
+const adaptChapterRow = buttons(tree, 'ns-item').map(label).findIndex((l) => l.includes('第一章 雨夜'));
+if (adaptChapterRow >= 0) {
+  tree = await press(tree, 'ns-item', adaptChapterRow);
+  await new Promise((r) => setTimeout(r, 8));
+  tree = await settle();
+}
+const adaptAi = buttonsIn(tree, 'ns-airow');
+const adaptLabels = adaptAi.map(label);
+console.log('24) adaptation ai row:', JSON.stringify(adaptLabels));
+if (adaptLabels.some((l) => /落笔/.test(l))) throw new Error('a writer button must not appear on an adaptation project');
+if (!adaptLabels.some((l) => /改编/.test(l))) throw new Error('the adapter button is missing');
+adaptAi.find((b) => /改编/.test(label(b))).props.onClick({ preventDefault() {} });
+await new Promise((r) => setTimeout(r, 8));
+tree = await settle();
+console.log('25) adapter session:', sessions[0] && sessions[0].agentPreset);
+if (!sessions.length) throw new Error('adapt button opened no session');
+if (sessions[0].agentPreset !== 'novel-adapt') throw new Error('wrong preset: ' + sessions[0].agentPreset);
+
+// Opening a book clears the chapter. The row must survive that: "fill in the
+// materials" is a whole-book errand, and losing the button until a chapter is
+// picked would hide the first step of the workflow exactly when it is needed.
+const reopenRow = buttons(tree, 'ns-item').map(label).findIndex((l) => l.includes('雨夜') && !l.includes('改编'));
+tree = await press(tree, 'ns-item', reopenRow);
+await new Promise((r) => setTimeout(r, 8));
+tree = await settle();
+const idleAi = buttonsIn(tree, 'ns-airow');
+const idleLabels = idleAi.map(label);
+const byLabel = (labels, buttons2, re) => buttons2[labels.findIndex((l) => re.test(l))];
+console.log('26) ai row without a chapter:', JSON.stringify(idleLabels),
+  '| assemble disabled:', Boolean((byLabel(idleLabels, idleAi, /装配/) || {}).props?.disabled),
+  '| write disabled:', Boolean((byLabel(idleLabels, idleAi, /落笔/) || {}).props?.disabled));
+if (idleLabels.length !== 3) throw new Error('the AI row disappeared when no chapter is open');
+if ((byLabel(idleLabels, idleAi, /补素材/) || {}).props?.disabled) {
+  throw new Error('materials must work on a whole book, not only on a chapter');
+}
+if (!(byLabel(idleLabels, idleAi, /装配/) || {}).props?.disabled) throw new Error('assembly without a chapter makes no sense');
+if (!(byLabel(idleLabels, idleAi, /落笔/) || {}).props?.disabled) throw new Error('drafting without a chapter makes no sense');
 
 console.log('12) api calls:', JSON.stringify([...new Set(urls)]));
 console.log('CLIENT OK');

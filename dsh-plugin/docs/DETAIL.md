@@ -180,6 +180,30 @@ cache-friendly and only the small digest changes.
 
 All three presets are added beside the shipped ones; none becomes the default.
 
+## The three-step entry point
+
+One row of buttons sits under the editor toolbar, and the product's spine is
+written on it:
+
+1. **AI materials** — opens a `novel-material` session and asks it to read the
+   outline and the materials already there, then fill the gaps.
+2. **AI assemble** — the same preset, asked to pick the materials this chapter
+   actually needs and attach them.
+3. **AI draft** — opens a `novel-writing` session that writes the chapter from
+   the materials just attached. On an adaptation project the button becomes
+   **AI adapt** and opens `novel-adapt`, because the writer and the adapter
+   never share a tool set.
+
+The buttons go through the Client-side `uiWorkspace.startSession()`: they open a
+real Session, seed the composer with the book and chapter names, and **do not
+send**. A mis-click costs nothing. Once the author sends, the work moves to the
+Conversation, because that is where the tool cards, the transcript and the stop
+button live — the panel is not a chat window.
+
+Anything unsaved in the editor is saved first: the role prompt is assembled from
+the *stored* chapter, so uncommitted prose would be invisible to the agent. With
+no edits, that save does not touch the disk.
+
 ## The adaptation ledger
 
 An adaptation project is a project bound to a book in the raw-material library.
