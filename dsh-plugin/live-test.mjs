@@ -10,6 +10,12 @@
  *
  * It creates clearly-labelled throwaway projects and deletes them at the end.
  */
+
+import { existsSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
+
 const BASE = (process.argv[2] || 'http://127.0.0.1:14892').replace(/\/+$/, '');
 const API = `${BASE}/novel-studio/api`;
 
@@ -44,6 +50,9 @@ async function raw(method, path, bytes, headers = {}) {
 
 const created = [];
 const uploadedSources = [];
+// The picked folder is only supposed to survive the *API* delete, so the test
+// removes it itself afterwards; otherwise every run leaves a scratch book behind.
+let pickedDir = '';
 
 try {
   console.log(`live host: ${BASE}`);
@@ -63,7 +72,10 @@ try {
   ok(created1.status === 201, `POST /projects is 201 (got ${created1.status})`);
   const project = created1.body?.project;
   ok(Boolean(project?.id), 'created project has an id');
-  ok(created1.body?.root === undefined || true, 'noop');
+  // A project with no picked folder answers with the path we chose for it, which
+  // is also how the next check learns where "our own root" is.
+  const internalRoot = created1.body?.dir ? dirname(dirname(created1.body.dir)) : '';
+  ok(Boolean(internalRoot), 'POST /projects says where the book was written');
   ok(Array.isArray(created1.body?.chapters), 'POST /projects returns chapters inline');
   created.push(project.id);
 
@@ -214,15 +226,42 @@ try {
   ok(deleteEmpty.status === 200, `deleting an untouched chapter is 200 (got ${deleteEmpty.status})`);
   ok((deleteEmpty.body?.chapters ?? []).length === 1, 'the chapter list lost exactly one row');
 
-  // 9. delete the plain project
+  // 9. a book can be told to live in a folder the author picked
+  //
+  // The folder is chosen through the shell's own dialog, so this is the one
+  // feature whose whole promise is "the files are really there". Checking the
+  // response alone would not prove it, so the test reads the disk.
+  pickedDir = join(tmpdir(), `dsh-novel-live-${Date.now()}`);
+  const directed = await call('POST', '/projects', { title: '【自检】外置', dir: pickedDir });
+  ok(directed.status === 201, `POST project with a dir is 201 (got ${directed.status})`);
+  const directedId = directed.body?.project?.id;
+  if (directedId) created.push(directedId);
+  ok(directed.body?.dir === pickedDir, 'the response names the folder the book went to');
+  ok(existsSync(join(pickedDir, 'project.json')), 'the skeleton is in the picked folder');
+  ok(!existsSync(join(internalRoot, 'projects', String(directedId))), 'nothing was written under our own root');
+
+  const relDir = await call('POST', '/projects', { title: '【自检】相对', dir: 'relative/place' });
+  ok(relDir.status === 400, `a relative folder is refused (got ${relDir.status})`);
+  const clash = await call('POST', '/projects', { title: '【自检】撞目录', dir: pickedDir });
+  ok(clash.status === 409, `a folder that already holds a book is refused (got ${clash.status})`);
+
+  const unlisted = directedId ? await call('DELETE', `/projects/${directedId}`) : { status: 0, body: null };
+  ok(unlisted.status === 200, `DELETE external project is 200 (got ${unlisted.status})`);
+  ok(unlisted.body?.keptFiles === true, 'deleting an external project only unlists it');
+  ok(existsSync(join(pickedDir, 'project.json')), 'the folder survived the delete');
+
+  // 10. delete the plain project
   const removed = await call('DELETE', `/projects/${project.id}`);
   ok(removed.status === 200, `DELETE project is 200 (got ${removed.status})`);
 
-  // 10. unknown routes still 404 rather than 500
+  // 11. unknown routes still 404 rather than 500
   const missing = await call('GET', '/nope/nope');
   ok(missing.status === 404, `unknown route is 404 (got ${missing.status})`);
 
-  console.log(`LIVE OK — ${checks} checks`);
+  // Say FAIL here rather than at the end: a summary line that reads OK while
+  // failures are pending is exactly the kind of report that gets believed.
+  if (failures.length) console.log(`LIVE FAIL — ${failures.length} of ${checks} checks`);
+  else console.log(`LIVE OK — ${checks} checks`);
 } catch (error) {
   console.log('LIVE FAIL —', error.message);
   process.exitCode = 1;
@@ -235,6 +274,9 @@ try {
   // add another copy of the same test book to the author's shelf.
   for (const id of uploadedSources) {
     try { await call('DELETE', `/sources/${encodeURIComponent(id)}`); } catch { /* best effort */ }
+  }
+  if (pickedDir) {
+    try { await rm(pickedDir, { recursive: true, force: true }); } catch { /* best effort */ }
   }
   if (failures.length) {
     console.log(`failed checks:\n- ${failures.join('\n- ')}`);

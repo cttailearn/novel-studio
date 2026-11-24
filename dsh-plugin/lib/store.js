@@ -8,6 +8,12 @@
  *   <root>/projects/<id>/project.json       skeleton: outline, materials, notes
  *   <root>/projects/<id>/chapters/<k>.json  one chapter body + its history
  *
+ * A project may instead live in a directory the author picked on their own
+ * disk; `index.json` remembers that path, and then the same two files sit in
+ * that directory and nothing is written under `<root>/projects`. The index is
+ * the authority on where a project lives, never the project file itself, so a
+ * folder can be moved and re-pointed without editing the book inside it.
+ *
  * `active.json` is the bridge between the two halves of the plugin: the
  * workbench writes it whenever the author opens a project or a chapter, and an
  * agent preset reads it so "write this chapter" means the one on screen without
@@ -24,9 +30,9 @@
  * `withChapterLock` produced one.
  */
 
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import {
   MAX_DRAFT_HISTORY,
   countWords,
@@ -53,8 +59,37 @@ export class StoreError extends Error {
   }
 }
 
+/**
+ * Validate an author-chosen project directory.
+ *
+ * The directory is a location, not a permission: it says where a book lives,
+ * not who may read it. Keeping the check here means the HTTP layer cannot
+ * accept a relative path that would land somewhere unexpected once joined.
+ *
+ * @param {unknown} raw
+ * @returns {string} the trimmed absolute path, or '' when none was given
+ */
+export function normalizeProjectDir(raw) {
+  if (typeof raw !== 'string') return '';
+  const value = raw.trim();
+  if (!value) return '';
+  if (!isAbsolute(value)) throw new StoreError(400, '工程目录必须是完整路径，比如 D:\\小说\\雨夜');
+  return value;
+}
+
 function isMissing(error) {
   return error && (error.code === 'ENOENT' || error.code === 'ENOTDIR');
+}
+
+/** Whether something already sits at `path`, without caring what it is. */
+async function exists(path) {
+  try {
+    await stat(path);
+    return true;
+  } catch (error) {
+    if (isMissing(error)) return false;
+    throw error;
+  }
 }
 
 async function readJson(path, fallback) {
@@ -96,14 +131,52 @@ function withLock(key, operation) {
 export class ProjectStore {
   constructor(root = defaultRoot()) {
     this.root = root;
+    /**
+     * Where each project actually lives, keyed by id, for the projects whose
+     * author picked a directory instead of accepting `<root>/projects/<id>`.
+     * Loaded from `index.json` on first use; a project not in here is internal.
+     */
+    this.dirs = new Map();
+    this.dirsReady = undefined;
   }
 
   get indexPath() {
     return join(this.root, 'index.json');
   }
 
+  /** The index is the authority on where a project lives; load it once. */
+  #ready() {
+    if (!this.dirsReady) this.dirsReady = this.#loadDirs();
+    return this.dirsReady;
+  }
+
+  /**
+   * Load the index once, so `projectDir` is trustworthy.
+   *
+   * Every async entry point does this itself. It is public only for callers
+   * that need to resolve paths synchronously *before* their first read — a
+   * `projectDir()` on a store that has not read the index yet answers with the
+   * internal path, which is the one answer that would be silently wrong.
+   */
+  async ready() {
+    await this.#ready();
+    return this;
+  }
+
+  async #loadDirs() {
+    const index = await readJson(this.indexPath, { projects: [] });
+    const projects = Array.isArray(index?.projects) ? index.projects : [];
+    for (const item of projects) {
+      if (!item || typeof item.id !== 'string') continue;
+      // A stored path that is somehow not absolute is ignored rather than
+      // thrown on: one bad row must not make every project unreadable.
+      const dir = typeof item.dir === 'string' ? item.dir.trim() : '';
+      if (dir && isAbsolute(dir)) this.dirs.set(item.id, dir);
+    }
+  }
+
   projectDir(id) {
-    return join(this.root, 'projects', id);
+    return this.dirs.get(id) ?? join(this.root, 'projects', id);
   }
 
   skeletonPath(id) {
@@ -115,6 +188,7 @@ export class ProjectStore {
   }
 
   async list() {
+    await this.#ready();
     const index = await readJson(this.indexPath, { projects: [] });
     const projects = Array.isArray(index?.projects) ? index.projects : [];
     return projects
@@ -173,6 +247,7 @@ export class ProjectStore {
 
   /** Read the skeleton, or 404. */
   async read(projectId) {
+    await this.#ready();
     const raw = await readJson(this.skeletonPath(projectId), undefined);
     if (raw === undefined) throw new StoreError(404, '工程不存在');
     const project = normalizeProject(raw);
@@ -188,6 +263,9 @@ export class ProjectStore {
       id: project.id,
       title: project.title,
       genre: project.genre,
+      // The chosen home travels with the index row, so restarting the Host does
+      // not lose track of a book the author told us to keep somewhere else.
+      dir: this.dirs.get(project.id),
       updatedAt: project.updatedAt,
       chapters: stats.chapters,
       words: stats.words,
@@ -198,6 +276,7 @@ export class ProjectStore {
 
   /** Apply `mutate` to the skeleton under the project lock. */
   async update(projectId, mutate) {
+    await this.#ready();
     return withLock(`project:${projectId}`, async () => {
       const project = await this.read(projectId);
       const result = await mutate(project);
@@ -206,21 +285,63 @@ export class ProjectStore {
     });
   }
 
-  async create(input = {}) {
+  /**
+   * Create a project, optionally inside a directory the author picked.
+   *
+   * `options.dir` is an absolute path that becomes the project's home: the
+   * skeleton and the chapter files are written there and nowhere else, so what
+   * the author browses in Explorer is the same tree the workbench reads.
+   *
+   * @param {object} [input]
+   * @param {{ dir?: string }} [options]
+   */
+  async create(input = {}, options = {}) {
+    await this.#ready();
+    const dir = normalizeProjectDir(options.dir);
     const project = normalizeProject({ ...input, id: newId(), outline: input.outline ?? [], materials: input.materials ?? [] });
     if (!project) throw new StoreError(400, '工程参数不合法');
-    await this.#write(project);
+    // A picked folder may already hold a book. Writing our skeleton over it
+    // would destroy prose the workbench did not create, so refuse and let the
+    // author choose an empty folder instead of discovering the loss later.
+    if (dir && (await exists(join(dir, 'project.json')))) {
+      throw new StoreError(409, '这个目录里已经有一部书了；换一个空目录，或先把那部书从列表里删掉再用。');
+    }
+    // Register the home before the first write: `#write` resolves paths through
+    // `projectDir`, which reads this map.
+    if (dir) this.dirs.set(project.id, dir);
+    try {
+      await this.#write(project);
+    } catch (error) {
+      if (dir) this.dirs.delete(project.id);
+      throw error;
+    }
     return project;
   }
 
+  /**
+   * Forget a project.
+   *
+   * A project in its own directory is only unlisted: deleting a folder the
+   * author chose risks taking their unrelated files with it, and prose outside
+   * the workbench is exactly what that folder is for. Projects that live under
+   * our own root are removed with their files, as before.
+   */
   async remove(projectId) {
+    await this.#ready();
     await this.read(projectId);
-    await rm(this.projectDir(projectId), { recursive: true, force: true });
+    const external = this.dirs.has(projectId);
+    if (!external) {
+      await rm(this.projectDir(projectId), { recursive: true, force: true });
+    }
     await this.#forgetIndex(projectId);
-    return { ok: true };
+    this.dirs.delete(projectId);
+    // `keptFiles` says which of the two things happened, so the workbench can
+    // word its notice honestly instead of claiming the prose was deleted.
+    return { ok: true, keptFiles: Boolean(external) };
   }
 
   async readChapter(projectId, chapterId) {
+    await this.#ready();
     const raw = await readJson(this.chapterPath(projectId, chapterId), undefined);
     if (raw === undefined) return undefined;
     return {

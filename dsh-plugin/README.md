@@ -17,13 +17,38 @@ that absolute path. The bundle adds one plugin row plus three agent presets; it
 becomes neither the default preset nor a replacement for anything.
 
 Projects are plain JSON under `$DSH_HOME/novel-studio` (override with
-`DSH_NOVEL_HOME`, or a `root` in the patch row's config). Nothing is written
-anywhere else, and the folder stays readable without this plugin.
+`DSH_NOVEL_HOME`, or a `root` in the patch row's config). A new project can also
+be told to live in a folder of your own — see below. Nothing is written anywhere
+else, and every folder stays readable without this plugin.
+
+## Choosing where a book lives
+
+"New project" opens a small form: a title, a folder, and "Create". The folder
+comes from the host's own directory chooser (`uiWorkspace.pickDirectory()`),
+because a browser cannot read a real path out of `<input type="file">` and only
+the host half can create directories. Pick one and the whole book — the skeleton,
+every chapter body, its revision history — is written **there**, not under our
+root; the panel shows the path in its title bar so you can see where the files
+went. Leave the folder empty and the project stays under `$DSH_HOME/novel-studio`
+like before.
+
+Two deliberate rules:
+
+- Deleting such a project only removes it from the list. The folder is yours;
+  the workbench never deletes files it did not create.
+- Picking a folder that already holds a book (`project.json` inside) is refused
+  with a 409. Overwriting it would destroy prose we never owned.
+
+The index (`<root>/index.json`) is the authority on where a book lives, never the
+project file itself, so a folder can be moved and re-pointed later without
+editing the book inside it.
 
 ## The panel
 
 - **Rail** — projects, then the outline of the open one, with word counts and
-  statuses. Creating, renaming and deleting a chapter happen here.
+  statuses. Creating, renaming and deleting a chapter happen here. "New project"
+  asks for a title and, optionally, a folder on your own disk; the title bar then
+  shows the folder the book actually lives in.
 - **Editor** — chapter title, prose, and the after-the-fact summary the next
   chapter reads to continue. `Ctrl/Cmd+S` saves. Every save carries the revision
   it expects, so two writers cannot silently overwrite each other. In an
@@ -94,6 +119,7 @@ node client-test.mjs      # the panel component, with a React stand-in
 node integration-test.mjs # the real router and the real component, together
 node routes-test.mjs      # every path the client calls is a path the host answers
 node guard-test.mjs       # the doubles refuse unknown ctx properties like cordis
+node dir-test.mjs         # a picked folder holds the whole book, and survives a restart
 node live-test.mjs        # against a running harness (needs DSH_WEB_URL)
 ```
 
@@ -110,6 +136,11 @@ one through the router.
 `live-test.mjs` is the only one that needs the harness running, and it is worth
 running before saying a change works: the route prefix, the config argument and
 the fiber state are things only the real loader can get wrong.
+
+`dir-test.mjs` guards the one promise a path in a title bar cannot keep on its
+own: that the files are really there. It writes a book into a picked folder and
+then checks that our own root stayed empty, that a fresh store resolves the same
+paths out of `index.json`, and that removing the project leaves the folder alone.
 
 After editing `lib/index.js`, toggle the plugin once (`plugin_manager`
 `set_plugin`) — the loader does not restart a failed or already-active fiber by

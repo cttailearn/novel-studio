@@ -3,7 +3,8 @@
 A novel writing workbench that lives as a DSH main panel. Click its icon in the
 sidebar and the central panel becomes a three-column desk: projects and chapters
 on the left, the prose editor in the middle, materials and continuity notes on
-the right.
+the right. A new project can be pointed at a folder on your own disk, and then
+everything it generates is written there.
 
 ## What it keeps
 
@@ -42,6 +43,31 @@ $DSH_HOME/novel-studio/            (override with DSH_NOVEL_HOME)
   projects/<id>/project.json       outline, materials, volumes, notes
   projects/<id>/chapters/<k>.json  one chapter body plus its history
 ```
+
+A project can instead be written into a folder the author picked, in which case
+the same two files sit in that folder and nothing is written under
+`projects/<id>`:
+
+```
+D:\小说\雨夜\project.json
+D:\小说\雨夜\chapters\<k>.json
+```
+
+`index.json` gains a `dir` field for those rows and stays the authority on where
+a book lives — never the project file itself — so a folder can be moved and
+re-pointed without editing the book inside it. Three consequences follow:
+
+- Deleting such a project only unlists it (`keptFiles: true`). The folder is
+  the author's; the workbench never deletes files it did not create.
+- Picking a folder that already contains a `project.json` is refused with a
+  `409`, because writing our skeleton over it would destroy prose we never owned.
+- Only absolute paths are accepted; a relative one is a `400`, since it has no
+  meaning from the host's working directory.
+
+The folder is chosen through `uiWorkspace.pickDirectory()`, the host's own
+dialog. A browser cannot read a real path out of `<input type="file">`, and only
+the Host half can create directories, so this is the one place the panel asks the
+shell for something.
 
 `<k>` is the chapter id encoded by `encodeFileName()`: only `[A-Za-z0-9_-]`
 survives, everything else becomes `_<hex>_`, the result is truncated at 120

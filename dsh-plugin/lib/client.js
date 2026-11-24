@@ -23,8 +23,13 @@ window.__ModuleLoader__.load({
     const TEXT = {
       zh: {
         title: '小说工坊',
-        newProject: '新建作品',
         untitled: '未命名作品',
+        newProject: '新建作品',
+        dirPlaceholder: '默认放在 DSH 的小说目录里',
+        pickDir: '选目录…',
+        create: '建这部',
+        cancel: '取消',
+        pickUnavailable: '这个界面拿不到目录选择器，作品会建在默认目录里。',
         projects: '作品',
         chapters: '章节',
         newChapter: '新增章节',
@@ -99,6 +104,11 @@ window.__ModuleLoader__.load({
         title: 'Novel Studio',
         newProject: 'New project',
         untitled: 'Untitled',
+        dirPlaceholder: 'Stored under the DSH novel folder by default',
+        pickDir: 'Choose folder…',
+        create: 'Create',
+        cancel: 'Cancel',
+        pickUnavailable: 'This shell exposes no folder picker, so the book goes to the default folder.',
         projects: 'Projects',
         chapters: 'Chapters',
         newChapter: 'New chapter',
@@ -172,6 +182,8 @@ window.__ModuleLoader__.load({
     };
 
     let t = TEXT.zh;
+    /** Shell services the plugin asked for; `apply` fills this in. */
+    const services = { ctx: null };
 
     // -------------------------------------------------------------- styles
 
@@ -197,6 +209,14 @@ window.__ModuleLoader__.load({
 }
 .ns-bar-title { font-weight: 600; letter-spacing: .02em; }
 .ns-bar-title span { color: var(--dsw-alias-label-secondary); font-weight: 400; margin-left: 8px; }
+.ns-bar-title .ns-bar-dir {
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
 .ns-bar-spacer { flex: 1; }
 .ns-stat {
   color: var(--dsw-alias-label-secondary);
@@ -205,6 +225,32 @@ window.__ModuleLoader__.load({
 }
 .ns-stat b { color: var(--dsw-alias-label-primary); font-weight: 600; }
 .ns-body { display: flex; flex: 1; min-height: 0; }
+
+.ns-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+  background: var(--dsw-alias-bg-layer-2);
+  flex: none;
+}
+.ns-input {
+  font: inherit;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-base);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 5px;
+  padding: 4px 8px;
+  min-width: 0;
+}
+.ns-form-title { width: 200px; }
+.ns-form-dir {
+  flex: 0 1 380px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+}
 
 .ns-rail {
   width: 248px;
@@ -483,6 +529,22 @@ label.ns-btn { display: inline-block; }
       return payload;
     }
 
+    /**
+     * The Client-side workspace services, if this shell exposes them.
+     *
+     * `uiWorkspace.pickDirectory()` is the Host's own folder chooser: it is the
+     * only way to obtain a real directory path, since a browser file input
+     * never reveals one and the Client cannot touch the filesystem. Optional on
+     * purpose — a shell without it still works, the author just cannot pick.
+     */
+    function hostService() {
+      try {
+        return services.ctx && typeof services.ctx.get === 'function' ? services.ctx.get('uiWorkspace') : undefined;
+      } catch {
+        return undefined;
+      }
+    }
+
     function words(value) {
       const text = typeof value === 'string' ? value : '';
       const cjk = (text.match(/[\u3400-\u9fff\uf900-\ufaff]/g) || []).length;
@@ -554,6 +616,9 @@ label.ns-btn { display: inline-block; }
       const [uploading, setUploading] = React.useState(false);
       // A chapter to open once its project finishes loading (session restore).
       const [pendingChapter, setPendingChapter] = React.useState(null);
+      // New-project form. A book can be started on its own, or in a directory
+      // picked from the host's own file dialog.
+      const [form, setForm] = React.useState(null);
 
       // ---- project list
       const loadList = React.useCallback(async () => {
@@ -702,11 +767,32 @@ label.ns-btn { display: inline-block; }
       }, [save]);
 
       // ---- mutations
-      async function createProject() {
+      async function createProject(input) {
         try {
-          const payload = await call('POST', '/projects', { title: t.untitled });
+          const body = { title: (input && input.title) || t.untitled };
+          if (input && input.dir) body.dir = input.dir;
+          const payload = await call('POST', '/projects', body);
           await loadList();
           setProjectId(payload.project.id);
+          setForm(null);
+        } catch (error) {
+          setNotice({ kind: 'error', text: error.message });
+        }
+      }
+
+      // The host owns the folder chooser: a browser cannot read a real path out
+      // of `<input type="file">`, and only the Host half can create directories.
+      async function chooseDir() {
+        try {
+          const service = hostService();
+          if (!service || typeof service.pickDirectory !== 'function') {
+            setNotice({ kind: 'error', text: t.pickUnavailable });
+            return;
+          }
+          const picked = await service.pickDirectory();
+          if (typeof picked === 'string' && picked.trim()) {
+            setForm((current) => ({ ...(current || { title: '' }), dir: picked.trim() }));
+          }
         } catch (error) {
           setNotice({ kind: 'error', text: error.message });
         }
@@ -985,11 +1071,21 @@ label.ns-btn { display: inline-block; }
       const materials = project ? project.materials || [] : [];
       const attached = materials.filter((item) => materialIds.includes(item.id));
       const openNotes = project ? (project.notes || []).filter((note) => note.status === 'open') : [];
+      // The index row carries the chosen folder, if the author picked one.
+      const currentDir = (listState.projects.find((item) => item.id === projectId) || {}).dir || '';
 
       const bar = h(
         'div',
         { className: 'ns-bar' },
-        h('div', { className: 'ns-bar-title' }, t.title, project ? h('span', null, project.title) : null),
+        h(
+          'div',
+          { className: 'ns-bar-title' },
+          t.title,
+          project ? h('span', null, project.title) : null,
+          // Where the files actually are. A book kept in a folder the author
+          // picked is only trustworthy if they can see that folder's name.
+          currentDir ? h('span', { className: 'ns-bar-dir', title: currentDir }, currentDir) : null
+        ),
         h('div', { className: 'ns-bar-spacer' }),
         stats &&
           h(
@@ -1006,10 +1102,48 @@ label.ns-btn { display: inline-block; }
           ),
         h(
           'button',
-          { className: 'ns-btn', type: 'button', onClick: createProject },
+          {
+            className: 'ns-btn',
+            type: 'button',
+            onClick: () => setForm((current) => current || { title: '', dir: '' }),
+          },
           t.newProject
         )
       );
+
+      // New-project sheet: a title, and optionally a folder from the host's own
+      // chooser. Everything the book generates afterwards lands in that folder.
+      const formRow = form
+        ? h(
+            'div',
+            { className: 'ns-form' },
+            h('input', {
+              className: 'ns-input ns-form-title',
+              placeholder: t.untitled,
+              value: form.title,
+              onChange: (event) => setForm({ ...form, title: event.target.value }),
+            }),
+            h('input', {
+              className: 'ns-input ns-form-dir',
+              placeholder: t.dirPlaceholder,
+              value: form.dir,
+              readOnly: true,
+              title: form.dir,
+            }),
+            h('button', { className: 'ns-btn', type: 'button', onClick: chooseDir }, t.pickDir),
+            h('div', { className: 'ns-bar-spacer' }),
+            h(
+              'button',
+              {
+                className: 'ns-btn ns-btn-primary',
+                type: 'button',
+                onClick: () => createProject({ title: form.title.trim(), dir: form.dir }),
+              },
+              t.create
+            ),
+            h('button', { className: 'ns-btn ns-btn-quiet', type: 'button', onClick: () => setForm(null) }, t.cancel)
+          )
+        : null;
 
       const rail = h(
         'div',
@@ -1449,6 +1583,7 @@ label.ns-btn { display: inline-block; }
         { className: 'ns-root' },
         bar,
         listState.error ? h('div', { className: 'ns-error' }, listState.error) : null,
+        form ? formRow : null,
         h('div', { className: 'ns-body' }, rail, main, side)
       );
     }
@@ -1499,8 +1634,10 @@ label.ns-btn { display: inline-block; }
     return {
       inject: ['slots'],
       apply(ctx) {
+        services.ctx = ctx;
         ctx.effect(insertStyles, 'novel-studio: workbench styles');
         ctx.effect(() => followLocale(ctx), 'novel-studio: follow shell language');
+        ctx.effect(() => () => { services.ctx = null; }, 'novel-studio: forget shell ctx');
 
         ctx.slots.inject('sidebar.panellist', () =>
           ctx.slots.register(

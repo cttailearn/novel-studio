@@ -188,6 +188,7 @@ new Function('window', 'document', 'fetch', 'styles', 'console', 'URL', await re
 console.log('module id:', captured.id);
 
 const regs = [];
+let pickCalls = 0;
 captured.factory((id) => {
   if (id === 'react') return React;
   throw new Error('unexpected require: ' + id);
@@ -196,7 +197,16 @@ captured.factory((id) => {
     inject: (key, cb) => { regs.push([key, cb]); return () => {}; },
     register: (options, component) => ({ options, component }),
   },
-  get: (n) => (n === 'locale' ? { getLocale: () => 'zh', subscribe: () => () => {} } : undefined),
+  get: (n) => {
+    if (n === 'locale') return { getLocale: () => 'zh', subscribe: () => () => {} };
+    // The host's own folder chooser. Only the Client-side service can hand back
+    // a real path, so the workbench must reach it through ctx rather than
+    // through a file input.
+    if (n === 'uiWorkspace') {
+      return { pickDirectory: async () => { pickCalls += 1; return 'D:\\小说\\雨夜'; } };
+    }
+    return undefined;
+  },
   effect: (fn) => fn(),
 });
 
@@ -379,6 +389,49 @@ if (!accepted) throw new Error('accept never posted');
 if (accepted.proposalId !== 'ap1') throw new Error('accept did not carry the proposal id');
 if (!accepted.content.includes('林晚蹲下去')) throw new Error('accepted content lost the edit');
 if (!Array.isArray(accepted.changes) || accepted.changes[0].kind !== 'character') throw new Error('ledger entries not carried');
+
+// ---- 5c. a new book can be given its own folder on disk
+//
+// The folder must come from the host's own chooser: a browser file input never
+// reveals a real path, so without `uiWorkspace.pickDirectory()` the author has
+// no way to say where the book should live.
+createdFrom = null;
+const newProjectBtn = buttons(tree).find((b) => /新建作品/.test(label(b)));
+if (!newProjectBtn) throw new Error('new-project button missing');
+newProjectBtn.props.onClick({ preventDefault() {} });
+await new Promise((r) => setTimeout(r, 2));
+tree = await settle();
+
+const titleField = flat(tree).find((n) => n.type === 'input' && String(n.props.className).includes('ns-form-title'));
+const dirField = flat(tree).find((n) => n.type === 'input' && String(n.props.className).includes('ns-form-dir'));
+console.log('13) new-project form: title field:', Boolean(titleField), '| dir field:', Boolean(dirField));
+if (!titleField || !dirField) throw new Error('new-project form missing');
+
+titleField.props.onChange({ target: { value: '雨夜' } });
+await new Promise((r) => setTimeout(r, 2));
+tree = await settle();
+
+const pickBtn = buttons(tree).find((b) => /选目录/.test(label(b)));
+if (!pickBtn) throw new Error('folder button missing');
+pickBtn.props.onClick({ preventDefault() {} });
+await new Promise((r) => setTimeout(r, 8));
+tree = await settle();
+const pickedField = flat(tree).find((n) => n.type === 'input' && String(n.props.className).includes('ns-form-dir'));
+console.log('14) folder picked:', pickCalls, 'call(s) | field shows:', JSON.stringify(pickedField && pickedField.props.value));
+if (pickCalls !== 1) throw new Error('host folder chooser never called');
+if (!pickedField || !String(pickedField.props.value).includes('小说')) throw new Error('picked folder not shown');
+
+const createBtn = buttons(tree).find((b) => /^建这部$/.test(label(b).trim()));
+if (!createBtn) throw new Error('create button missing');
+createBtn.props.onClick({ preventDefault() {} });
+await new Promise((r) => setTimeout(r, 8));
+tree = await settle();
+console.log('15) create posted:', createdFrom && JSON.stringify({ title: createdFrom.title, dir: createdFrom.dir }));
+if (!createdFrom) throw new Error('create never posted');
+if (createdFrom.dir !== 'D:\\小说\\雨夜') throw new Error('chosen folder not sent with the project');
+const formGone = !flat(tree).some((n) => n.type === 'input' && String(n.props.className).includes('ns-form-dir'));
+console.log('   form closed after create:', formGone);
+if (!formGone) throw new Error('new-project form stayed open');
 
 console.log('12) api calls:', JSON.stringify([...new Set(urls)]));
 console.log('CLIENT OK');

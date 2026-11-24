@@ -1,5 +1,6 @@
 import http from 'node:http';
-import { rm } from 'node:fs/promises';
+import { readdir, rm } from 'node:fs/promises';
+import { join } from 'node:path';
 import { apply, inject, name } from './lib/index.js';
 
 console.log('plugin name:', name, 'inject:', JSON.stringify(inject));
@@ -88,6 +89,24 @@ const patched = await req('PATCH', `/novel-studio/api/projects/${id}`, { styleGu
 console.log('PATCH       ', patched.status, patched.json.project.styleGuide);
 
 console.log('GET kinds   ', (await req('GET', '/novel-studio/api/kinds')).json.kinds.length);
+
+// ---- a book can be created directly in a folder the author picked
+const picked = join(process.cwd(), '.test-http-外置');
+await rm(picked, { recursive: true, force: true });
+const directed = await req('POST', '/novel-studio/api/projects', { title: '外置', dir: picked });
+console.log('POST 外置   ', directed.status, JSON.stringify(directed.json.dir));
+const deskChapter = await req('POST', `/novel-studio/api/projects/${directed.json.project.id}/outline`, { title: '第一章' });
+await req('PUT', `/novel-studio/api/projects/${directed.json.project.id}/chapters/${deskChapter.json.chapters[0].id}`, { content: '雨夜', expectedRevision: 0 });
+const deskFiles = await readdir(picked);
+console.log('   on disk  ', JSON.stringify(deskFiles));
+const relDir = await req('POST', '/novel-studio/api/projects', { title: '相对', dir: 'relative/place' });
+console.log('POST 相对   ', relDir.status, relDir.json.error);
+const clash = await req('POST', '/novel-studio/api/projects', { title: '第二部', dir: picked });
+console.log('POST 撞目录 ', clash.status);
+const unlisted = await req('DELETE', `/novel-studio/api/projects/${directed.json.project.id}`);
+console.log('DELETE 外置 ', unlisted.status, JSON.stringify(unlisted.json));
+console.log('   folder kept', (await readdir(picked)).length > 0);
+await rm(picked, { recursive: true, force: true });
 
 // ---- the raw-material library, end to end
 const book = ['第一章 雨夜', '雨夜，灯下。周砚蹲下去。', '第二章 城西', '周砚去了旧货市场。'].join('\n');

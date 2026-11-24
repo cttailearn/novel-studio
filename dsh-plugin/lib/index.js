@@ -13,7 +13,7 @@
  * desk-clock bundle use.
  */
 
-import { StoreError, ProjectStore, defaultRoot } from './store.js';
+import { StoreError, ProjectStore, defaultRoot, normalizeProjectDir } from './store.js';
 import { SourceError, SourceLibrary } from './source-store.js';
 import { decodeSourceBytes } from './sources.js';
 import {
@@ -207,6 +207,10 @@ export function apply(ctx, config) {
         adaptationInput && typeof adaptationInput.sourceId === 'string' ? adaptationInput.sourceId.trim() : '';
       const source = sourceId ? await sources.read(sourceId) : undefined;
       if (sourceId && !source) throw new SourceError(404, '原书不在原料库里了；请重新导入原书再建改编工程');
+      // `dir` is the folder the author picked in the host's own dialog: the book
+      // is written there from the first byte, so the tree in Explorer is the
+      // tree the workbench reads. Absent, the project stays under our root.
+      const dir = normalizeProjectDir(body.dir);
       const project = emptyProject(
         source ? { ...pick(body, PROJECT_FIELDS), title: pick(body, PROJECT_FIELDS).title || source.title } : pick(body, PROJECT_FIELDS)
       );
@@ -234,13 +238,15 @@ export function apply(ctx, config) {
         }));
         if (!project.genre) project.genre = '改编';
       }
-      const created = await store.create(project);
+      const created = await store.create(project, dir ? { dir } : undefined);
       // The chapter list comes back with the project: an adaptation project gets
       // a whole outline minted at once, and the workbench would otherwise need a
-      // second round trip before it could show anything.
+      // second round trip before it could show anything. `dir` comes back too so
+      // the panel can say where the files actually are.
       sendJson(req, res, 201, {
         ok: true,
         project: created,
+        dir: store.projectDir(created.id),
         stats: projectStats(created),
         chapters: chapterList(created),
       });
@@ -276,7 +282,10 @@ export function apply(ctx, config) {
         return;
       }
       if (method === 'DELETE') {
-        sendJson(req, res, 200, await store.remove(projectId));
+        const removed = await store.remove(projectId);
+        // A book in its own folder is only unlisted; saying "deleted" would
+        // invite the author to look for the folder and find it still there.
+        sendJson(req, res, 200, removed);
         return;
       }
     }
