@@ -1484,7 +1484,6 @@ label.ns-btn { display: inline-block; }
         main = h(
           'div',
           { className: 'ns-main' },
-          aiRow,
           h(
             'div',
             { className: 'ns-toolbar' },
@@ -1543,6 +1542,7 @@ label.ns-btn { display: inline-block; }
               t.delete
             )
           ),
+          aiRow,
           // An adaptation project edits one chapter of an existing book, so the
           // original stays on screen beside the draft. Without it "is this still
           // the same scene?" can only be answered from memory.
