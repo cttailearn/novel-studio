@@ -82,6 +82,7 @@ let searched = null;
 let deleted = null;
 let accepted = null;
 let createdFrom = null;
+let removedProject = null;
 const ok = (extra) => ({ ok: true, status: 200, json: async () => ({ ok: true, ...extra }) });
 globalThis.fetch = async (url, init) => {
   const u = String(url);
@@ -90,6 +91,15 @@ globalThis.fetch = async (url, init) => {
   if (method === 'PUT' && u.includes('/chapters/c1')) {
     savedPayload = JSON.parse(init.body);
     return ok({ chapter: { ...chapter, ...savedPayload, revision: chapter.revision + 1 } });
+  }
+  // Removing a book. `keptFiles` decides the notice: an external project is
+  // only unlisted, and telling the author "deleted" would send them hunting for
+  // a folder that never went anywhere. It has to be answered before the project
+  // reads below, or a DELETE gets served as if it were a GET.
+  if (method === 'DELETE' && /\/projects\/[^/]+$/.test(u)) {
+    const id = u.split('/projects/')[1];
+    removedProject = { id, keptFiles: id === 'p2' };
+    return ok({ ok: true, keptFiles: id === 'p2' });
   }
   if (u.endsWith('/projects')) {
     if (method === 'POST') {
@@ -103,7 +113,7 @@ globalThis.fetch = async (url, init) => {
       root: '/x',
       projects: [
         { id: 'p1', title: '雨夜', genre: '推理', words: 6, chapters: 1 },
-        { id: 'p2', title: '旧雨·改编', genre: '改编', words: 0, chapters: 1 },
+        { id: 'p2', title: '旧雨·改编', genre: '改编', words: 0, chapters: 1, dir: 'D:\\小说\\旧雨' },
       ],
     });
   }
@@ -432,6 +442,70 @@ if (createdFrom.dir !== 'D:\\小说\\雨夜') throw new Error('chosen folder not
 const formGone = !flat(tree).some((n) => n.type === 'input' && String(n.props.className).includes('ns-form-dir'));
 console.log('   form closed after create:', formGone);
 if (!formGone) throw new Error('new-project form stayed open');
+
+// ---- 5d. the new-project row answers the keyboard like a host dialog
+//
+// A row above the desk rather than a real modal, so the keys have to be wired
+// by hand: Escape backs out, Enter submits. Typing a title and reaching for the
+// mouse is the one thing every author does on the first try.
+const openForm = async () => {
+  const btn = buttons(tree).find((b) => /新建作品/.test(label(b)));
+  if (!btn) throw new Error('new-project button missing');
+  btn.props.onClick({ preventDefault() {} });
+  await new Promise((r) => setTimeout(r, 2));
+  tree = await settle();
+  const row = flat(tree).find((n) => n.type === 'div' && String(n.props.className) === 'ns-form');
+  if (!row || typeof row.props.onKeyDown !== 'function') throw new Error('new-project row has no key handler');
+  return row;
+};
+
+let row = await openForm();
+row.props.onKeyDown({ key: 'Escape', preventDefault() {} });
+await new Promise((r) => setTimeout(r, 2));
+tree = await settle();
+const escaped = !flat(tree).some((n) => n.type === 'input' && String(n.props.className).includes('ns-form-dir'));
+console.log('16) Escape closed the form:', escaped);
+if (!escaped) throw new Error('Escape did not close the form');
+
+createdFrom = null;
+row = await openForm();
+row.props.onKeyDown({ key: 'Enter', preventDefault() {} });
+await new Promise((r) => setTimeout(r, 8));
+tree = await settle();
+console.log('17) Enter submitted:', createdFrom && JSON.stringify({ title: createdFrom.title, dir: createdFrom.dir }));
+if (!createdFrom) throw new Error('Enter did not submit the form');
+if (createdFrom.dir) throw new Error('an unnamed folder should not be sent');
+
+// ---- 5e. removing a book words its notice from where the book lives
+//
+// An external project is only taken off our list. If the panel says "deleted"
+// the author goes looking for a folder that never moved, so the two cases must
+// not share a sentence.
+// Reopen the book that lives in its own folder: the steps above left the panel
+// on a freshly created project.
+const folderRow = buttons(tree, 'ns-item').map(label).findIndex((l) => l.includes('旧雨'));
+if (folderRow < 0) throw new Error('the external book is not in the rail');
+tree = await press(tree, 'ns-item', folderRow);
+await new Promise((r) => setTimeout(r, 8));
+tree = await settle();
+
+const deleteBtn = buttons(tree).find((b) => /删除作品/.test(label(b)));
+console.log('18) delete-book button present:', Boolean(deleteBtn));
+if (!deleteBtn) throw new Error('delete-book button missing');
+
+removedProject = null;
+const confirms = [];
+const realConfirm = globalThis.window.confirm;
+globalThis.window.confirm = (text) => { confirms.push(text); return true; };
+deleteBtn.props.onClick({ preventDefault() {} });
+await new Promise((r) => setTimeout(r, 8));
+tree = await settle();
+globalThis.window.confirm = realConfirm;
+console.log('19) removed:', removedProject && removedProject.id, '| keptFiles:', removedProject && removedProject.keptFiles,
+  '| prompt mentions the folder:', /文件夹/.test(confirms[0] || ''));
+if (!removedProject) throw new Error('delete never posted');
+if (!removedProject.keptFiles) throw new Error('this fixture book lives in its own folder');
+if (!/文件夹/.test(confirms[0] || '')) throw new Error('the confirmation did not warn that the folder survives');
 
 console.log('12) api calls:', JSON.stringify([...new Set(urls)]));
 console.log('CLIENT OK');

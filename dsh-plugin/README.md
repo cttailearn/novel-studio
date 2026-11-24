@@ -32,12 +32,14 @@ root; the panel shows the path in its title bar so you can see where the files
 went. Leave the folder empty and the project stays under `$DSH_HOME/novel-studio`
 like before.
 
-Two deliberate rules:
+Three deliberate rules:
 
 - Deleting such a project only removes it from the list. The folder is yours;
   the workbench never deletes files it did not create.
 - Picking a folder that already holds a book (`project.json` inside) is refused
   with a 409. Overwriting it would destroy prose we never owned.
+- Only absolute paths are accepted. A relative one has no meaning from the
+  Host's working directory, so it is a 400 rather than a guess.
 
 The index (`<root>/index.json`) is the authority on where a book lives, never the
 project file itself, so a folder can be moved and re-pointed later without
@@ -48,7 +50,11 @@ editing the book inside it.
 - **Rail** — projects, then the outline of the open one, with word counts and
   statuses. Creating, renaming and deleting a chapter happen here. "New project"
   asks for a title and, optionally, a folder on your own disk; the title bar then
-  shows the folder the book actually lives in.
+  shows the folder the book actually lives in. `Enter` submits that row and
+  `Escape` backs out of it, the way a real dialog would. "Delete book" sits in
+  the title bar and words itself from where the book lives: a book in your own
+  folder is only taken off the list, and the notice says so instead of claiming
+  the files are gone.
 - **Editor** — chapter title, prose, and the after-the-fact summary the next
   chapter reads to continue. `Ctrl/Cmd+S` saves. Every save carries the revision
   it expects, so two writers cannot silently overwrite each other. In an

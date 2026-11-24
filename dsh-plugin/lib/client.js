@@ -99,6 +99,11 @@ window.__ModuleLoader__.load({
         statsNotes: '待处理',
         loadFailed: '载入失败',
         saveFailed: '保存失败',
+        deleteProject: '删除作品',
+        confirmDeleteProject: '确认删除《{title}》？',
+        confirmDeleteProjectKept: '确认删除《{title}》？这本书在自己的文件夹里，工作台只会把它从列表里移除，文件夹和里面的一切都留着。',
+        deletedProject: '已删除',
+        unlistedProject: '已从列表移除，文件夹还在',
       },
       en: {
         title: 'Novel Studio',
@@ -178,6 +183,11 @@ window.__ModuleLoader__.load({
         statsNotes: 'open notes',
         loadFailed: 'Load failed',
         saveFailed: 'Save failed',
+        deleteProject: 'Delete book',
+        confirmDeleteProject: 'Delete "{title}"?',
+        confirmDeleteProjectKept: 'Delete "{title}"? This book lives in its own folder — the workbench only takes it off the list; the folder and everything in it stay.',
+        deletedProject: 'Deleted',
+        unlistedProject: 'Taken off the list; the folder is still there',
       },
     };
 
@@ -215,6 +225,8 @@ window.__ModuleLoader__.load({
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 11px;
+  /* No direction: rtl trick here: it would push the drive letter to the right
+     edge and make D:\小说\雨夜 read backwards. */
   font-variant-numeric: tabular-nums;
 }
 .ns-bar-spacer { flex: 1; }
@@ -839,6 +851,24 @@ label.ns-btn { display: inline-block; }
         }
       }
 
+      // Deleting a book. The wording has to depend on where the book lives: a
+      // project in a folder the author picked is only taken off our list, and
+      // saying "deleted" would send them looking for a folder that never left.
+      async function removeProject() {
+        if (!projectId) return;
+        const row = listState.projects.find((item) => item.id === projectId) || {};
+        const prompt = row.dir ? t.confirmDeleteProjectKept : t.confirmDeleteProject;
+        if (!window.confirm(prompt.replace('{title}', row.title || t.untitled))) return;
+        try {
+          const payload = await call('DELETE', `/projects/${projectId}`);
+          await loadList();
+          setProjectId(null);
+          setNotice({ kind: 'ok', text: payload.keptFiles ? t.unlistedProject : t.deletedProject });
+        } catch (error) {
+          setNotice({ kind: 'error', text: error.message });
+        }
+      }
+
       async function addMaterial() {
         if (!projectId) return;
         try {
@@ -1100,6 +1130,8 @@ label.ns-btn { display: inline-block; }
             ` · ${t.statsNotes} `,
             h('b', null, String(stats.openNotes))
           ),
+        project &&
+          h('button', { className: 'ns-btn ns-btn-quiet', type: 'button', onClick: removeProject }, t.deleteProject),
         h(
           'button',
           {
@@ -1113,14 +1145,27 @@ label.ns-btn { display: inline-block; }
 
       // New-project sheet: a title, and optionally a folder from the host's own
       // chooser. Everything the book generates afterwards lands in that folder.
+      const startProject = () => createProject({ title: form.title.trim(), dir: form.dir });
+      // Enter submits, Escape backs out: the form behaves like the host's own
+      // dialogs even though it is only a row above the desk.
+      const formKeys = (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          startProject();
+        } else if (event.key === 'Escape') {
+          event.preventDefault();
+          setForm(null);
+        }
+      };
       const formRow = form
         ? h(
             'div',
-            { className: 'ns-form' },
+            { className: 'ns-form', onKeyDown: formKeys },
             h('input', {
               className: 'ns-input ns-form-title',
               placeholder: t.untitled,
               value: form.title,
+              autoFocus: true,
               onChange: (event) => setForm({ ...form, title: event.target.value }),
             }),
             h('input', {
@@ -1137,7 +1182,7 @@ label.ns-btn { display: inline-block; }
               {
                 className: 'ns-btn ns-btn-primary',
                 type: 'button',
-                onClick: () => createProject({ title: form.title.trim(), dir: form.dir }),
+                onClick: startProject,
               },
               t.create
             ),
